@@ -80,7 +80,10 @@ export function EditorPane() {
     const selected = getSelectedText();
 
     if (selected) {
-      if (selected.startsWith(token) && selected.endsWith(token)) {
+      const isWrappedByToken = selected.startsWith(token) && selected.endsWith(token);
+      const isWrappedByLongerSameToken = selected.startsWith(token + token) && selected.endsWith(token + token);
+
+      if (isWrappedByToken && !isWrappedByLongerSameToken) {
         const unwrapped = selected.slice(token.length, selected.length - token.length);
         applySelection(unwrapped, 0, unwrapped.length);
         return;

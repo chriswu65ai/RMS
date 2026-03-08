@@ -148,7 +148,7 @@ export function FolderTree() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between p-3">
+      <div className="flex items-center justify-between py-3 pl-3 pr-4">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Folders</h3>
         <div className="flex items-center gap-1">
           <button

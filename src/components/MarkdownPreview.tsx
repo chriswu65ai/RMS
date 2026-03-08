@@ -55,8 +55,10 @@ function parseTable(text: string): ParsedTable | null {
 export function MarkdownPreview({ content }: Props) {
   const normalizedContent = content
     .replace(/\r\n/g, '\n')
-    .replace(/\n{2,}/g, (newlines) => `\n\n${'  \n'.repeat(Math.max(0, newlines.length - 2))}`)
-    .replace(/(?<!\n)\n(?!\n)/g, '  \n');
+    .split('\n')
+    .map((line) => (line.length === 0 ? '&nbsp;' : line))
+    .join('\n')
+    .replace(/\n/g, '  \n');
 
   return (
     <ReactMarkdown
