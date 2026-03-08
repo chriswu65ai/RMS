@@ -81,7 +81,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   const name = await dialog.prompt('Duplicate file', file.name.replace('.md', '-copy.md'), 'New duplicate file name');
                   if (!name || !workspace) return;
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
-                  await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name, content: file.content, isTemplate: file.is_template, templateType: file.template_type });
+                  await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name, content: file.content, isTemplate: file.is_template });
                   await refresh();
                 }}><CopyPlus size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => {

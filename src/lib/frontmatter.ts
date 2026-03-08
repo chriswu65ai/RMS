@@ -17,7 +17,11 @@ export function splitFrontmatter(markdown: string): { frontmatter: FrontmatterMo
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { frontmatter: {}, body };
     }
-    return { frontmatter: parsed as FrontmatterModel, body };
+
+    const normalized = { ...(parsed as Record<string, unknown>) };
+    delete normalized.templateType;
+
+    return { frontmatter: normalized as FrontmatterModel, body };
   } catch {
     return { frontmatter: {}, body: markdown };
   }

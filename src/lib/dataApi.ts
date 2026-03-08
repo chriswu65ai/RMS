@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { Folder, PromptFile, TemplateType } from '../types/models';
+import type { Folder, PromptFile } from '../types/models';
 
 const nowIso = () => new Date().toISOString();
 
@@ -22,7 +22,6 @@ export async function createFile(params: {
   name: string;
   content: string;
   isTemplate?: boolean;
-  templateType?: TemplateType;
   frontmatter?: Record<string, unknown> | null;
 }) {
   const path = params.folderPath ? `${params.folderPath}/${params.name}` : params.name;
@@ -34,7 +33,6 @@ export async function createFile(params: {
     content: params.content,
     frontmatter_json: params.frontmatter ?? null,
     is_template: !!params.isTemplate,
-    template_type: params.templateType ?? null,
     created_at: nowIso(),
     updated_at: nowIso(),
   });

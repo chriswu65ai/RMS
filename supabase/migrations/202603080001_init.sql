@@ -19,8 +19,6 @@ create table if not exists folders (
   unique(workspace_id, path)
 );
 
-create type template_type as enum ('file', 'snippet');
-
 create table if not exists prompt_files (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
@@ -30,7 +28,6 @@ create table if not exists prompt_files (
   content text not null,
   frontmatter_json jsonb,
   is_template boolean default false,
-  template_type template_type,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
   unique(workspace_id, path)

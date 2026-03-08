@@ -1,7 +1,7 @@
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, Save, Smile } from 'lucide-react';
+import { Copy, Download, Save, Share2, Smile } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { usePromptStore } from '../../hooks/usePromptStore';
@@ -21,6 +21,7 @@ export function EditorPane() {
   const [tab, setTab] = useState<'edit' | 'preview' | 'split'>('split');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
+  const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const parsed = useMemo(() => splitFrontmatter(file?.content ?? ''), [file?.content]);
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
@@ -61,19 +62,100 @@ export function EditorPane() {
   };
 
   const toggleWrap = (token: string, fallback: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const sel = view.state.selection.main;
     const selected = getSelectedText();
-    if (!selected) {
-      const insert = `${token}${fallback}${token}`;
-      applySelection(insert, token.length, token.length + fallback.length);
+
+    if (selected) {
+      if (selected.startsWith(token) && selected.endsWith(token)) {
+        const unwrapped = selected.slice(token.length, selected.length - token.length);
+        applySelection(unwrapped, 0, unwrapped.length);
+        return;
+      }
+
+      const wrapped = `${token}${selected}${token}`;
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: wrapped },
+        selection: { anchor: sel.from, head: sel.from + wrapped.length },
+        scrollIntoView: true,
+      });
+      view.focus();
       return;
     }
-    if (selected.startsWith(token) && selected.endsWith(token)) {
-      const unwrapped = selected.slice(token.length, selected.length - token.length);
-      applySelection(unwrapped, 0, unwrapped.length);
-      return;
+
+    const line = view.state.doc.lineAt(sel.from);
+    const cursorInLine = sel.from - line.from;
+    const before = line.text.slice(0, cursorInLine);
+    const after = line.text.slice(cursorInLine);
+    const left = before.lastIndexOf(token);
+    const rightRelative = after.indexOf(token);
+
+    if (left >= 0 && rightRelative >= 0) {
+      const right = cursorInLine + rightRelative;
+      const hasContent = right > left + token.length;
+      if (hasContent) {
+        const from = line.from + left;
+        const to = line.from + right + token.length;
+        const inside = line.text.slice(left + token.length, right);
+        view.dispatch({
+          changes: { from, to, insert: inside },
+          selection: { anchor: from + Math.max(0, cursorInLine - left - token.length) },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return;
+      }
     }
-    const wrapped = `${token}${selected}${token}`;
-    applySelection(wrapped, token.length, token.length + selected.length);
+
+    const wordRegex = /\S+/g;
+    let match: RegExpExecArray | null;
+    while ((match = wordRegex.exec(line.text)) !== null) {
+      const word = match[0];
+      const start = match.index;
+      const end = start + word.length;
+      if (cursorInLine >= start && cursorInLine <= end) {
+        const wrappedWord = `${token}${word}${token}`;
+        view.dispatch({
+          changes: { from: line.from + start, to: line.from + end, insert: wrappedWord },
+          selection: { anchor: line.from + start, head: line.from + start + wrappedWord.length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return;
+      }
+    }
+
+    const insert = `${token}${fallback}${token}`;
+    applySelection(insert, 0, insert.length);
+  };
+
+  const toggleHeading = (level: 1 | 2 | 3) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const doc = view.state.doc;
+    const sel = view.state.selection.main;
+    const startLine = doc.lineAt(sel.from);
+    const endLine = doc.lineAt(sel.to);
+    const prefix = `${'#'.repeat(level)} `;
+
+    const lines: string[] = [];
+    let allAtLevel = true;
+    for (let i = startLine.number; i <= endLine.number; i += 1) {
+      const t = doc.line(i).text;
+      lines.push(t);
+      if (!t.startsWith(prefix)) allAtLevel = false;
+    }
+
+    const replaced = lines
+      .map((line) => {
+        const withoutHeading = line.replace(/^#{1,6}\s+/, '');
+        return allAtLevel ? withoutHeading : `${prefix}${withoutHeading}`;
+      })
+      .join('\n');
+
+    view.dispatch({ changes: { from: startLine.from, to: endLine.to, insert: replaced }, scrollIntoView: true });
+    view.focus();
   };
 
   const toggleLinePrefix = (prefix: string) => {
@@ -120,11 +202,13 @@ export function EditorPane() {
   const currentSelection = getSelectedText();
 
   const active = {
-    h1: currentLine.startsWith('# '),
-    h2: currentLine.startsWith('## '),
-    h3: currentLine.startsWith('### '),
-    bold: currentSelection.startsWith('**') && currentSelection.endsWith('**') || /\*\*.+\*\*/.test(currentLine),
-    italic: currentSelection.startsWith('*') && currentSelection.endsWith('*') && !currentSelection.startsWith('**') || /(^|\s)\*[^*]+\*/.test(currentLine),
+    h1: /^#\s/.test(currentLine),
+    h2: /^##\s/.test(currentLine),
+    h3: /^###\s/.test(currentLine),
+    bold: (currentSelection.startsWith('**') && currentSelection.endsWith('**')) || /\*\*[^*]+\*\*/.test(currentLine),
+    italic:
+      (currentSelection.startsWith('*') && currentSelection.endsWith('*') && !currentSelection.startsWith('**')) ||
+      /(^|\s)\*[^*]+\*/.test(currentLine),
     ol: /^\d+\.\s/.test(currentLine),
     ul: /^-\s/.test(currentLine),
     task: /^-\s\[[ xX]\]\s/.test(currentLine),
@@ -132,21 +216,44 @@ export function EditorPane() {
 
   const btn = (on: boolean) => `rounded border px-2 py-1 ${on ? 'border-slate-900 bg-slate-900 text-white' : ''}`;
 
+  const getMarkdownFilename = () => (file.name.toLowerCase().endsWith('.md') ? file.name : `${file.name}.md`);
+
   const downloadCurrent = () => {
-    const filename = file.name.toLowerCase().endsWith('.md') ? file.name : `${file.name}.md`;
     const blob = new Blob([merged], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = getMarkdownFilename();
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   };
 
+  const shareCurrent = async () => {
+    const filename = getMarkdownFilename();
+    const fileObject = new File([merged], filename, { type: 'text/markdown' });
+
+    try {
+      if (navigator.share && navigator.canShare?.({ files: [fileObject] })) {
+        await navigator.share({ files: [fileObject], title: filename, text: `Sharing ${filename}` });
+        return;
+      }
+    } catch {
+      // fall back to mail client workflow below
+    }
+
+    downloadCurrent();
+    const subject = encodeURIComponent(filename);
+    const bodyText = encodeURIComponent(`I've attached ${filename}.
+
+${merged}`);
+    window.location.href = `mailto:?subject=${subject}&body=${bodyText}`;
+    await dialog.alert('Share note', 'Your mail client was opened and the markdown file was downloaded. Attach the downloaded .md file to the email before sending.');
+  };
+
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[1fr_300px]">
+    <div className={`grid h-full grid-cols-1 ${metadataCollapsed ? 'lg:grid-cols-[1fr_48px]' : 'lg:grid-cols-[1fr_300px]'}`}>
       <section className="flex min-h-0 flex-col">
         <div className="border-b border-slate-200 bg-white px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -157,17 +264,21 @@ export function EditorPane() {
             </div>
             <div className="flex items-center gap-2">
               <button className="rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent}><Download className="mr-1 inline" size={14} />Download</button>
+              <button className="rounded-md border px-2 py-1 text-xs" onClick={shareCurrent}><Share2 className="mr-1 inline" size={14} />Share</button>
               <button className="rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1 inline" size={14} />Copy</button>
               <button
                 className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
                 disabled={!dirty}
                 onClick={async () => {
-                  await updateFile(file.id, {
+                  const { error } = await updateFile(file.id, {
                     content: merged,
                     frontmatter_json: frontmatter,
                     is_template: !!frontmatter.template,
-                    template_type: frontmatter.template ? (frontmatter.templateType ?? null) : null,
                   });
+                  if (error) {
+                    await dialog.alert('Save failed', error.message);
+                    return;
+                  }
                   await refresh();
                 }}
               >
@@ -176,9 +287,9 @@ export function EditorPane() {
             </div>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
-            <button className={btn(active.h1)} onClick={() => toggleLinePrefix('# ')}>H1</button>
-            <button className={btn(active.h2)} onClick={() => toggleLinePrefix('## ')}>H2</button>
-            <button className={btn(active.h3)} onClick={() => toggleLinePrefix('### ')}>H3</button>
+            <button className={btn(active.h1)} onClick={() => toggleHeading(1)}>H1</button>
+            <button className={btn(active.h2)} onClick={() => toggleHeading(2)}>H2</button>
+            <button className={btn(active.h3)} onClick={() => toggleHeading(3)}>H3</button>
             <button className={btn(active.bold)} onClick={() => toggleWrap('**', 'bold text')}>Bold</button>
             <button className={btn(active.italic)} onClick={() => toggleWrap('*', 'italic text')}>Italic</button>
             <button className={btn(active.ol)} onClick={toggleOrderedList}>OL</button>
@@ -225,7 +336,12 @@ export function EditorPane() {
           )}
         </div>
       </section>
-      <MetadataPanel frontmatter={frontmatter} onChange={setFrontmatter} />
+      <MetadataPanel
+        frontmatter={frontmatter}
+        onChange={setFrontmatter}
+        collapsed={metadataCollapsed}
+        onToggleCollapsed={() => setMetadataCollapsed((prev) => !prev)}
+      />
 
       {emojiOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4">

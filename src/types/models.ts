@@ -1,5 +1,3 @@
-export type TemplateType = 'file' | 'snippet' | null;
-
 export type Workspace = {
   id: string;
   name: string;
@@ -24,7 +22,6 @@ export type PromptFile = {
   content: string;
   frontmatter_json: Record<string, unknown> | null;
   is_template: boolean;
-  template_type: TemplateType;
   created_at: string;
   updated_at: string;
 };
@@ -33,5 +30,4 @@ export type FrontmatterModel = {
   title?: string;
   tags?: string[];
   template?: boolean;
-  templateType?: Exclude<TemplateType, null>;
 };

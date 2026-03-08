@@ -5,13 +5,10 @@ import { createFile } from '../../lib/dataApi';
 import { splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
-type TemplateFilter = 'all' | 'file' | 'snippet';
-
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { files, workspace, selectedFolderId, folders, refresh } = usePromptStore();
   const dialog = useDialog();
   const [search, setSearch] = useState('');
-  const [selectedType, setSelectedType] = useState<TemplateFilter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const templates = useMemo(
@@ -20,13 +17,10 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
         const fm = splitFrontmatter(f.content).frontmatter;
         if (fm.template !== true) return false;
 
-        const fileType = fm.templateType ?? null;
-        if (selectedType !== 'all' && fileType !== selectedType) return false;
-
         const q = search.toLowerCase();
         return !search || f.name.toLowerCase().includes(q) || f.content.toLowerCase().includes(q);
       }),
-    [files, search, selectedType],
+    [files, search],
   );
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
 
@@ -37,11 +31,6 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
       <div className="grid h-[85vh] w-full max-w-4xl grid-cols-1 overflow-hidden rounded-t-2xl bg-white md:h-[70vh] md:grid-cols-[280px_1fr] md:rounded-2xl">
         <div className="border-r border-slate-200 p-3">
           <div className="mb-2 text-sm font-semibold">Templates</div>
-          <select className="input mb-2" value={selectedType} onChange={(e) => setSelectedType(e.target.value as TemplateFilter)}>
-            <option value="all">All template types</option>
-            <option value="file">File templates</option>
-            <option value="snippet">Snippet templates</option>
-          </select>
           <input className="input mb-2" placeholder="Search templates" value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="space-y-1 overflow-y-auto">
             {templates.map((t) => (

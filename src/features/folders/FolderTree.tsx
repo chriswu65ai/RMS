@@ -86,22 +86,6 @@ export function FolderTree() {
       </div>
 
       <div className="mt-auto border-t border-slate-200 p-2">
-        <button
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
-          onClick={async () => {
-            if (!workspace) return;
-            if (files.length === 0) {
-              await dialog.alert('Nothing to export', 'Create at least one prompt file before exporting.');
-              return;
-            }
-            await exportWorkspaceMarkdownZip(workspace, files);
-          }}
-        >
-          <Download size={16} /> Export All
-        </button>
-      </div>
-
-      <div className="border-t border-slate-200 p-2">
         <h4 className="mb-2 flex items-center gap-2 px-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Tags</h4>
         <button
           className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === null ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
@@ -121,6 +105,22 @@ export function FolderTree() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="border-t border-slate-200 p-2">
+        <button
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
+          onClick={async () => {
+            if (!workspace) return;
+            if (files.length === 0) {
+              await dialog.alert('Nothing to export', 'Create at least one prompt file before exporting.');
+              return;
+            }
+            await exportWorkspaceMarkdownZip(workspace, files);
+          }}
+        >
+          <Download size={16} /> Export All
+        </button>
       </div>
 
     </div>
