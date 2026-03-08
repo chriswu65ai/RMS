@@ -30,4 +30,5 @@ export type FrontmatterModel = {
   title?: string;
   tags?: string[];
   template?: boolean;
+  starred?: boolean;
 };

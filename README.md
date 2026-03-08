@@ -20,7 +20,6 @@ Implemented schema:
 - `workspaces`
 - `folders`
 - `prompt_files`
-- enum `template_type` (`file`, `snippet`)
 
 `prompt_files.content` stores the canonical Markdown including frontmatter for MVP simplicity.
 
@@ -49,7 +48,7 @@ npm run dev
 2. In SQL editor run migration:
    - `supabase/migrations/202603080001_init.sql`
 3. Enable email auth (magic link).
-4. (Optional) seed demo data:
+4. (Optional) seed starter data:
    - Replace `USER_ID` in `supabase/seed/seed.sql`
    - Run the seed SQL.
 
