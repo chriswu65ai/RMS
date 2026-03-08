@@ -1,9 +1,10 @@
-import { CopyPlus, FilePlus2, Pencil, Search, Trash2 } from 'lucide-react';
+import { CopyPlus, FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { splitFrontmatter } from '../../lib/frontmatter';
+import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
+import type { FrontmatterModel } from '../../types/models';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
   const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, setSearch } = usePromptStore();
@@ -11,30 +12,42 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
 
-  const visible = files.filter((file) => {
-    const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
-    if (!folderMatch) return false;
+  const visible = useMemo(() => {
+    const filtered = files.filter((file) => {
+      const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
+      if (!folderMatch) return false;
 
-    if (selectedTag) {
-      const parsed = splitFrontmatter(file.content);
-      const tags = Array.isArray(parsed.frontmatter.tags) ? parsed.frontmatter.tags : [];
-      if (!tags.includes(selectedTag)) return false;
-    }
+      if (selectedTag) {
+        const parsed = splitFrontmatter(file.content);
+        const tags = Array.isArray(parsed.frontmatter.tags) ? parsed.frontmatter.tags : [];
+        if (!tags.includes(selectedTag)) return false;
+      }
 
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return file.name.toLowerCase().includes(q) || file.content.toLowerCase().includes(q);
-  });
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return file.name.toLowerCase().includes(q) || file.content.toLowerCase().includes(q);
+    });
+
+    const starred: typeof filtered = [];
+    const regular: typeof filtered = [];
+    filtered.forEach((file) => {
+      const { frontmatter } = splitFrontmatter(file.content);
+      if (frontmatter.starred) {
+        starred.push(file);
+      } else {
+        regular.push(file);
+      }
+    });
+
+    return [...starred, ...regular];
+  }, [files, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
 
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-2 border-b border-slate-200 p-3">
-        <div className="relative">
-          <Search className="absolute left-2 top-2.5 text-slate-400" size={16} />
-          <input className="input pl-8" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search filename/content" />
-        </div>
+        <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search filename/content" />
         <div className="flex gap-2">
           <button
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
@@ -68,6 +81,28 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 <p className="line-clamp-1 text-xs text-slate-500">{file.path}</p>
               </button>
               <div className="hidden items-center gap-1 group-hover:flex">
+                <button
+                  className={`rounded p-1 ${frontmatter.starred ? 'text-amber-500' : 'text-slate-500'} hover:bg-slate-100`}
+                  onClick={async () => {
+                    const parsed = splitFrontmatter(file.content);
+                    const nextFrontmatter: FrontmatterModel = { ...parsed.frontmatter };
+                    const nextStarred = !parsed.frontmatter.starred;
+                    if (nextStarred) {
+                      nextFrontmatter.starred = true;
+                    } else {
+                      delete nextFrontmatter.starred;
+                    }
+                    await updateFile(file.id, {
+                      content: composeMarkdown(nextFrontmatter, parsed.body),
+                      frontmatter_json: nextFrontmatter,
+                      is_template: !!nextFrontmatter.template,
+                    });
+                    await refresh();
+                  }}
+                  title={frontmatter.starred ? 'Unstar note' : 'Star note'}
+                >
+                  <Star size={14} fill={frontmatter.starred ? 'currentColor' : 'none'} />
+                </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
                   const name = await dialog.prompt('Rename file', file.name, 'New file name');
                   if (!name) return;
