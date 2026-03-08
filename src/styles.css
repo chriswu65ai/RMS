@@ -19,3 +19,4 @@ button { @apply transition; }
 .markdown-preview table { @apply my-3 w-full border-collapse; }
 .markdown-preview th { @apply border border-slate-300 bg-slate-50 px-2 py-1 text-left font-semibold; }
 .markdown-preview td { @apply border border-slate-300 px-2 py-1 align-top; }
+.markdown-preview > :first-child { @apply mt-0; }

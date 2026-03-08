@@ -75,7 +75,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
           >
             <FilePlus2 className="mr-1 inline" size={14} />New
           </button>
-          <button className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50" onClick={openTemplatePicker}>From template</button>
+          <button className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50" onClick={openTemplatePicker}>
+            <FilePlus2 className="mr-1 inline" size={14} />From template
+          </button>
         </div>
       </div>
       <div className="overflow-y-auto p-2">
