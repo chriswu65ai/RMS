@@ -173,7 +173,19 @@ export function EditorPane() {
       if (!t.startsWith(prefix)) hasAll = false;
     }
     const replaced = lines.map((line) => (hasAll ? line.replace(prefix, '') : `${prefix}${line}`)).join('\n');
-    view.dispatch({ changes: { from: startLine.from, to: endLine.to, insert: replaced }, scrollIntoView: true });
+
+    const singleCursorOnOneLine = sel.empty && startLine.number === endLine.number;
+    if (singleCursorOnOneLine) {
+      const shift = hasAll ? -prefix.length : prefix.length;
+      const nextPos = Math.max(startLine.from, sel.from + shift);
+      view.dispatch({
+        changes: { from: startLine.from, to: endLine.to, insert: replaced },
+        selection: { anchor: nextPos },
+        scrollIntoView: true,
+      });
+    } else {
+      view.dispatch({ changes: { from: startLine.from, to: endLine.to, insert: replaced }, scrollIntoView: true });
+    }
     view.focus();
   };
 
@@ -194,7 +206,49 @@ export function EditorPane() {
     const replaced = lines
       .map((line, i) => (hasAll ? line.replace(/^\d+\.\s/, '') : `${i + 1}. ${line}`))
       .join('\n');
-    view.dispatch({ changes: { from: startLine.from, to: endLine.to, insert: replaced }, scrollIntoView: true });
+
+    const singleCursorOnOneLine = sel.empty && startLine.number === endLine.number;
+    if (singleCursorOnOneLine) {
+      const existingPrefix = startLine.text.match(/^\d+\.\s/)?.[0] ?? '';
+      const shift = hasAll ? -existingPrefix.length : '1. '.length;
+      const nextPos = Math.max(startLine.from, sel.from + shift);
+      view.dispatch({
+        changes: { from: startLine.from, to: endLine.to, insert: replaced },
+        selection: { anchor: nextPos },
+        scrollIntoView: true,
+      });
+    } else {
+      view.dispatch({ changes: { from: startLine.from, to: endLine.to, insert: replaced }, scrollIntoView: true });
+    }
+    view.focus();
+  };
+
+
+  const toggleHorizontalRule = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const doc = view.state.doc;
+    const sel = view.state.selection.main;
+    const line = doc.lineAt(sel.from);
+
+    if (line.text.trim() === '---') {
+      let from = line.from;
+      let to = line.to;
+      if (line.to < doc.length) {
+        to = line.to + 1;
+      } else if (line.from > 1) {
+        from = line.from - 1;
+      }
+      view.dispatch({ changes: { from, to, insert: '' }, scrollIntoView: true });
+      view.focus();
+      return;
+    }
+
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: '---' },
+      selection: { anchor: line.from + 3 },
+      scrollIntoView: true,
+    });
     view.focus();
   };
 
@@ -359,7 +413,7 @@ ${merged}`);
             />
           )}
           {(tab === 'preview' || tab === 'split') && (
-            <div className="prose max-w-none overflow-y-auto border-l border-slate-200 bg-white p-5 text-sm">
+            <div className="prose max-w-none overflow-y-auto whitespace-pre-wrap border-l border-slate-200 bg-white p-5 text-sm">
               <ReactMarkdown>{merged}</ReactMarkdown>
             </div>
           )}
