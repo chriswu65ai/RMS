@@ -281,14 +281,20 @@ export function EditorPane() {
   const currentLine = getLineText();
   const currentSelection = getSelectedText();
 
+  const hasTripleMarkedSelection = currentSelection.startsWith('***') && currentSelection.endsWith('***');
+
   const active = {
     h1: /^#\s/.test(currentLine),
     h2: /^##\s/.test(currentLine),
     h3: /^###\s/.test(currentLine),
-    bold: (currentSelection.startsWith('**') && currentSelection.endsWith('**')) || /\*\*[^*]+\*\*/.test(currentLine),
+    bold:
+      hasTripleMarkedSelection ||
+      (currentSelection.startsWith('**') && currentSelection.endsWith('**')) ||
+      /\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*/.test(currentLine),
     italic:
+      hasTripleMarkedSelection ||
       (currentSelection.startsWith('*') && currentSelection.endsWith('*') && !currentSelection.startsWith('**')) ||
-      /(^|\s)\*[^*]+\*/.test(currentLine),
+      /\*\*\*[^*]+\*\*\*|(^|\s)\*[^*]+\*(?!\*)/.test(currentLine),
     ol: /^\d+\.\s/.test(currentLine),
     ul: /^-\s/.test(currentLine),
     task: /^-\s\[[ xX]\]\s/.test(currentLine),
@@ -410,8 +416,8 @@ ${merged}`);
             />
           )}
           {(tab === 'preview' || tab === 'split') && (
-            <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white p-5 text-sm">
-              <MarkdownPreview content={parsed.body} />
+            <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white px-5 pb-5 pt-2 text-sm">
+              <MarkdownPreview content={body} />
             </div>
           )}
         </div>

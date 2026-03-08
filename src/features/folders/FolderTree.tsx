@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Download, FolderPlus, Pencil, Tag, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, Pencil, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder } from '../../lib/dataApi';
 import { supabase } from '../../lib/supabase';
@@ -172,7 +172,7 @@ export function FolderTree() {
             onClick={toggleAllSubfolders}
             aria-label={allExpanded ? 'Hide all sub-folders' : 'Expand all sub-folders'}
           >
-            {allExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
+            {allExpanded ? <ChevronsDownUp size={16} /> : <ChevronsUpDown size={16} />}
           </button>
         </div>
       </div>
@@ -192,7 +192,7 @@ export function FolderTree() {
             aria-label={tagsCollapsed ? 'Expand tags' : 'Hide tags'}
             onClick={() => setTagsCollapsed((prev) => !prev)}
           >
-            {tagsCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+            {tagsCollapsed ? <ChevronsUpDown size={16} /> : <ChevronsDownUp size={16} />}
           </button>
         </div>
 

@@ -53,7 +53,10 @@ function parseTable(text: string): ParsedTable | null {
 }
 
 export function MarkdownPreview({ content }: Props) {
-  const normalizedContent = content.replace(/\r\n/g, '\n').replace(/(?<!\n)\n(?!\n)/g, '  \n');
+  const normalizedContent = content
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{2,}/g, (newlines) => `\n\n${'  \n'.repeat(Math.max(0, newlines.length - 2))}`)
+    .replace(/(?<!\n)\n(?!\n)/g, '  \n');
 
   return (
     <ReactMarkdown
@@ -90,7 +93,7 @@ export function MarkdownPreview({ content }: Props) {
           if (!task) return <li>{children}</li>;
 
           return (
-            <li className="list-none">
+            <li className="-ml-5 list-none">
               <label className="inline-flex items-center gap-2">
                 <input type="checkbox" checked={task.checked} readOnly disabled />
                 <span>{task.label}</span>
