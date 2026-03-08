@@ -23,6 +23,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
     [files, search],
   );
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
+  const ensureMdExtension = (name: string) => (name.toLowerCase().endsWith('.md') ? name : `${name}.md`);
 
   if (!open) return null;
 
@@ -52,10 +53,11 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const name = await dialog.prompt('Create from template', 'new-prompt.md', 'New file name');
+                const name = await dialog.prompt('Create from template', 'new-prompt', 'File name (.md extension will be added)');
                 if (!name) return;
+                const fileName = ensureMdExtension(name.trim());
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
-                await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name, content: selected.content });
+                await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content: selected.content });
                 await refresh();
                 onClose();
               }}

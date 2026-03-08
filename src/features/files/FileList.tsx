@@ -6,6 +6,9 @@ import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 
+const TAG_FILTER_ALL = '__ALL_TAGGED__';
+const TAG_FILTER_NONE = '__NO_TAGS__';
+
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
   const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, setSearch } = usePromptStore();
   const dialog = useDialog();
@@ -20,7 +23,10 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
       if (selectedTag) {
         const parsed = splitFrontmatter(file.content);
         const tags = Array.isArray(parsed.frontmatter.tags) ? parsed.frontmatter.tags : [];
-        if (!tags.includes(selectedTag)) return false;
+
+        if (selectedTag === TAG_FILTER_ALL && tags.length === 0) return false;
+        if (selectedTag === TAG_FILTER_NONE && tags.length > 0) return false;
+        if (selectedTag !== TAG_FILTER_ALL && selectedTag !== TAG_FILTER_NONE && !tags.includes(selectedTag)) return false;
       }
 
       if (!search) return true;
@@ -44,6 +50,8 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
 
+  const ensureMdExtension = (name: string) => (name.toLowerCase().endsWith('.md') ? name : `${name}.md`);
+
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-2 border-b border-slate-200 p-3">
@@ -53,12 +61,16 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
             onClick={async () => {
               if (!workspace) return;
-              const name = await dialog.prompt('Create prompt file', 'new-prompt.md', 'File name (include .md)');
+              const name = await dialog.prompt('Create prompt file', 'new-prompt', 'File name (.md extension will be added)');
               if (!name) return;
+              const fileName = ensureMdExtension(name.trim());
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
-              const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${name}`);
+              const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${fileName}`);
               if (duplicate) return dialog.alert('Duplicate file', 'File name already exists in this location.');
-              await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name, content: '# New Prompt\n' });
+              const title = fileName.replace(/\.md$/i, '');
+              const frontmatter: FrontmatterModel = { title };
+              const content = composeMarkdown(frontmatter, '');
+              await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
               await refresh();
             }}
           >
@@ -77,12 +89,15 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 className={`flex-1 rounded-lg px-3 py-2 text-left ${selectedFileId === file.id ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'hover:bg-white'}`}
                 onClick={() => selectFile(file.id)}
               >
-                <p className="text-sm font-medium">{frontmatter.title || file.name}</p>
+                <p className="flex items-center gap-1 text-sm font-medium">
+                  <span>{frontmatter.title || file.name}</span>
+                  {frontmatter.starred === true && <Star size={12} className="text-amber-500" fill="currentColor" />}
+                </p>
                 <p className="line-clamp-1 text-xs text-slate-500">{file.path}</p>
               </button>
               <div className="hidden items-center gap-1 group-hover:flex">
                 <button
-                  className={`rounded p-1 ${frontmatter.starred ? 'text-amber-500' : 'text-slate-500'} hover:bg-slate-100`}
+                  className={`rounded p-1 ${frontmatter.starred === true ? 'text-amber-500' : 'text-slate-500'} hover:bg-slate-100`}
                   onClick={async () => {
                     const parsed = splitFrontmatter(file.content);
                     const nextFrontmatter: FrontmatterModel = { ...parsed.frontmatter };
@@ -99,9 +114,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                     });
                     await refresh();
                   }}
-                  title={frontmatter.starred ? 'Unstar note' : 'Star note'}
+                  title={frontmatter.starred === true ? 'Unstar note' : 'Star note'}
                 >
-                  <Star size={14} fill={frontmatter.starred ? 'currentColor' : 'none'} />
+                  <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
                   const name = await dialog.prompt('Rename file', file.name, 'New file name');
