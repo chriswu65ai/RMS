@@ -77,12 +77,15 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 className={`flex-1 rounded-lg px-3 py-2 text-left ${selectedFileId === file.id ? 'bg-white shadow-sm ring-1 ring-slate-200' : 'hover:bg-white'}`}
                 onClick={() => selectFile(file.id)}
               >
-                <p className="text-sm font-medium">{frontmatter.title || file.name}</p>
+                <p className="flex items-center gap-1 text-sm font-medium">
+                  <span>{frontmatter.title || file.name}</span>
+                  {frontmatter.starred === true && <Star size={12} className="text-amber-500" fill="currentColor" />}
+                </p>
                 <p className="line-clamp-1 text-xs text-slate-500">{file.path}</p>
               </button>
               <div className="hidden items-center gap-1 group-hover:flex">
                 <button
-                  className={`rounded p-1 ${frontmatter.starred ? 'text-amber-500' : 'text-slate-500'} hover:bg-slate-100`}
+                  className={`rounded p-1 ${frontmatter.starred === true ? 'text-amber-500' : 'text-slate-500'} hover:bg-slate-100`}
                   onClick={async () => {
                     const parsed = splitFrontmatter(file.content);
                     const nextFrontmatter: FrontmatterModel = { ...parsed.frontmatter };
@@ -99,9 +102,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                     });
                     await refresh();
                   }}
-                  title={frontmatter.starred ? 'Unstar note' : 'Star note'}
+                  title={frontmatter.starred === true ? 'Unstar note' : 'Star note'}
                 >
-                  <Star size={14} fill={frontmatter.starred ? 'currentColor' : 'none'} />
+                  <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
                   const name = await dialog.prompt('Rename file', file.name, 'New file name');

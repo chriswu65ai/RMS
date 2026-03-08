@@ -1,7 +1,7 @@
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, Save, Share2, Smile } from 'lucide-react';
+import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile, Table } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { usePromptStore } from '../../hooks/usePromptStore';
@@ -198,6 +198,35 @@ export function EditorPane() {
     view.focus();
   };
 
+
+  const toggleHorizontalRule = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    const doc = view.state.doc;
+    const sel = view.state.selection.main;
+    const line = doc.lineAt(sel.from);
+
+    if (line.text.trim() === '---') {
+      let from = line.from;
+      let to = line.to;
+      if (line.to < doc.length) {
+        to = line.to + 1;
+      } else if (line.from > 1) {
+        from = line.from - 1;
+      }
+      view.dispatch({ changes: { from, to, insert: '' }, scrollIntoView: true });
+      view.focus();
+      return;
+    }
+
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: '---' },
+      selection: { anchor: line.from + 3 },
+      scrollIntoView: true,
+    });
+    view.focus();
+  };
+
   const currentLine = getLineText();
   const currentSelection = getSelectedText();
 
@@ -212,6 +241,7 @@ export function EditorPane() {
     ol: /^\d+\.\s/.test(currentLine),
     ul: /^-\s/.test(currentLine),
     task: /^-\s\[[ xX]\]\s/.test(currentLine),
+    hr: /^\s*---\s*$/.test(currentLine),
   };
 
   const btn = (on: boolean) => `rounded border px-2 py-1 ${on ? 'border-slate-900 bg-slate-900 text-white' : ''}`;
@@ -243,13 +273,11 @@ export function EditorPane() {
       // fall back to mail client workflow below
     }
 
-    downloadCurrent();
     const subject = encodeURIComponent(filename);
     const bodyText = encodeURIComponent(`I've attached ${filename}.
 
 ${merged}`);
     window.location.href = `mailto:?subject=${subject}&body=${bodyText}`;
-    await dialog.alert('Share note', 'Your mail client was opened and the markdown file was downloaded. Attach the downloaded .md file to the email before sending.');
   };
 
   return (
@@ -292,9 +320,10 @@ ${merged}`);
             <button className={btn(active.h3)} onClick={() => toggleHeading(3)}>H3</button>
             <button className={btn(active.bold)} onClick={() => toggleWrap('**', 'bold text')}>Bold</button>
             <button className={btn(active.italic)} onClick={() => toggleWrap('*', 'italic text')}>Italic</button>
-            <button className={btn(active.ol)} onClick={toggleOrderedList}>OL</button>
-            <button className={btn(active.ul)} onClick={() => toggleLinePrefix('- ')}>UL</button>
-            <button className={btn(active.task)} onClick={() => toggleLinePrefix('- [ ] ')}>Task</button>
+            <button className={btn(active.ol)} onClick={toggleOrderedList}><ListOrdered size={14} /></button>
+            <button className={btn(active.ul)} onClick={() => toggleLinePrefix('- ')}><List size={14} /></button>
+            <button className={btn(active.task)} onClick={() => toggleLinePrefix('- [ ] ')}><ListTodo size={14} /></button>
+            <button className={btn(active.hr)} onClick={toggleHorizontalRule}><Minus size={14} /></button>
             <button
               className="rounded border px-2 py-1"
               onClick={async () => {
@@ -310,7 +339,7 @@ ${merged}`);
                 applySelection(`${header}\n${sep}\n${bodyRows}`);
               }}
             >
-              Table
+              <Table className="mr-1 inline" size={12} />Table
             </button>
             <button className="rounded border px-2 py-1" onClick={() => setEmojiOpen(true)}><Smile className="mr-1 inline" size={12} />Emoji</button>
           </div>
