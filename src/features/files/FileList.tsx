@@ -67,9 +67,8 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
               const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${fileName}`);
               if (duplicate) return dialog.alert('Duplicate file', 'File name already exists in this location.');
-              const title = fileName.replace(/\.md$/i, '');
-              const frontmatter: FrontmatterModel = { title };
-              const content = composeMarkdown(frontmatter, '---\n');
+              const frontmatter: FrontmatterModel = {};
+              const content = '';
               await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
               await refresh();
             }}

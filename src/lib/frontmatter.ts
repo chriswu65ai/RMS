@@ -47,8 +47,8 @@ export function composeMarkdown(frontmatter: FrontmatterModel, body: string): st
     yamlSections.push(YAML.stringify(cleaned).trimEnd());
   }
   if (tags && tags.length > 0) {
-    const inlineTags = tags.map((tag) => YAML.stringify(tag).trim()).join(', ');
-    yamlSections.push(`tags: [${inlineTags}]`);
+    const inlineTags = tags.join(', ');
+    yamlSections.push(`tags: ${inlineTags}`);
   }
 
   const yaml = yamlSections.join('\n');

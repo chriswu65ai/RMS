@@ -3,7 +3,7 @@ import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
 import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile, Table } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { updateFile } from '../../lib/dataApi';
@@ -21,7 +21,7 @@ export function EditorPane() {
   const [tab, setTab] = useState<'edit' | 'preview' | 'split'>('split');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
-  const [metadataCollapsed, setMetadataCollapsed] = useState(false);
+  const [metadataCollapsed, setMetadataCollapsed] = useState(true);
   const parsed = useMemo(() => splitFrontmatter(file?.content ?? ''), [file?.content]);
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
@@ -30,18 +30,6 @@ export function EditorPane() {
     setBody(parsed.body);
     setFrontmatter(parsed.frontmatter);
   }, [file?.id, parsed.body, parsed.frontmatter]);
-
-  useEffect(() => {
-    if (!file || parsed.body !== '---\n') return;
-    const frame = window.requestAnimationFrame(() => {
-      const view = viewRef.current;
-      if (!view) return;
-      const cursorPos = view.state.doc.length;
-      view.dispatch({ selection: { anchor: cursorPos }, scrollIntoView: true });
-      view.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [file?.id, parsed.body]);
 
   if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a prompt file.</div>;
 
@@ -423,7 +411,7 @@ ${merged}`);
           )}
           {(tab === 'preview' || tab === 'split') && (
             <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white p-5 text-sm">
-              <ReactMarkdown>{merged}</ReactMarkdown>
+              <MarkdownPreview content={parsed.body} />
             </div>
           )}
         </div>
