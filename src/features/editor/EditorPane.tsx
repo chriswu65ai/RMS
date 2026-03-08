@@ -252,35 +252,6 @@ export function EditorPane() {
     view.focus();
   };
 
-
-  const toggleHorizontalRule = () => {
-    const view = viewRef.current;
-    if (!view) return;
-    const doc = view.state.doc;
-    const sel = view.state.selection.main;
-    const line = doc.lineAt(sel.from);
-
-    if (line.text.trim() === '---') {
-      let from = line.from;
-      let to = line.to;
-      if (line.to < doc.length) {
-        to = line.to + 1;
-      } else if (line.from > 1) {
-        from = line.from - 1;
-      }
-      view.dispatch({ changes: { from, to, insert: '' }, scrollIntoView: true });
-      view.focus();
-      return;
-    }
-
-    view.dispatch({
-      changes: { from: line.from, to: line.to, insert: '---' },
-      selection: { anchor: line.from + 3 },
-      scrollIntoView: true,
-    });
-    view.focus();
-  };
-
   const currentLine = getLineText();
   const currentSelection = getSelectedText();
 
