@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown';
+import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { createFile } from '../../lib/dataApi';
@@ -23,6 +23,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
     [files, search],
   );
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
+  const selectedBody = selected ? splitFrontmatter(selected.content).body : 'No template selected.';
   const ensureMdExtension = (name: string) => (name.toLowerCase().endsWith('.md') ? name : `${name}.md`);
 
   if (!open) return null;
@@ -45,7 +46,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
             <button onClick={onClose} className="text-sm text-slate-500">Close</button>
           </div>
           <div className="prose max-w-none flex-1 overflow-y-auto p-4">
-            <ReactMarkdown>{selected?.content ?? 'No template selected.'}</ReactMarkdown>
+            <MarkdownPreview content={selectedBody} />
           </div>
           <div className="border-t border-slate-200 p-3">
             <button
