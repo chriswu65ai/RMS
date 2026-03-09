@@ -439,7 +439,7 @@ ${merged}`);
               value={editorValue}
               className="min-h-0 flex-1 overflow-auto"
               height="100%"
-              extensions={[markdown()]}
+              extensions={[markdown({ extensions: [{ remove: ['SetextHeading'] }] })]}
               onCreateEditor={(view) => {
                 viewRef.current = view;
               }}
