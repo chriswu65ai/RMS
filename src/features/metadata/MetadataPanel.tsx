@@ -1,4 +1,4 @@
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { BadgeInfo, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { FrontmatterModel } from '../../types/models';
 
@@ -38,7 +38,10 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
   return (
     <aside className="hidden border-l border-slate-200 bg-white lg:block">
       <div className="flex items-center justify-between py-2 pl-3 pr-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Metadata</h3>
+        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <BadgeInfo size={12} />
+          Metadata
+        </h3>
         <button
           className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
           onClick={onToggleCollapsed}
