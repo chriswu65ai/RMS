@@ -1,3 +1,4 @@
+import { cloneElement, isValidElement } from 'react';
 import type { ReactNode } from 'react';
 import type { Components } from 'react-markdown';
 import ReactMarkdown from 'react-markdown';
@@ -15,6 +16,34 @@ type TaskListPrefix = {
   checked: boolean;
   consumed: number;
 };
+
+const BRACED_TEXT_SPLIT_REGEX = /(\{[^{}\n]+\})/g;
+const BRACED_TEXT_TEST_REGEX = /\{[^{}\n]+\}/;
+
+function highlightBracedText(text: string): ReactNode {
+  if (!BRACED_TEXT_TEST_REGEX.test(text)) return text;
+
+  return text.split(BRACED_TEXT_SPLIT_REGEX).map((part, index) =>
+    BRACED_TEXT_TEST_REGEX.test(part) ? (
+      <span key={`braced-text-${index}`} style={{ color: '#0000FF' }}>
+        {part}
+      </span>
+    ) : (
+      part
+    ),
+  );
+}
+
+function highlightBracedTokens(node: ReactNode): ReactNode {
+  if (typeof node === 'string') return highlightBracedText(node);
+  if (Array.isArray(node)) return node.map((child) => highlightBracedTokens(child));
+  if (!isValidElement<{ children?: ReactNode }>(node)) return node;
+
+  return cloneElement(node, {
+    ...node.props,
+    children: highlightBracedTokens(node.props.children),
+  });
+}
 
 function flattenText(children: ReactNode): string {
   if (typeof children === 'string') return children;
@@ -88,14 +117,14 @@ const markdownComponents: Components = {
     if (text.trim() === '') return <p>{'\u00a0'}</p>;
 
     const table = parseTable(text);
-    if (!table) return <p>{children}</p>;
+    if (!table) return <p>{highlightBracedTokens(children)}</p>;
 
     return (
       <table>
         <thead>
           <tr>
             {table.headers.map((header, index) => (
-              <th key={`h-${index}`}>{header}</th>
+              <th key={`h-${index}`}>{highlightBracedText(header)}</th>
             ))}
           </tr>
         </thead>
@@ -103,7 +132,7 @@ const markdownComponents: Components = {
           {table.rows.map((row, rowIndex) => (
             <tr key={`r-${rowIndex}`}>
               {table.headers.map((_, colIndex) => (
-                <td key={`r-${rowIndex}-c-${colIndex}`}>{row[colIndex] ?? ''}</td>
+                <td key={`r-${rowIndex}-c-${colIndex}`}>{highlightBracedText(row[colIndex] ?? '')}</td>
               ))}
             </tr>
           ))}
@@ -114,10 +143,10 @@ const markdownComponents: Components = {
   li({ children }) {
     const normalizedChildren = Array.isArray(children) ? [...children] : [children];
     const first = normalizedChildren[0];
-    if (typeof first !== 'string') return <li>{children}</li>;
+    if (typeof first !== 'string') return <li>{highlightBracedTokens(children)}</li>;
 
     const task = parseTaskPrefix(first);
-    if (!task) return <li>{children}</li>;
+    if (!task) return <li>{highlightBracedTokens(children)}</li>;
 
     const firstRest = first.slice(task.consumed);
     const remainingChildren: ReactNode[] = [firstRest, ...normalizedChildren.slice(1)];
@@ -129,10 +158,28 @@ const markdownComponents: Components = {
       <li className="-ml-5 list-none">
         <label className="inline-flex items-start gap-2">
           <input type="checkbox" checked={task.checked} readOnly disabled className="mt-1" />
-          <span>{remainingChildren}</span>
+          <span>{highlightBracedTokens(remainingChildren)}</span>
         </label>
       </li>
     );
+  },
+  h1({ children }) {
+    return <h1>{highlightBracedTokens(children)}</h1>;
+  },
+  h2({ children }) {
+    return <h2>{highlightBracedTokens(children)}</h2>;
+  },
+  h3({ children }) {
+    return <h3>{highlightBracedTokens(children)}</h3>;
+  },
+  h4({ children }) {
+    return <h4>{highlightBracedTokens(children)}</h4>;
+  },
+  h5({ children }) {
+    return <h5>{highlightBracedTokens(children)}</h5>;
+  },
+  h6({ children }) {
+    return <h6>{highlightBracedTokens(children)}</h6>;
   },
 };
 
