@@ -22,6 +22,7 @@ export function EditorPane() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [metadataCollapsed, setMetadataCollapsed] = useState(true);
+  const [showMetadata, setShowMetadata] = useState(false);
   const parsed = useMemo(() => splitFrontmatter(file?.content ?? ''), [file?.content]);
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
@@ -34,6 +35,11 @@ export function EditorPane() {
   if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a prompt file.</div>;
 
   const merged = composeMarkdown(frontmatter, body);
+  const metadataSyntax = useMemo(() => {
+    const withFrontmatterOnly = composeMarkdown(frontmatter, "");
+    const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
+    return match ? `---\n${match[1]}\n---` : "";
+  }, [frontmatter]);
   const dirty = merged !== file.content;
 
   const getLineText = () => {
@@ -439,6 +445,11 @@ ${merged}`);
           )}
           {(tab === 'preview' || tab === 'split') && (
             <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white px-5 pb-5 pt-2 text-sm">
+              {showMetadata && metadataSyntax && (
+                <pre className="mb-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-600">
+                  {metadataSyntax}
+                </pre>
+              )}
               <MarkdownPreview content={body} />
             </div>
           )}
@@ -449,6 +460,8 @@ ${merged}`);
         onChange={setFrontmatter}
         collapsed={metadataCollapsed}
         onToggleCollapsed={() => setMetadataCollapsed((prev) => !prev)}
+        showMetadata={showMetadata}
+        onShowMetadataChange={setShowMetadata}
       />
 
       {emojiOpen && (

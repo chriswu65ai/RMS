@@ -69,7 +69,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               if (duplicate) return dialog.alert('Duplicate file', 'A file cannot be created because a file with the same name already exists in this folder.');
               const baseName = fileName.replace(/\.md$/i, '');
               const frontmatter: FrontmatterModel = { title: baseName };
-              const content = '';
+              const content = composeMarkdown(frontmatter, '');
               const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
               if (error) return dialog.alert('Create failed', error.message);
               await refresh();

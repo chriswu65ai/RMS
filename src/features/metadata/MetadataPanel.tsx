@@ -7,9 +7,11 @@ type Props = {
   onChange: (f: FrontmatterModel) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  showMetadata: boolean;
+  onShowMetadataChange: (show: boolean) => void;
 };
 
-export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollapsed }: Props) {
+export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange }: Props) {
   const [tagsInput, setTagsInput] = useState((frontmatter.tags ?? []).join(', '));
 
   useEffect(() => {
@@ -62,9 +64,33 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
             onBlur={() => setTagsInput((frontmatter.tags ?? []).join(', '))}
           />
         </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={!!frontmatter.template} onChange={(e) => onChange({ ...frontmatter, template: e.target.checked })} />
-          Template
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-xs text-slate-500">Template
+            <select
+              className="input mt-1"
+              value={frontmatter.template ? 'yes' : 'no'}
+              onChange={(e) => onChange({ ...frontmatter, template: e.target.value === 'yes' })}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </label>
+          <label className="block text-xs text-slate-500">Starred
+            <select
+              className="input mt-1"
+              value={frontmatter.starred ? 'yes' : 'no'}
+              onChange={(e) => onChange({ ...frontmatter, starred: e.target.value === 'yes' })}
+            >
+              <option value="no">No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </label>
+        </div>
+        <label className="block text-xs text-slate-500">Show metadata
+          <select className="input mt-1" value={showMetadata ? 'yes' : 'no'} onChange={(e) => onShowMetadataChange(e.target.value === 'yes')}>
+            <option value="no">No</option>
+            <option value="yes">Yes</option>
+          </select>
         </label>
       </div>
     </aside>
