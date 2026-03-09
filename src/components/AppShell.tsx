@@ -8,9 +8,10 @@ type Props = {
   main: ReactNode;
   mobileSidebarOpen: boolean;
   setMobileSidebarOpen: (open: boolean) => void;
+  sidebarCollapsed: boolean;
 };
 
-export function AppShell({ headerRight, sidebar, fileList, main, mobileSidebarOpen, setMobileSidebarOpen }: Props) {
+export function AppShell({ headerRight, sidebar, fileList, main, mobileSidebarOpen, setMobileSidebarOpen, sidebarCollapsed }: Props) {
   return (
     <div className="h-screen bg-slate-50">
       <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
@@ -22,7 +23,7 @@ export function AppShell({ headerRight, sidebar, fileList, main, mobileSidebarOp
         </div>
         {headerRight}
       </header>
-      <div className="grid h-[calc(100vh-56px)] grid-cols-1 md:grid-cols-[260px_320px_1fr]">
+      <div className={`grid h-[calc(100vh-56px)] grid-cols-1 ${sidebarCollapsed ? 'md:grid-cols-[48px_320px_1fr]' : 'md:grid-cols-[260px_320px_1fr]'}`}>
         <aside className="hidden border-r border-slate-200 bg-white md:block">{sidebar}</aside>
         <section className="hidden border-r border-slate-200 bg-panel md:block">{fileList}</section>
         <main className="min-h-0">{main}</main>

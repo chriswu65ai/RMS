@@ -77,72 +77,89 @@ export function EditorPane() {
     const view = viewRef.current;
     if (!view) return;
     const sel = view.state.selection.main;
-    const selected = getSelectedText();
 
-    if (selected) {
-      const isWrappedByToken = selected.startsWith(token) && selected.endsWith(token);
-      const isWrappedByLongerSameToken = selected.startsWith(token + token) && selected.endsWith(token + token);
+    const transformSegment = (segment: string) => {
+      if (token === '*') {
+        if (/^\*\*\*[\s\S]+\*\*\*$/.test(segment)) return `**${segment.slice(3, -3)}**`;
+        if (/^\*[^*][\s\S]*\*$/.test(segment)) return segment.slice(1, -1);
+        if (/^\*\*[\s\S]+\*\*$/.test(segment)) return `***${segment.slice(2, -2)}***`;
+        return `*${segment}*`;
+      }
 
-      if (isWrappedByToken && !isWrappedByLongerSameToken) {
-        const unwrapped = selected.slice(token.length, selected.length - token.length);
-        applySelection(unwrapped, 0, unwrapped.length);
+      if (/^\*\*\*[\s\S]+\*\*\*$/.test(segment)) return `*${segment.slice(3, -3)}*`;
+      if (/^\*\*[\s\S]+\*\*$/.test(segment)) return segment.slice(2, -2);
+      if (/^\*[^*][\s\S]*\*$/.test(segment)) return `***${segment.slice(1, -1)}***`;
+      return `**${segment}**`;
+    };
+
+    if (!sel.empty) {
+      const selected = getSelectedText();
+      const line = view.state.doc.lineAt(sel.from);
+      const isSingleLineSelection = !selected.includes('\n') && sel.from >= line.from && sel.to <= line.to;
+      const prefixMatch = isSingleLineSelection
+        ? selected.match(/^(#{1,6}\s+|-\s\[[ xX]\]\s+|-\s+|\d+\.\s+)/)
+        : null;
+
+      if (prefixMatch) {
+        const prefix = prefixMatch[0];
+        const remainder = selected.slice(prefix.length);
+        const nextRemainder = transformSegment(remainder);
+        const next = `${prefix}${nextRemainder}`;
+        applySelection(next, 0, next.length);
         return;
       }
 
-      const wrapped = `${token}${selected}${token}`;
-      view.dispatch({
-        changes: { from: sel.from, to: sel.to, insert: wrapped },
-        selection: { anchor: sel.from, head: sel.from + wrapped.length },
-        scrollIntoView: true,
-      });
-      view.focus();
+      const next = transformSegment(selected);
+      applySelection(next, 0, next.length);
       return;
     }
 
     const line = view.state.doc.lineAt(sel.from);
     const cursorInLine = sel.from - line.from;
-    const before = line.text.slice(0, cursorInLine);
-    const after = line.text.slice(cursorInLine);
-    const left = before.lastIndexOf(token);
-    const rightRelative = after.indexOf(token);
+    const prefixMatch = line.text.match(/^(#{1,6}\s+|-\s\[[ xX]\]\s+|-\s+|\d+\.\s+)/);
+    const contentStart = prefixMatch?.[0].length ?? 0;
+    const content = line.text.slice(contentStart);
 
-    if (left >= 0 && rightRelative >= 0) {
-      const right = cursorInLine + rightRelative;
-      const hasContent = right > left + token.length;
-      if (hasContent) {
-        const from = line.from + left;
-        const to = line.from + right + token.length;
-        const inside = line.text.slice(left + token.length, right);
-        view.dispatch({
-          changes: { from, to, insert: inside },
-          selection: { anchor: from + Math.max(0, cursorInLine - left - token.length) },
-          scrollIntoView: true,
-        });
-        view.focus();
-        return;
-      }
-    }
-
+    let targetStart = -1;
+    let targetEnd = -1;
     const wordRegex = /\S+/g;
     let match: RegExpExecArray | null;
-    while ((match = wordRegex.exec(line.text)) !== null) {
-      const word = match[0];
-      const start = match.index;
-      const end = start + word.length;
+    while ((match = wordRegex.exec(content)) !== null) {
+      const start = contentStart + match.index;
+      const end = start + match[0].length;
       if (cursorInLine >= start && cursorInLine <= end) {
-        const wrappedWord = `${token}${word}${token}`;
-        view.dispatch({
-          changes: { from: line.from + start, to: line.from + end, insert: wrappedWord },
-          selection: { anchor: line.from + start, head: line.from + start + wrappedWord.length },
-          scrollIntoView: true,
-        });
-        view.focus();
-        return;
+        targetStart = start;
+        targetEnd = end;
+        break;
       }
     }
 
-    const insert = `${token}${fallback}${token}`;
-    applySelection(insert, 0, insert.length);
+    if (targetStart < 0) {
+      const insert = `${token}${fallback}${token}`;
+      applySelection(insert, 0, insert.length);
+      return;
+    }
+
+    let segmentStart = targetStart;
+    while (segmentStart > contentStart && line.text[segmentStart - 1] === '*') {
+      segmentStart -= 1;
+    }
+    let segmentEnd = targetEnd;
+    while (segmentEnd < line.text.length && line.text[segmentEnd] === '*') {
+      segmentEnd += 1;
+    }
+
+    const segment = line.text.slice(segmentStart, segmentEnd);
+    const next = transformSegment(segment);
+    const from = line.from + segmentStart;
+    const to = line.from + segmentEnd;
+    const anchorInNext = Math.min(Math.max(0, cursorInLine - segmentStart), next.length);
+    view.dispatch({
+      changes: { from, to, insert: next },
+      selection: { anchor: from + anchorInNext },
+      scrollIntoView: true,
+    });
+    view.focus();
   };
 
   const toggleHeading = (level: 1 | 2 | 3) => {

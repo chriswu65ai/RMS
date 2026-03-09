@@ -2,7 +2,7 @@ import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { createFile } from '../../lib/dataApi';
-import { splitFrontmatter } from '../../lib/frontmatter';
+import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -58,7 +58,18 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 if (!name) return;
                 const fileName = ensureMdExtension(name.trim());
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
-                await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content: selected.content });
+                const parsed = splitFrontmatter(selected.content);
+                const clonedFrontmatter = { ...parsed.frontmatter, template: false };
+                const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
+                await createFile({
+                  workspaceId: workspace.id,
+                  folderId: folder?.id ?? null,
+                  folderPath: folder?.path ?? null,
+                  name: fileName,
+                  content: clonedContent,
+                  isTemplate: false,
+                  frontmatter: clonedFrontmatter,
+                });
                 await refresh();
                 onClose();
               }}
