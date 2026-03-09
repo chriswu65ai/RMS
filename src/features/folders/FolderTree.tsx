@@ -198,7 +198,7 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
         </div>
         <div className="flex items-center gap-1">
           <button
-            className="rounded-md p-1 hover:bg-slate-100"
+            className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
             title="Create new folder"
             aria-label="Create new folder"
             onClick={async () => {
@@ -215,7 +215,7 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
             <FolderPlus size={16} />
           </button>
           <button
-            className="rounded-md p-1 hover:bg-slate-100"
+            className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
             title={allExpanded ? 'Hide all sub-folders' : 'Expand all sub-folders'}
             onClick={toggleAllSubfolders}
             aria-label={allExpanded ? 'Hide all sub-folders' : 'Expand all sub-folders'}
@@ -235,7 +235,7 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
         <div className="mb-2 flex items-center justify-between px-2">
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Tags</h4>
           <button
-            className="rounded-md p-1 hover:bg-slate-100"
+            className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
             title={tagsCollapsed ? 'Expand tags' : 'Hide tags'}
             aria-label={tagsCollapsed ? 'Expand tags' : 'Hide tags'}
             onClick={() => setTagsCollapsed((prev) => !prev)}
