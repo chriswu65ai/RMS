@@ -32,14 +32,15 @@ export function EditorPane() {
     setFrontmatter(parsed.frontmatter);
   }, [file?.id, parsed.body, parsed.frontmatter]);
 
+  const metadataSyntax = useMemo(() => {
+    const withFrontmatterOnly = composeMarkdown(frontmatter, '');
+    const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
+    return match ? `---\n${match[1]}\n---` : '';
+  }, [frontmatter]);
+
   if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a prompt file.</div>;
 
   const merged = composeMarkdown(frontmatter, body);
-  const metadataSyntax = useMemo(() => {
-    const withFrontmatterOnly = composeMarkdown(frontmatter, "");
-    const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
-    return match ? `---\n${match[1]}\n---` : "";
-  }, [frontmatter]);
   const dirty = merged !== file.content;
 
   const getLineText = () => {
