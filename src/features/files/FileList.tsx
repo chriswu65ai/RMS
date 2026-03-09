@@ -66,10 +66,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               const fileName = ensureMdExtension(name.trim());
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
               const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${fileName}`);
-              if (duplicate) return dialog.alert('Duplicate file', 'File name already exists in this location.');
-              const frontmatter: FrontmatterModel = {};
+              if (duplicate) return dialog.alert('Duplicate file', 'A file cannot be created because a file with the same name already exists in this folder.');
+              const baseName = fileName.replace(/\.md$/i, '');
+              const frontmatter: FrontmatterModel = { title: baseName };
               const content = '';
-              await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
+              const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
+              if (error) return dialog.alert('Create failed', error.message);
               await refresh();
             }}
           >
@@ -94,7 +96,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   <span>{frontmatter.title || file.name}</span>
                   {frontmatter.starred === true && <Star size={12} className="text-amber-500" fill="currentColor" />}
                 </p>
-                <p className="line-clamp-1 text-xs text-slate-500">{file.path}</p>
+                <p className="line-clamp-1 text-xs text-slate-500">{file.path.split('/').filter(Boolean).join('/') || file.name}</p>
               </button>
               <div className="hidden items-center gap-1 group-hover:flex">
                 <button
@@ -122,17 +124,21 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
                   const name = await dialog.prompt('Rename file', file.name, 'New file name');
                   if (!name) return;
+                  const nextName = ensureMdExtension(name.trim());
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
-                  const path = `${folder?.path ? `${folder.path}/` : ''}${name}`;
+                  const path = `${folder?.path ? `${folder.path}/` : ''}${nextName}`;
                   if (files.some((f) => f.id !== file.id && f.path === path)) return dialog.alert('Duplicate path', 'Another file already uses this path.');
-                  await updateFile(file.id, { name, path });
+                  await updateFile(file.id, { name: nextName, path });
                   await refresh();
                 }}><Pencil size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
                   const name = await dialog.prompt('Duplicate file', file.name.replace('.md', '-copy.md'), 'New duplicate file name');
                   if (!name || !workspace) return;
+                  const nextName = ensureMdExtension(name.trim());
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
-                  await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name, content: file.content, isTemplate: file.is_template });
+                  const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${nextName}`);
+                  if (duplicate) return dialog.alert('Duplicate file', 'A file with this name already exists in this folder.');
+                  await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: nextName, content: file.content, isTemplate: file.is_template });
                   await refresh();
                 }}><CopyPlus size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => {

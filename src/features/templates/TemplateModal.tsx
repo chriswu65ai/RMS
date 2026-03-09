@@ -40,7 +40,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
             ))}
           </div>
         </div>
-        <div className="flex flex-col">
+        <div className="flex min-h-0 flex-col">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
             <h4 className="text-sm font-semibold">Preview</h4>
             <button onClick={onClose} className="text-sm text-slate-500">Close</button>
@@ -59,9 +59,11 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 const fileName = ensureMdExtension(name.trim());
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
                 const parsed = splitFrontmatter(selected.content);
-                const clonedFrontmatter = { ...parsed.frontmatter, template: false };
+                const duplicate = files.some((f) => f.path === `${folder?.path ? `${folder.path}/` : ''}${fileName}`);
+                if (duplicate) return dialog.alert('Duplicate file', 'A file cannot be created because a file with the same name already exists in this folder.');
+                const clonedFrontmatter = { ...parsed.frontmatter, template: false, title: fileName.replace(/\.md$/i, '') };
                 const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
-                await createFile({
+                const { error } = await createFile({
                   workspaceId: workspace.id,
                   folderId: folder?.id ?? null,
                   folderPath: folder?.path ?? null,
@@ -70,6 +72,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                   isTemplate: false,
                   frontmatter: clonedFrontmatter,
                 });
+                if (error) return dialog.alert('Create failed', error.message);
                 await refresh();
                 onClose();
               }}

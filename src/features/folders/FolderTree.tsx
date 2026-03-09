@@ -163,7 +163,7 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col pt-2">
       <div className="flex items-center justify-between py-2 pl-3 pr-4">
         <div className="flex items-center gap-1">
           <button

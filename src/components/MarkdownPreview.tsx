@@ -10,19 +10,10 @@ type ParsedTable = {
   rows: string[][];
 };
 
-type TaskListState = {
+type TaskListPrefix = {
   checked: boolean;
-  label: string;
+  consumed: number;
 };
-
-function parseTaskListItem(text: string): TaskListState | null {
-  const match = text.match(/^\[( |x|X)\]\s+(.*)$/s);
-  if (!match) return null;
-  return {
-    checked: match[1].toLowerCase() === 'x',
-    label: match[2],
-  };
-}
 
 function flattenText(children: ReactNode): string {
   if (typeof children === 'string') return children;
@@ -50,6 +41,13 @@ function parseTable(text: string): ParsedTable | null {
   const headers = splitTableRow(lines[0]);
   const rows = lines.slice(2).filter((line) => line.includes('|')).map(splitTableRow);
   return { headers, rows };
+}
+
+function parseTaskPrefix(text: string): TaskListPrefix | null {
+  const match = text.match(/^\[(\s*|x\s*|X\s*)\]\s*/);
+  if (!match) return null;
+  const marker = match[1].trim().toLowerCase();
+  return { checked: marker === 'x', consumed: match[0].length };
 }
 
 export function MarkdownPreview({ content }: Props) {
@@ -85,17 +83,24 @@ export function MarkdownPreview({ content }: Props) {
           );
         },
         li({ children }) {
-          const text = flattenText(children).trim();
-          const task = parseTaskListItem(text);
+          const normalizedChildren = Array.isArray(children) ? [...children] : [children];
+          const first = normalizedChildren[0];
+          if (typeof first !== 'string') return <li>{children}</li>;
+
+          const task = parseTaskPrefix(first);
           if (!task) return <li>{children}</li>;
+
+          const firstRest = first.slice(task.consumed);
+          const remainingChildren: ReactNode[] = [firstRest, ...normalizedChildren.slice(1)];
+          while (remainingChildren.length > 0 && remainingChildren[0] === '') {
+            remainingChildren.shift();
+          }
 
           return (
             <li className="-ml-5 list-none">
               <label className="inline-flex items-start gap-2">
                 <input type="checkbox" checked={task.checked} readOnly disabled className="mt-1" />
-                <span>
-                  <ReactMarkdown components={{ p: ({ children: inlineChildren }) => <>{inlineChildren}</> }}>{task.label}</ReactMarkdown>
-                </span>
+                <span>{remainingChildren}</span>
               </label>
             </li>
           );
