@@ -8,7 +8,10 @@ import {
 } from '../../lib/supabase';
 import { initializeStarterWorkspace } from '../../lib/dataApi';
 import { checkSchemaHealth, toUserFacingBootstrapError } from '../../lib/schemaHealth';
+<<<<<<< codex/automate-initial-workspace-setup-in-supabase-leuf7v
 import { extractProjectRef, installSchemaWithAccessToken } from '../../lib/schemaInstaller';
+=======
+>>>>>>> main
 
 type Props = {
   onReady: () => void;
@@ -192,6 +195,7 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 4 && (
           <div className="space-y-3 text-sm text-slate-700">
+<<<<<<< codex/automate-initial-workspace-setup-in-supabase-leuf7v
             <p>Run workspace initialization now (recommended). This creates an empty workspace.</p>
             <div className="rounded border border-slate-200 bg-slate-50 p-3">
               <p className="mb-2 text-xs text-slate-600">No-CLI option: install schema from this page using your Supabase Personal Access Token. Project ref is auto-detected from the URL you entered.</p>
@@ -214,6 +218,9 @@ export function SetupWizard({ onReady }: Props) {
                 {installingSchema ? 'Installing schema...' : 'Install schema now (no CLI)'}
               </button>
             </div>
+=======
+            <p>Run workspace initialization now (recommended). This creates an empty workspace. If schema is missing in a brand-new project, run migrations once with Supabase CLI (<code>supabase db push --include-all</code>), then retry here.</p>
+>>>>>>> main
             <div className="flex gap-2">
               <button disabled={bootstrapping} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={runBootstrap}>Initialize workspace</button>
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={finish}>Continue to sign-in</button>
