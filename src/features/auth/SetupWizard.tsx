@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   clearRuntimeSupabaseConfig,
+  getRuntimeSupabaseConfig,
   getSupabaseSetupState,
   saveRuntimeSupabaseConfig,
   supabase,
@@ -13,9 +14,10 @@ type Props = {
 
 export function SetupWizard({ onReady }: Props) {
   const initialState = getSupabaseSetupState();
+  const existingRuntimeConfig = getRuntimeSupabaseConfig();
   const [step, setStep] = useState(1);
-  const [url, setUrl] = useState('');
-  const [anonKey, setAnonKey] = useState('');
+  const [url, setUrl] = useState(existingRuntimeConfig?.url ?? '');
+  const [anonKey, setAnonKey] = useState(existingRuntimeConfig?.anonKey ?? '');
   const [status, setStatus] = useState<string>(initialState.message);
   const [checking, setChecking] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
@@ -97,6 +99,14 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 2 && (
           <div className="space-y-3">
+            <p className="text-xs text-slate-500">
+              Current config source: <strong>{initialState.source}</strong>
+              {initialState.source === 'env'
+                ? ' (configured by host environment variables).'
+                : initialState.source === 'runtime'
+                  ? ' (stored in this browser, can be switched here).'
+                  : ' (not configured yet).'}
+            </p>
             <label className="block text-sm">
               Supabase URL
               <input className="input mt-1" placeholder="https://xxxx.supabase.co" value={url} onChange={(e) => setUrl(e.target.value)} />
@@ -105,9 +115,20 @@ export function SetupWizard({ onReady }: Props) {
               Supabase anon key
               <textarea className="input mt-1 min-h-28" value={anonKey} onChange={(e) => setAnonKey(e.target.value)} />
             </label>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={() => setStep(1)}>Back</button>
               <button disabled={!canSubmitConfig} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={() => setStep(3)}>Continue</button>
+              <button
+                className="rounded border border-rose-300 px-4 py-2 text-sm text-rose-700"
+                onClick={() => {
+                  clearRuntimeSupabaseConfig();
+                  setUrl('');
+                  setAnonKey('');
+                  setStatus('Runtime credentials reset.');
+                }}
+              >
+                Reset credentials
+              </button>
             </div>
           </div>
         )}

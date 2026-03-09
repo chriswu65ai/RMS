@@ -28,6 +28,10 @@ function readRuntimeConfig(): RuntimeConfig | null {
   }
 }
 
+export function getRuntimeSupabaseConfig(): RuntimeConfig | null {
+  return readRuntimeConfig();
+}
+
 function isLikelyValidUrl(value: string) {
   try {
     const parsed = new URL(value);

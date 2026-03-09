@@ -16,6 +16,13 @@ export function App() {
   const [folderPanelCollapsed, setFolderPanelCollapsed] = useState(false);
   const [setupVersion, setSetupVersion] = useState(0);
 
+  const reinitializeApp = () => {
+    setMobileSidebarOpen(false);
+    setFileModal(false);
+    setFolderPanelCollapsed(false);
+    setSetupVersion((v) => v + 1);
+  };
+
   const setupState = getSupabaseSetupState();
 
   useEffect(() => {
@@ -24,7 +31,7 @@ export function App() {
   }, [bootstrap, setupState.status, setupVersion]);
 
   if (setupState.status !== 'ready') {
-    return <SetupWizard onReady={() => setSetupVersion((v) => v + 1)} />;
+    return <SetupWizard onReady={reinitializeApp} />;
   }
 
   return (
@@ -36,7 +43,13 @@ export function App() {
         setMobileSidebarOpen={setMobileSidebarOpen}
         sidebarCollapsed={folderPanelCollapsed}
         headerRight={<span className="text-xs text-slate-500">Synced Markdown workspace</span>}
-        sidebar={<FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed((prev) => !prev)} />}
+        sidebar={
+          <FolderTree
+            collapsed={folderPanelCollapsed}
+            onToggleCollapsed={() => setFolderPanelCollapsed((prev) => !prev)}
+            onSwitchProject={reinitializeApp}
+          />
+        }
         fileList={<FileList openTemplatePicker={() => setFileModal(true)} />}
         main={
           <div className="h-full">
