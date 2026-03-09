@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Folder, PromptFile, Workspace } from '../types/models';
 import { supabase } from '../lib/supabase';
 import { initializeStarterWorkspace } from '../lib/dataApi';
+import { toUserFacingBootstrapError } from '../lib/schemaHealth';
 
 type Store = {
   workspace: Workspace | null;
@@ -39,16 +40,16 @@ export const usePromptStore = create<Store>((set, get) => ({
   bootstrap: async () => {
     set({ loading: true, error: null });
     const { data: ws, error } = await supabase.from('workspaces').select('*').limit(1).maybeSingle();
-    if (error) return set({ loading: false, error: error.message });
+    if (error) return set({ loading: false, error: toUserFacingBootstrapError(error.message) });
     if (!ws) {
       const { data: starterWorkspaceId, error: createError } = await initializeStarterWorkspace();
-      if (createError) return set({ loading: false, error: createError.message });
+      if (createError) return set({ loading: false, error: toUserFacingBootstrapError(createError.message) });
       const { data: created, error: fetchError } = await supabase
         .from('workspaces')
         .select('*')
         .eq('id', starterWorkspaceId)
         .single();
-      if (fetchError) return set({ loading: false, error: fetchError.message });
+      if (fetchError) return set({ loading: false, error: toUserFacingBootstrapError(fetchError.message) });
       set({ workspace: created as Workspace, loading: false });
       await get().refresh();
       return;

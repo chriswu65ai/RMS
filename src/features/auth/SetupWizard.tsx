@@ -7,6 +7,8 @@ import {
   supabase,
 } from '../../lib/supabase';
 import { initializeStarterWorkspace } from '../../lib/dataApi';
+import { checkSchemaHealth, toUserFacingBootstrapError } from '../../lib/schemaHealth';
+import { extractProjectRef, installSchemaWithAccessToken } from '../../lib/schemaInstaller';
 
 type Props = {
   onReady: () => void;
@@ -21,8 +23,11 @@ export function SetupWizard({ onReady }: Props) {
   const [status, setStatus] = useState<string>(initialState.message);
   const [checking, setChecking] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [installingSchema, setInstallingSchema] = useState(false);
+  const [accessToken, setAccessToken] = useState('');
 
   const canSubmitConfig = useMemo(() => url.trim().length > 0 && anonKey.trim().length > 0, [url, anonKey]);
+  const projectRef = useMemo(() => extractProjectRef(url), [url]);
 
   const validateConnection = async () => {
     setChecking(true);
@@ -43,7 +48,15 @@ export function SetupWizard({ onReady }: Props) {
       return;
     }
 
-    setStatus('Connection succeeded. Continue to initialize your workspace.');
+    const schema = await checkSchemaHealth();
+    if (!schema.ok) {
+      setStatus(schema.message);
+      setChecking(false);
+      setStep(4);
+      return;
+    }
+
+    setStatus('Connection and schema validation succeeded. Continue to initialize your workspace.');
     setChecking(false);
     setStep(4);
   };
@@ -52,11 +65,43 @@ export function SetupWizard({ onReady }: Props) {
     setBootstrapping(true);
     const { error } = await initializeStarterWorkspace();
     if (error) {
-      setStatus(`Initialization check: ${error.message}. This can be run automatically after sign-in.`);
+      setStatus(`Initialization check: ${toUserFacingBootstrapError(error.message)}. This can be run automatically after sign-in.`);
     } else {
       setStatus('Workspace initialization finished successfully.');
     }
     setBootstrapping(false);
+  };
+
+
+  const installSchema = async () => {
+    if (!projectRef) {
+      setStatus('Could not detect project ID from URL. Expected format: https://<project-ref>.supabase.co');
+      return;
+    }
+    if (!accessToken.trim()) {
+      setStatus('Enter a Supabase Personal Access Token to install schema without CLI.');
+      return;
+    }
+
+    setInstallingSchema(true);
+    setStatus('Installing database schema via Supabase Management API...');
+
+    const { error } = await installSchemaWithAccessToken(projectRef, accessToken.trim());
+    if (error) {
+      setStatus(`Schema install failed: ${error}`);
+      setInstallingSchema(false);
+      return;
+    }
+
+    const schema = await checkSchemaHealth();
+    if (!schema.ok) {
+      setStatus(`Schema install finished, but validation still failed: ${schema.message}`);
+      setInstallingSchema(false);
+      return;
+    }
+
+    setStatus('Schema installed successfully. You can now initialize your workspace.');
+    setInstallingSchema(false);
   };
 
   const finish = () => {
@@ -147,7 +192,28 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 4 && (
           <div className="space-y-3 text-sm text-slate-700">
-            <p>Run workspace initialization now (recommended). This creates an empty workspace. If you are not signed in yet, this may fail and will run automatically after sign-in.</p>
+            <p>Run workspace initialization now (recommended). This creates an empty workspace.</p>
+            <div className="rounded border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs text-slate-600">No-CLI option: install schema from this page using your Supabase Personal Access Token. Project ref is auto-detected from the URL you entered.</p>
+              <p className="mb-2 text-xs text-slate-500">Detected project ref: <strong>{projectRef ?? 'not detected'}</strong></p>
+              <label className="block text-xs">
+                Supabase Personal Access Token
+                <input
+                  type="password"
+                  className="input mt-1"
+                  placeholder="sbp_..."
+                  value={accessToken}
+                  onChange={(e) => setAccessToken(e.target.value)}
+                />
+              </label>
+              <button
+                disabled={installingSchema || !projectRef}
+                className="mt-2 rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-60"
+                onClick={installSchema}
+              >
+                {installingSchema ? 'Installing schema...' : 'Install schema now (no CLI)'}
+              </button>
+            </div>
             <div className="flex gap-2">
               <button disabled={bootstrapping} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={runBootstrap}>Initialize workspace</button>
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={finish}>Continue to sign-in</button>
