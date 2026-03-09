@@ -139,3 +139,4 @@ If the app starts without valid `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY`,
 
 - **Hosted deployments (recommended):** set these values in your hosting provider so app config is server-managed and users never need to paste credentials in-browser.
 - **Local/self-hosted development:** create `/workspace/promptmanager/.env.local` (project root) and provide both values there, or use the wizard which stores values in browser `localStorage` on that device.
+- **No CLI setup path:** in the setup wizard Step 4, you can install schema directly by pasting a Supabase Personal Access Token; the project ref is auto-detected from the Supabase URL (`https://<project-ref>.supabase.co`).
