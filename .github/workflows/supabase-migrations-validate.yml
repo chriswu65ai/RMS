@@ -1,0 +1,35 @@
+name: Validate Supabase Migrations
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase-migrations-validate.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase-migrations-validate.yml'
+
+jobs:
+  validate-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Apply migrations end-to-end
+        run: supabase db reset --local --debug
+
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop --no-backup

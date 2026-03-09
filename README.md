@@ -25,32 +25,59 @@ Implemented schema:
 
 ## Setup
 
-1. Copy env file:
+### Quick Setup (Supabase CLI default path)
+
+1. Install the Supabase CLI and Docker Desktop.
+2. Copy env file:
 
 ```bash
 cp .env.example .env.local
 ```
 
-2. Fill in Supabase values.
+3. Create a Supabase project, then link your repo:
 
-3. Install dependencies and run:
+```bash
+supabase login
+supabase link --project-ref <your-project-ref>
+```
+
+4. Apply schema and functions from migrations (source of truth):
+
+```bash
+supabase db push --include-all
+```
+
+5. (Optional) seed starter data via CLI:
+
+```bash
+supabase db seed
+```
+
+6. Fill in `.env.local` with Supabase project values.
+7. Install dependencies and run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-4. Open `http://localhost:5173`.
+8. Open `http://localhost:5173`.
 
-## Supabase setup
+### Supabase CLI workflow files
+
+- `.github/workflows/supabase-db-push.yml`: links the project and runs `supabase db push --include-all` on `main` changes under `supabase/`.
+- `.github/workflows/supabase-migrations-validate.yml`: starts a local Supabase stack and runs `supabase db reset --local` to validate migrations end-to-end.
+
+### Manual dashboard setup (advanced / troubleshooting)
+
+Use this only if CLI access is blocked.
 
 1. Create a Supabase project.
-2. In SQL editor run migration:
+2. In SQL editor run migrations in order:
    - `supabase/migrations/202603080001_init.sql`
+   - `supabase/migrations/202603090001_initialize_starter_workspace.sql`
 3. Enable email auth (magic link).
-4. Starter content bootstrap:
-   - Run migration `supabase/migrations/202603090001_initialize_starter_workspace.sql` to install `public.initialize_starter_workspace()`.
-   - Optionally run `supabase/seed/seed.sql`, which now just calls the same function for the authenticated user.
+4. Optionally run `supabase/seed/seed.sql`.
 
 
 ## Starter bootstrap idempotency

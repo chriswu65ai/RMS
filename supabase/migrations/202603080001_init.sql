@@ -37,10 +37,15 @@ alter table workspaces enable row level security;
 alter table folders enable row level security;
 alter table prompt_files enable row level security;
 
+drop policy if exists "workspace owner" on workspaces;
 create policy "workspace owner" on workspaces for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+
+drop policy if exists "folder by workspace owner" on folders;
 create policy "folder by workspace owner" on folders for all using (
   exists(select 1 from workspaces w where w.id = folders.workspace_id and w.owner_id = auth.uid())
 );
+
+drop policy if exists "file by workspace owner" on prompt_files;
 create policy "file by workspace owner" on prompt_files for all using (
   exists(select 1 from workspaces w where w.id = prompt_files.workspace_id and w.owner_id = auth.uid())
 );
