@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, Pencil, Tag, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder } from '../../lib/dataApi';
 import { supabase } from '../../lib/supabase';
@@ -10,7 +10,7 @@ import { splitFrontmatter } from '../../lib/frontmatter';
 const TAG_FILTER_ALL = '__ALL_TAGGED__';
 const TAG_FILTER_NONE = '__NO_TAGS__';
 
-export function FolderTree() {
+export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolean; onToggleCollapsed: () => void }) {
   const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -87,6 +87,22 @@ export function FolderTree() {
     return fromPath || folder.name || folder.path;
   };
 
+
+  if (collapsed) {
+    return (
+      <div className="flex h-full items-start justify-center pt-2">
+        <button
+          className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
+          onClick={onToggleCollapsed}
+          aria-label="Expand folders panel"
+          title="Expand folders panel"
+        >
+          <PanelLeftOpen size={16} />
+        </button>
+      </div>
+    );
+  }
+
   const renderFolderNode = (folder: (typeof folders)[number], depth: number) => {
     const childFolders = childrenByParent.get(folder.id) ?? [];
     const hasChildren = childFolders.length > 0;
@@ -148,11 +164,23 @@ export function FolderTree() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between py-3 pl-3 pr-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Folders</h3>
+      <div className="flex items-center justify-between py-2 pl-3 pr-4">
+        <div className="flex items-center gap-1">
+          <button
+            className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
+            onClick={onToggleCollapsed}
+            aria-label="Collapse folders panel"
+            title="Collapse folders panel"
+          >
+            <PanelLeftClose size={16} />
+          </button>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Folders</h3>
+        </div>
         <div className="flex items-center gap-1">
           <button
             className="rounded-md p-1 hover:bg-slate-100"
+            title="Create new folder"
+            aria-label="Create new folder"
             onClick={async () => {
               if (!workspace) return;
               const parent = folders.find((f) => f.id === selectedFolderId) ?? null;

@@ -11,6 +11,7 @@ export function App() {
   const { bootstrap, loading, error } = usePromptStore();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
+  const [folderPanelCollapsed, setFolderPanelCollapsed] = useState(false);
 
   useEffect(() => {
     bootstrap();
@@ -23,8 +24,9 @@ export function App() {
       <AppShell
         mobileSidebarOpen={mobileSidebarOpen}
         setMobileSidebarOpen={setMobileSidebarOpen}
+        sidebarCollapsed={folderPanelCollapsed}
         headerRight={<span className="text-xs text-slate-500">Synced Markdown workspace</span>}
-        sidebar={<FolderTree />}
+        sidebar={<FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed((prev) => !prev)} />}
         fileList={<FileList openTemplatePicker={() => setFileModal(true)} />}
         main={
           <div className="h-full">

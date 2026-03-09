@@ -18,7 +18,7 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
 
   if (collapsed) {
     return (
-      <aside className="hidden border-l border-slate-200 bg-white lg:flex lg:w-12 lg:flex-col lg:items-center lg:py-3">
+      <aside className="hidden border-l border-slate-200 bg-white lg:flex lg:w-12 lg:flex-col lg:items-center lg:pt-2">
         <button
           className="rounded-md p-2 text-slate-600 hover:bg-slate-100"
           onClick={onToggleCollapsed}
