@@ -7,13 +7,18 @@ type DialogState = {
   title: string;
   message?: string;
   defaultValue?: string;
+  validate?: (value: string) => string | null;
   resolve: (value: boolean | string | null) => void;
 } | null;
+
+type PromptOptions = {
+  validate?: (value: string) => string | null;
+};
 
 type DialogAPI = {
   alert: (title: string, message?: string) => Promise<void>;
   confirm: (title: string, message?: string) => Promise<boolean>;
-  prompt: (title: string, defaultValue?: string, message?: string) => Promise<string | null>;
+  prompt: (title: string, defaultValue?: string, message?: string, options?: PromptOptions) => Promise<string | null>;
 };
 
 const DialogContext = createContext<DialogAPI | null>(null);
@@ -21,20 +26,38 @@ const DialogContext = createContext<DialogAPI | null>(null);
 export function DialogProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [inputValue, setInputValue] = useState('');
+  const [validationError, setValidationError] = useState<string | null>(null);
 
-  const open = useCallback((kind: DialogKind, title: string, message?: string, defaultValue?: string) => {
+  const open = useCallback((kind: DialogKind, title: string, message?: string, defaultValue?: string, validate?: (value: string) => string | null) => {
     return new Promise<boolean | string | null>((resolve) => {
       setInputValue(defaultValue ?? '');
-      setDialog({ kind, title, message, defaultValue, resolve });
+      setValidationError(null);
+      setDialog({ kind, title, message, defaultValue, validate, resolve });
     });
   }, []);
+
+  const closeDialog = useCallback(() => {
+    setDialog(null);
+    setValidationError(null);
+  }, []);
+
+  const resolvePrompt = useCallback(() => {
+    if (!dialog || dialog.kind !== 'prompt') return;
+    const error = dialog.validate?.(inputValue) ?? null;
+    if (error) {
+      setValidationError(error);
+      return;
+    }
+    dialog.resolve(inputValue || null);
+    closeDialog();
+  }, [closeDialog, dialog, inputValue]);
 
   const api = useMemo<DialogAPI>(() => ({
     alert: async (title, message) => {
       await open('alert', title, message);
     },
     confirm: async (title, message) => open('confirm', title, message) as Promise<boolean>,
-    prompt: async (title, defaultValue, message) => open('prompt', title, message, defaultValue) as Promise<string | null>,
+    prompt: async (title, defaultValue, message, options) => open('prompt', title, message, defaultValue, options?.validate) as Promise<string | null>,
   }), [open]);
 
   return (
@@ -53,11 +76,13 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    dialog.resolve(inputValue || null);
-                    setDialog(null);
+                    resolvePrompt();
                   }
                 }}
               />
+            )}
+            {dialog.kind === 'prompt' && validationError && (
+              <p className="mt-2 text-sm text-red-600">{validationError}</p>
             )}
             <div className="mt-4 flex justify-end gap-2">
               {dialog.kind !== 'alert' && (
@@ -65,7 +90,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                   className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
                   onClick={() => {
                     dialog.resolve(dialog.kind === 'confirm' ? false : null);
-                    setDialog(null);
+                    closeDialog();
                   }}
                 >
                   Cancel
@@ -74,8 +99,12 @@ export function DialogProvider({ children }: { children: ReactNode }) {
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white"
                 onClick={() => {
-                  dialog.resolve(dialog.kind === 'confirm' ? true : dialog.kind === 'prompt' ? (inputValue || null) : true);
-                  setDialog(null);
+                  if (dialog.kind === 'prompt') {
+                    resolvePrompt();
+                    return;
+                  }
+                  dialog.resolve(dialog.kind === 'confirm' ? true : true);
+                  closeDialog();
                 }}
               >
                 OK

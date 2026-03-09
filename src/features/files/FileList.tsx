@@ -8,6 +8,7 @@ import type { FrontmatterModel } from '../../types/models';
 
 const TAG_FILTER_ALL = '__ALL_TAGGED__';
 const TAG_FILTER_NONE = '__NO_TAGS__';
+const EMPTY_FILE_NAME_ERROR = 'Cannot create file without a name';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
   const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, setSearch } = usePromptStore();
@@ -65,7 +66,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
             onClick={async () => {
               if (!workspace) return;
-              const name = await dialog.prompt('Create prompt file', 'new-prompt', 'File name (.md extension will be added)');
+              const name = await dialog.prompt(
+                'Create prompt file',
+                '',
+                'File name (.md extension will be added)',
+                { validate: (value) => (value.trim() ? null : EMPTY_FILE_NAME_ERROR) },
+              );
               if (!name) return;
               const fileName = ensureMdExtension(name.trim());
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;

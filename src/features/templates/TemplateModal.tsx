@@ -6,6 +6,8 @@ import { createFile } from '../../lib/dataApi';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
+const EMPTY_FILE_NAME_ERROR = 'Cannot create file without a name';
+
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { files, workspace, selectedFolderId, folders, refresh } = usePromptStore();
   const dialog = useDialog();
@@ -59,7 +61,12 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const name = await dialog.prompt('Create from template', 'new-prompt', 'File name (.md extension will be added)');
+                const name = await dialog.prompt(
+                  'Create from template',
+                  '',
+                  'File name (.md extension will be added)',
+                  { validate: (value) => (value.trim() ? null : EMPTY_FILE_NAME_ERROR) },
+                );
                 if (!name) return;
                 const fileName = ensureMdExtension(name.trim());
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
