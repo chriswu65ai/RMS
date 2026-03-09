@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Settings, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder } from '../../lib/dataApi';
-import { supabase } from '../../lib/supabase';
+import { clearRuntimeSupabaseConfig, getSupabaseSetupState, supabase } from '../../lib/supabase';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { exportWorkspaceMarkdownZip } from '../../lib/exportMarkdown';
@@ -10,7 +10,15 @@ import { splitFrontmatter } from '../../lib/frontmatter';
 const TAG_FILTER_ALL = '__ALL_TAGGED__';
 const TAG_FILTER_NONE = '__NO_TAGS__';
 
-export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolean; onToggleCollapsed: () => void }) {
+export function FolderTree({
+  collapsed,
+  onToggleCollapsed,
+  onSwitchProject,
+}: {
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onSwitchProject: () => void;
+}) {
   const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, reset } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -24,6 +32,23 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
       return;
     }
     await exportWorkspaceMarkdownZip(workspace, files);
+  };
+
+
+  const switchSupabaseProject = async () => {
+    const setupState = getSupabaseSetupState();
+    if (setupState.source === 'env') {
+      await dialog.alert(
+        'Managed by environment',
+        'Supabase credentials are loaded from host environment variables. Update VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then reload the app.',
+      );
+      return;
+    }
+
+    clearRuntimeSupabaseConfig();
+    reset();
+    setSettingsOpen(false);
+    onSwitchProject();
   };
 
   const signOut = async () => {
@@ -308,6 +333,17 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
                     onClick={exportAllFiles}
                   >
                     <Download size={16} /> Export All
+                  </button>
+                </section>
+
+                <section className="space-y-3">
+                  <p className="text-sm text-slate-600">Supabase project</p>
+                  <p className="text-xs text-slate-500">Current config source: <strong>{getSupabaseSetupState().source}</strong></p>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
+                    onClick={switchSupabaseProject}
+                  >
+                    Switch Supabase project
                   </button>
                 </section>
 
