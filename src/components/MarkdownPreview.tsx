@@ -56,6 +56,22 @@ function isThematicBreak(line: string): boolean {
   return /^([-*_])(?:\s*\1){2,}$/.test(trimmed);
 }
 
+function neutralizeShortSetextUnderlines(markdown: string): string {
+  const lines = markdown.split('\n');
+
+  for (let index = 1; index < lines.length; index += 1) {
+    const current = lines[index];
+    if (!/^\s*-{1,2}\s*$/.test(current)) continue;
+
+    const previous = lines[index - 1]?.trim();
+    if (!previous) continue;
+
+    lines[index] = current.replace('-', '\\-');
+  }
+
+  return lines.join('\n');
+}
+
 const markdownComponents: Components = {
   hr() {
     return <hr />;
@@ -152,7 +168,7 @@ export function MarkdownPreview({ content }: Props) {
           <hr key={`hr-${index}`} />
         ) : (
           <ReactMarkdown key={`md-${index}`} components={markdownComponents}>
-            {chunk.content}
+            {neutralizeShortSetextUnderlines(chunk.content)}
           </ReactMarkdown>
         ),
       )}
