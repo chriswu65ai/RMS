@@ -51,6 +51,11 @@ function parseTaskPrefix(text: string): TaskListPrefix | null {
   return { checked: marker === 'x', consumed: match[0].length };
 }
 
+function isThematicBreak(line: string): boolean {
+  const trimmed = line.trim();
+  return /^([-*_])(?:\s*\1){2,}$/.test(trimmed);
+}
+
 const markdownComponents: Components = {
   hr() {
     return <hr />;
@@ -111,7 +116,7 @@ const markdownComponents: Components = {
 export function MarkdownPreview({ content }: Props) {
   const normalizedContent = content.replace(/\r\n/g, '\n');
   const lines = normalizedContent.split('\n');
-  const chunks: Array<{ type: 'markdown'; content: string } | { type: 'blank' }> = [];
+  const chunks: Array<{ type: 'markdown'; content: string } | { type: 'blank' } | { type: 'hr' }> = [];
   let buffer: string[] = [];
 
   const flushBuffer = () => {
@@ -127,6 +132,12 @@ export function MarkdownPreview({ content }: Props) {
       continue;
     }
 
+    if (isThematicBreak(line)) {
+      flushBuffer();
+      chunks.push({ type: 'hr' });
+      continue;
+    }
+
     buffer.push(line);
   }
 
@@ -137,6 +148,8 @@ export function MarkdownPreview({ content }: Props) {
       {chunks.map((chunk, index) =>
         chunk.type === 'blank' ? (
           <p key={`blank-${index}`}>{'\u00a0'}</p>
+        ) : chunk.type === 'hr' ? (
+          <hr key={`hr-${index}`} />
         ) : (
           <ReactMarkdown key={`md-${index}`} components={markdownComponents}>
             {chunk.content}
