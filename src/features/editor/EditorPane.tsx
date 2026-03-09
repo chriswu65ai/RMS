@@ -368,8 +368,8 @@ ${merged}`);
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <button className="rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent}><Download className="mr-1 inline" size={14} />Download</button>
-              <button className="rounded-md border px-2 py-1 text-xs" onClick={shareCurrent}><Share2 className="mr-1 inline" size={14} />Share</button>
+              <button className="rounded-md border p-1.5 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="inline" size={14} /></button>
+              <button className="rounded-md border p-1.5 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="inline" size={14} /></button>
               <button className="rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1 inline" size={14} />Copy</button>
               <button
                 className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
@@ -403,6 +403,8 @@ ${merged}`);
             <button className={btn(active.hr)} onClick={toggleHorizontalRule}><Minus size={14} /></button>
             <button
               className="rounded border px-2 py-1"
+              title="Table"
+              aria-label="Table"
               onClick={async () => {
                 const r = await dialog.prompt('Insert table', '3', 'Rows');
                 if (!r) return;
@@ -416,9 +418,9 @@ ${merged}`);
                 insertAndMoveCaretRight(`${header}\n${sep}\n${bodyRows}`);
               }}
             >
-              <Table className="mr-1 inline" size={12} />Table
+              <Table className="inline" size={12} />
             </button>
-            <button className="rounded border px-2 py-1" onClick={() => setEmojiOpen(true)}><Smile className="mr-1 inline" size={12} />Emoji</button>
+            <button className="rounded border px-2 py-1" onClick={() => setEmojiOpen(true)} title="Emoji" aria-label="Emoji"><Smile className="inline" size={12} /></button>
           </div>
         </div>
 

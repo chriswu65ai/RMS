@@ -18,22 +18,24 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
 
   if (collapsed) {
     return (
-      <aside className="hidden border-l border-slate-200 bg-white lg:flex lg:w-12 lg:flex-col lg:items-center lg:pt-2">
-        <button
-          className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
-          onClick={onToggleCollapsed}
-          aria-label="Expand metadata panel"
-          title="Expand metadata panel"
-        >
-          <PanelRightOpen size={16} />
-        </button>
+      <aside className="hidden border-l border-slate-200 bg-white lg:block lg:w-12">
+        <div className="flex items-center justify-center py-2">
+          <button
+            className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+            onClick={onToggleCollapsed}
+            aria-label="Expand metadata panel"
+            title="Expand metadata panel"
+          >
+            <PanelRightOpen size={16} />
+          </button>
+        </div>
       </aside>
     );
   }
 
   return (
-    <aside className="hidden border-l border-slate-200 bg-white p-4 lg:block">
-      <div className="mb-4 flex items-center justify-between">
+    <aside className="hidden border-l border-slate-200 bg-white lg:block">
+      <div className="flex items-center justify-between py-2 pl-3 pr-4">
         <h3 className="text-sm font-semibold">Metadata</h3>
         <button
           className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
@@ -44,7 +46,7 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
           <PanelRightClose size={16} />
         </button>
       </div>
-      <div className="space-y-3">
+      <div className="space-y-3 px-4 pb-4">
         <label className="block text-xs text-slate-500">Title
           <input className="input mt-1" value={frontmatter.title ?? ''} onChange={(e) => onChange({ ...frontmatter, title: e.target.value })} />
         </label>

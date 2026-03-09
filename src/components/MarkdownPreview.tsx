@@ -52,6 +52,10 @@ function parseTaskPrefix(text: string): TaskListPrefix | null {
 
 export function MarkdownPreview({ content }: Props) {
   const normalizedContent = content.replace(/\r\n/g, '\n');
+  const contentWithVisibleEmptyRows = normalizedContent
+    .split('\n')
+    .map((line) => (line.trim() === '' ? '\u00a0' : line))
+    .join('\n');
 
   return (
     <ReactMarkdown
@@ -107,7 +111,7 @@ export function MarkdownPreview({ content }: Props) {
         },
       }}
     >
-      {normalizedContent}
+      {contentWithVisibleEmptyRows}
     </ReactMarkdown>
   );
 }
