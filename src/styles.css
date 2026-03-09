@@ -15,6 +15,7 @@ button { @apply transition; }
 .markdown-preview ul { @apply my-1.5 list-disc pl-6; }
 .markdown-preview ol { @apply my-1.5 list-decimal pl-6; }
 .markdown-preview li { @apply my-1; }
+.markdown-preview hr { @apply my-4 border-0 border-t border-slate-300; }
 .markdown-preview br { @apply block h-3 content-['']; }
 .markdown-preview table { @apply my-3 w-full border-collapse; }
 .markdown-preview th { @apply border border-slate-300 bg-slate-50 px-2 py-1 text-left font-semibold; }
