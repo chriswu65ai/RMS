@@ -19,6 +19,7 @@ type Store = {
   selectTag: (tag: string | null) => void;
   bootstrap: () => Promise<void>;
   refresh: () => Promise<void>;
+  reset: () => void;
 };
 
 export const usePromptStore = create<Store>((set, get) => ({
@@ -68,5 +69,18 @@ export const usePromptStore = create<Store>((set, get) => ({
       return;
     }
     set({ folders: (folders ?? []) as Folder[], files: (files ?? []) as PromptFile[], loading: false });
+  },
+  reset: () => {
+    set({
+      workspace: null,
+      folders: [],
+      files: [],
+      selectedFolderId: null,
+      selectedFileId: null,
+      selectedTag: null,
+      search: '',
+      loading: false,
+      error: null,
+    });
   },
 }));

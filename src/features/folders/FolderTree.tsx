@@ -11,7 +11,7 @@ const TAG_FILTER_ALL = '__ALL_TAGGED__';
 const TAG_FILTER_NONE = '__NO_TAGS__';
 
 export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolean; onToggleCollapsed: () => void }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, reset } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [tagsCollapsed, setTagsCollapsed] = useState(false);
@@ -26,6 +26,15 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
     await exportWorkspaceMarkdownZip(workspace, files);
   };
 
+  const signOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      await dialog.alert('Sign out failed', error.message);
+      return;
+    }
+    reset();
+    setSettingsOpen(false);
+  };
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string | null, typeof folders>();
@@ -291,14 +300,26 @@ export function FolderTree({ collapsed, onToggleCollapsed }: { collapsed: boolea
                 <h4 className="text-sm font-semibold">Settings</h4>
                 <button onClick={() => setSettingsOpen(false)} className="text-sm text-slate-500">Close</button>
               </div>
-              <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-                <p className="text-sm text-slate-600">Workspace</p>
-                <button
-                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-                  onClick={exportAllFiles}
-                >
-                  <Download size={16} /> Export All
-                </button>
+              <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
+                <section className="space-y-3">
+                  <p className="text-sm text-slate-600">Workspace</p>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
+                    onClick={exportAllFiles}
+                  >
+                    <Download size={16} /> Export All
+                  </button>
+                </section>
+
+                <section className="space-y-3">
+                  <p className="text-sm text-slate-600">Account</p>
+                  <button
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+                    onClick={signOut}
+                  >
+                    Sign out
+                  </button>
+                </section>
               </div>
             </div>
           </div>
