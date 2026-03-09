@@ -89,6 +89,8 @@ Use this only if CLI access is blocked.
 
 The client calls this RPC only when no workspace exists in `usePromptStore.bootstrap`, so first-run accounts are initialized once automatically.
 
+If a brand-new Supabase project is connected before migrations are applied, the app now detects the missing schema and surfaces a guided error that points to `supabase db push --include-all` instead of failing with a raw schema-cache table error.
+
 ## Deploy (Vercel)
 
 1. Push repository to GitHub.

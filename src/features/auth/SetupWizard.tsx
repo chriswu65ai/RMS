@@ -7,6 +7,7 @@ import {
   supabase,
 } from '../../lib/supabase';
 import { initializeStarterWorkspace } from '../../lib/dataApi';
+import { checkSchemaHealth, toUserFacingBootstrapError } from '../../lib/schemaHealth';
 
 type Props = {
   onReady: () => void;
@@ -43,7 +44,15 @@ export function SetupWizard({ onReady }: Props) {
       return;
     }
 
-    setStatus('Connection succeeded. Continue to initialize your workspace.');
+    const schema = await checkSchemaHealth();
+    if (!schema.ok) {
+      setStatus(schema.message);
+      setChecking(false);
+      setStep(4);
+      return;
+    }
+
+    setStatus('Connection and schema validation succeeded. Continue to initialize your workspace.');
     setChecking(false);
     setStep(4);
   };
@@ -52,7 +61,7 @@ export function SetupWizard({ onReady }: Props) {
     setBootstrapping(true);
     const { error } = await initializeStarterWorkspace();
     if (error) {
-      setStatus(`Initialization check: ${error.message}. This can be run automatically after sign-in.`);
+      setStatus(`Initialization check: ${toUserFacingBootstrapError(error.message)}. This can be run automatically after sign-in.`);
     } else {
       setStatus('Workspace initialization finished successfully.');
     }
@@ -147,7 +156,7 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 4 && (
           <div className="space-y-3 text-sm text-slate-700">
-            <p>Run workspace initialization now (recommended). This creates an empty workspace. If you are not signed in yet, this may fail and will run automatically after sign-in.</p>
+            <p>Run workspace initialization now (recommended). This creates an empty workspace. If schema is missing in a brand-new project, run migrations once with Supabase CLI (<code>supabase db push --include-all</code>), then retry here.</p>
             <div className="flex gap-2">
               <button disabled={bootstrapping} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={runBootstrap}>Initialize workspace</button>
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={finish}>Continue to sign-in</button>
