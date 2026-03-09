@@ -6,16 +6,26 @@ import { FileList } from './features/files/FileList';
 import { EditorPane } from './features/editor/EditorPane';
 import { TemplateModal } from './features/templates/TemplateModal';
 import { usePromptStore } from './hooks/usePromptStore';
+import { getSupabaseSetupState } from './lib/supabase';
+import { SetupWizard } from './features/auth/SetupWizard';
 
 export function App() {
   const { bootstrap, loading, error } = usePromptStore();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
   const [folderPanelCollapsed, setFolderPanelCollapsed] = useState(false);
+  const [setupVersion, setSetupVersion] = useState(0);
+
+  const setupState = getSupabaseSetupState();
 
   useEffect(() => {
+    if (setupState.status !== 'ready') return;
     bootstrap();
-  }, [bootstrap]);
+  }, [bootstrap, setupState.status, setupVersion]);
+
+  if (setupState.status !== 'ready') {
+    return <SetupWizard onReady={() => setSetupVersion((v) => v + 1)} />;
+  }
 
   return (
     <AuthGate>

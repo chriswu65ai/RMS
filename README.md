@@ -130,3 +130,10 @@ The client calls this RPC only when no workspace exists in `usePromptStore.boots
 - Multi-workspace selector.
 - Full-text search index (`tsvector`) + tag filter chips.
 - Export/import folder trees as `.md` files.
+
+## First-run runtime config fallback
+
+If the app starts without valid `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY`, it now shows a first-run setup wizard.
+
+- **Hosted deployments (recommended):** set these values in your hosting provider so app config is server-managed and users never need to paste credentials in-browser.
+- **Local/self-hosted development:** create `/workspace/promptmanager/.env.local` (project root) and provide both values there, or use the wizard which stores values in browser `localStorage` on that device.
