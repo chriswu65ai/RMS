@@ -4,6 +4,14 @@ export type SupabaseProvisioningResult = {
   anonKey?: string;
 };
 
+export type SupabaseManagementProject = {
+  id: string;
+  organizationId: string;
+  name: string;
+  region?: string;
+  status?: string;
+};
+
 type StartResponse = { operationId: string };
 
 type StatusResponse = {
@@ -12,11 +20,38 @@ type StatusResponse = {
   result?: SupabaseProvisioningResult;
 };
 
-export async function startSupabaseProvisioning(payload: {
-  projectUrl: string;
+type ProvisionNewProjectPayload = {
+  createProject: {
+    organizationId: string;
+    name: string;
+    region?: string;
+    plan?: string;
+    dbPass?: string;
+  };
+  devAccessToken?: string;
+};
+
+type ProvisionExistingProjectPayload = {
+  projectUrl?: string;
   projectRef?: string | null;
   devAccessToken?: string;
-}) {
+};
+
+export async function listSupabaseManagementProjects(payload: { organizationId?: string; devAccessToken?: string }) {
+  const response = await fetch('/api/setup/supabase/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return (await response.json()) as { projects: SupabaseManagementProject[] };
+}
+
+export async function startSupabaseProvisioning(payload: ProvisionNewProjectPayload | ProvisionExistingProjectPayload) {
   const response = await fetch('/api/setup/supabase', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

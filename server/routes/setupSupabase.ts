@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getSupabaseProvisioningStatus, startSupabaseProvisioning } from '../provisioning/supabase';
+import { getSupabaseProvisioningStatus, listSupabaseProjects, startSupabaseProvisioning } from '../provisioning/supabase';
 
 async function readJsonBody(req: IncomingMessage) {
   const chunks: Uint8Array[] = [];
@@ -20,6 +20,17 @@ function writeJson(res: ServerResponse, status: number, body: unknown) {
 
 export async function handleSupabaseSetupRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
+
+  if (req.method === 'POST' && url === '/api/setup/supabase/projects') {
+    try {
+      const payload = await readJsonBody(req);
+      const projects = await listSupabaseProjects(payload as never);
+      writeJson(res, 200, { projects });
+    } catch (error) {
+      writeJson(res, 400, { error: error instanceof Error ? error.message : 'Failed to list projects.' });
+    }
+    return true;
+  }
 
   if (req.method === 'POST' && url === '/api/setup/supabase') {
     try {

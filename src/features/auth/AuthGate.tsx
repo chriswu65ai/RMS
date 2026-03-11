@@ -1,16 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { initializeStarterWorkspace } from '../../lib/dataApi';
+import { checkSchemaHealth } from '../../lib/schemaHealth';
 import { supabase } from '../../lib/supabase';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [email, setEmail] = useState('');
   const [authed, setAuthed] = useState(false);
   const [message, setMessage] = useState('');
+  const initializedForSession = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setAuthed(!!data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_, session) => setAuthed(!!session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_, session) => {
+      initializedForSession.current = false;
+      setAuthed(!!session);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!authed || initializedForSession.current) return;
+
+    initializedForSession.current = true;
+    void (async () => {
+      const schema = await checkSchemaHealth();
+      if (!schema.ok) return;
+      await initializeStarterWorkspace();
+    })();
+  }, [authed]);
 
   if (authed) return <>{children}</>;
 

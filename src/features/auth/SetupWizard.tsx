@@ -8,12 +8,16 @@ import {
 } from '../../lib/supabase';
 import { initializeStarterWorkspace } from '../../lib/dataApi';
 import { checkSchemaHealth, toUserFacingBootstrapError } from '../../lib/schemaHealth';
-import { getSupabaseProvisioningStatus, startSupabaseProvisioning } from '../../lib/setupApi';
+import {
+  getSupabaseProvisioningStatus,
+  listSupabaseManagementProjects,
+  startSupabaseProvisioning,
+  type SupabaseManagementProject,
+} from '../../lib/setupApi';
 
 type Props = {
   onReady: () => void;
 };
-
 
 function extractProjectRef(url: string): string | null {
   const trimmed = url.trim();
@@ -34,16 +38,40 @@ export function SetupWizard({ onReady }: Props) {
   const initialState = getSupabaseSetupState();
   const existingRuntimeConfig = getRuntimeSupabaseConfig();
   const [step, setStep] = useState(1);
+  const [setupMode, setSetupMode] = useState<'existing' | 'create'>('existing');
+  const [createMode, setCreateMode] = useState<'new' | 'select'>('new');
   const [url, setUrl] = useState(existingRuntimeConfig?.url ?? '');
   const [anonKey, setAnonKey] = useState(existingRuntimeConfig?.anonKey ?? '');
+  const [organizationId, setOrganizationId] = useState('');
+  const [projectName, setProjectName] = useState('prompt-manager');
+  const [region, setRegion] = useState('us-east-1');
+  const [plan, setPlan] = useState('free');
+  const [dbPass, setDbPass] = useState('');
+  const [projects, setProjects] = useState<SupabaseManagementProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [selectedProjectRef, setSelectedProjectRef] = useState('');
   const [status, setStatus] = useState<string>(initialState.message);
   const [checking, setChecking] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [installingSchema, setInstallingSchema] = useState(false);
   const [accessToken, setAccessToken] = useState('');
 
-  const canSubmitConfig = useMemo(() => url.trim().length > 0 && anonKey.trim().length > 0, [url, anonKey]);
-  const projectRef = useMemo(() => extractProjectRef(url), [url]);
+  const canSubmitConfig = useMemo(() => {
+    if (setupMode === 'create') {
+      if (createMode === 'new') {
+        return organizationId.trim().length > 0 && projectName.trim().length > 0;
+      }
+      return selectedProjectRef.trim().length > 0;
+    }
+    return url.trim().length > 0 && anonKey.trim().length > 0;
+  }, [anonKey, createMode, organizationId, projectName, selectedProjectRef, setupMode, url]);
+
+  const projectRef = useMemo(() => {
+    if (setupMode === 'create' && createMode === 'select' && selectedProjectRef.trim()) {
+      return selectedProjectRef.trim();
+    }
+    return extractProjectRef(url);
+  }, [createMode, selectedProjectRef, setupMode, url]);
 
   const validateConnection = async () => {
     setChecking(true);
@@ -77,6 +105,32 @@ export function SetupWizard({ onReady }: Props) {
     setStep(4);
   };
 
+  const loadProjects = async () => {
+    if (allowDevPatMode && !accessToken.trim()) {
+      setStatus('Dev mode requires a PAT for backend token exchange when no server PAT is configured.');
+      return;
+    }
+
+    setProjectsLoading(true);
+    setStatus('Loading Supabase projects from Management API...');
+
+    try {
+      const response = await listSupabaseManagementProjects({
+        organizationId: organizationId.trim() || undefined,
+        devAccessToken: allowDevPatMode ? accessToken.trim() : undefined,
+      });
+      setProjects(response.projects);
+      if (response.projects.length > 0 && !selectedProjectRef) {
+        setSelectedProjectRef(response.projects[0]?.id ?? '');
+      }
+      setStatus(response.projects.length ? 'Projects loaded. Select one and continue.' : 'No projects found for the provided criteria.');
+    } catch (error) {
+      setStatus(`Could not load projects: ${error instanceof Error ? error.message : 'Unknown error.'}`);
+    } finally {
+      setProjectsLoading(false);
+    }
+  };
+
   const runBootstrap = async () => {
     setBootstrapping(true);
     const { error } = await initializeStarterWorkspace();
@@ -88,27 +142,49 @@ export function SetupWizard({ onReady }: Props) {
     setBootstrapping(false);
   };
 
-
   const installSchema = async () => {
-    if (!projectRef) {
-      setStatus('Could not detect project ID from URL. Expected format: https://<project-ref>.supabase.co');
-      return;
-    }
-
     if (allowDevPatMode && !accessToken.trim()) {
       setStatus('Dev mode requires a PAT for backend token exchange when no server PAT is configured.');
       return;
     }
 
+    if (setupMode === 'existing' && !projectRef) {
+      setStatus('Could not detect project ID from URL. Expected format: https://<project-ref>.supabase.co');
+      return;
+    }
+
+    if (setupMode === 'create' && createMode === 'select' && !selectedProjectRef.trim()) {
+      setStatus('Please select an existing Supabase project to continue.');
+      return;
+    }
+
     setInstallingSchema(true);
-    setStatus('Starting secure backend provisioning...');
+    setStatus(setupMode === 'create' ? 'Running backend provisioning...' : 'Starting secure backend provisioning...');
 
     try {
-      const started = await startSupabaseProvisioning({
-        projectUrl: url.trim(),
-        projectRef,
-        devAccessToken: allowDevPatMode ? accessToken.trim() : undefined,
-      });
+      const started = await startSupabaseProvisioning(
+        setupMode === 'create'
+          ? createMode === 'new'
+            ? {
+                createProject: {
+                  organizationId: organizationId.trim(),
+                  name: projectName.trim(),
+                  region: region.trim() || undefined,
+                  plan: plan.trim() || undefined,
+                  dbPass: dbPass.trim() || undefined,
+                },
+                devAccessToken: allowDevPatMode ? accessToken.trim() : undefined,
+              }
+            : {
+                projectRef: selectedProjectRef.trim(),
+                devAccessToken: allowDevPatMode ? accessToken.trim() : undefined,
+              }
+          : {
+              projectUrl: url.trim(),
+              projectRef,
+              devAccessToken: allowDevPatMode ? accessToken.trim() : undefined,
+            },
+      );
 
       let isComplete = false;
       while (!isComplete) {
@@ -148,9 +224,7 @@ export function SetupWizard({ onReady }: Props) {
     setInstallingSchema(false);
   };
 
-  const finish = () => {
-    onReady();
-  };
+  const finish = () => onReady();
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
@@ -173,14 +247,22 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 1 && (
           <div className="space-y-3 text-sm text-slate-700">
-            <p>Create a Supabase project, then open <strong>Project Settings → API</strong> and copy:</p>
-            <ul className="list-inside list-disc space-y-1">
-              <li>Project URL</li>
-              <li>anon/public API key</li>
-            </ul>
-            <div className="flex flex-wrap gap-3">
-              <a className="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100" href="https://supabase.com/dashboard/new" target="_blank" rel="noreferrer">Create Supabase project</a>
-              <a className="rounded border border-slate-300 px-3 py-2 hover:bg-slate-100" href="https://supabase.com/docs/guides/getting-started" target="_blank" rel="noreferrer">Supabase getting started docs</a>
+            <p>How do you want to set up Supabase?</p>
+            <div className="grid gap-2 md:grid-cols-2">
+              <button
+                className={`rounded border px-3 py-2 text-left ${setupMode === 'existing' ? 'border-slate-900 bg-slate-100' : 'border-slate-200'}`}
+                onClick={() => setSetupMode('existing')}
+              >
+                <strong>I already have project credentials</strong>
+                <p className="text-xs text-slate-500">Paste project URL + anon key.</p>
+              </button>
+              <button
+                className={`rounded border px-3 py-2 text-left ${setupMode === 'create' ? 'border-slate-900 bg-slate-100' : 'border-slate-200'}`}
+                onClick={() => setSetupMode('create')}
+              >
+                <strong>I only have API access</strong>
+                <p className="text-xs text-slate-500">Start new or select an existing project from your Supabase account.</p>
+              </button>
             </div>
             <button className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white" onClick={() => setStep(2)}>Continue</button>
           </div>
@@ -188,22 +270,92 @@ export function SetupWizard({ onReady }: Props) {
 
         {step === 2 && (
           <div className="space-y-3">
-            <p className="text-xs text-slate-500">
-              Current config source: <strong>{initialState.source}</strong>
-              {initialState.source === 'env'
-                ? ' (configured by host environment variables).'
-                : initialState.source === 'runtime'
-                  ? ' (stored in this browser, can be switched here).'
-                  : ' (not configured yet).'}
-            </p>
-            <label className="block text-sm">
-              Supabase URL
-              <input className="input mt-1" placeholder="https://xxxx.supabase.co" value={url} onChange={(e) => setUrl(e.target.value)} />
-            </label>
-            <label className="block text-sm">
-              Supabase anon key
-              <textarea className="input mt-1 min-h-28" value={anonKey} onChange={(e) => setAnonKey(e.target.value)} />
-            </label>
+            {setupMode === 'existing' ? (
+              <>
+                <p className="text-xs text-slate-500">
+                  Current config source: <strong>{initialState.source}</strong>
+                  {initialState.source === 'env'
+                    ? ' (configured by host environment variables).'
+                    : initialState.source === 'runtime'
+                      ? ' (stored in this browser, can be switched here).'
+                      : ' (not configured yet).'}
+                </p>
+                <label className="block text-sm">
+                  Supabase URL
+                  <input className="input mt-1" placeholder="https://xxxx.supabase.co" value={url} onChange={(e) => setUrl(e.target.value)} />
+                </label>
+                <label className="block text-sm">
+                  Supabase anon key
+                  <textarea className="input mt-1 min-h-28" value={anonKey} onChange={(e) => setAnonKey(e.target.value)} />
+                </label>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500">Use backend provisioning: either create a new project or select one from your Supabase account, then apply migrations from <code>supabase/migrations</code>.</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <button
+                    className={`rounded border px-3 py-2 text-left ${createMode === 'new' ? 'border-slate-900 bg-slate-100' : 'border-slate-200'}`}
+                    onClick={() => setCreateMode('new')}
+                  >
+                    <strong>Start new project</strong>
+                  </button>
+                  <button
+                    className={`rounded border px-3 py-2 text-left ${createMode === 'select' ? 'border-slate-900 bg-slate-100' : 'border-slate-200'}`}
+                    onClick={() => setCreateMode('select')}
+                  >
+                    <strong>Select existing project</strong>
+                  </button>
+                </div>
+
+                <label className="block text-sm">
+                  Organization ID {createMode === 'new' ? '' : '(optional filter)'}
+                  <input className="input mt-1" placeholder="org_..." value={organizationId} onChange={(e) => setOrganizationId(e.target.value)} />
+                </label>
+
+                {createMode === 'new' ? (
+                  <>
+                    <label className="block text-sm">
+                      Project name
+                      <input className="input mt-1" value={projectName} onChange={(e) => setProjectName(e.target.value)} />
+                    </label>
+                    <label className="block text-sm">
+                      Region
+                      <input className="input mt-1" value={region} onChange={(e) => setRegion(e.target.value)} />
+                    </label>
+                    <label className="block text-sm">
+                      Plan
+                      <input className="input mt-1" value={plan} onChange={(e) => setPlan(e.target.value)} />
+                    </label>
+                    <label className="block text-sm">
+                      Database password (optional)
+                      <input type="password" className="input mt-1" value={dbPass} onChange={(e) => setDbPass(e.target.value)} />
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      disabled={projectsLoading}
+                      className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
+                      onClick={loadProjects}
+                    >
+                      {projectsLoading ? 'Loading projects...' : 'Load projects'}
+                    </button>
+                    <label className="block text-sm">
+                      Existing Supabase project
+                      <select className="input mt-1" value={selectedProjectRef} onChange={(e) => setSelectedProjectRef(e.target.value)}>
+                        <option value="">Select project...</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.name} ({project.id}){project.region ? ` • ${project.region}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                )}
+              </>
+            )}
+
             <div className="flex flex-wrap gap-2">
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={() => setStep(1)}>Back</button>
               <button disabled={!canSubmitConfig} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={() => setStep(3)}>Continue</button>
@@ -222,13 +374,16 @@ export function SetupWizard({ onReady }: Props) {
           </div>
         )}
 
-
         {step === 3 && (
           <div className="space-y-3 text-sm text-slate-700">
-            <p>Validate connectivity using <code>auth.getSession()</code>.</p>
+            {setupMode === 'existing' ? <p>Validate connectivity using <code>auth.getSession()</code>.</p> : <p>Provision and apply schema, then save runtime config automatically.</p>}
             <div className="flex gap-2">
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={() => setStep(2)}>Back</button>
-              <button disabled={checking} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={validateConnection}>Validate connection</button>
+              {setupMode === 'existing' ? (
+                <button disabled={checking} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={validateConnection}>Validate connection</button>
+              ) : (
+                <button disabled={installingSchema} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60" onClick={installSchema}>Run provisioning + install schema</button>
+              )}
               <button className="rounded border border-slate-300 px-4 py-2 text-sm" onClick={() => setStep(4)}>Skip to initialize</button>
             </div>
           </div>
@@ -255,7 +410,7 @@ export function SetupWizard({ onReady }: Props) {
                 <p className="text-xs text-slate-500">Hosted/prod mode: PAT input is disabled. Configure <code>SUPABASE_MANAGEMENT_PAT</code> on the backend.</p>
               )}
               <button
-                disabled={installingSchema || !projectRef}
+                disabled={installingSchema || (setupMode === 'existing' && !projectRef) || (setupMode === 'create' && createMode === 'select' && !selectedProjectRef)}
                 className="mt-2 rounded border border-slate-300 px-3 py-2 text-xs disabled:opacity-60"
                 onClick={installSchema}
               >
