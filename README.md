@@ -41,44 +41,51 @@ supabase login
 supabase link --project-ref <your-project-ref>
 ```
 
-4. Apply schema and functions from migrations (source of truth):
+4. Build the schema installer artifact from migrations (single source-of-truth):
+
+```bash
+npm run build:schema-installer
+```
+
+5. Apply schema and functions from migrations:
 
 ```bash
 supabase db push --include-all
 ```
 
-5. (Optional) initialize an empty workspace via CLI seed command:
+6. (Optional) initialize an empty workspace via CLI seed command:
 
 ```bash
 supabase db seed
 ```
 
-6. Fill in `.env.local` with Supabase project values.
-7. Install dependencies and run:
+7. Fill in `.env.local` with Supabase project values.
+8. Install dependencies and run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-8. Open `http://localhost:5173`.
+9. Open `http://localhost:5173`.
 
 ### Supabase CLI workflow files
 
 - `.github/workflows/supabase-db-push.yml`: links the project and runs `supabase db push --include-all` on `main` changes under `supabase/`.
-- `.github/workflows/supabase-migrations-validate.yml`: starts a local Supabase stack and runs `supabase db reset --local` to validate migrations end-to-end.
+- `.github/workflows/supabase-migrations-validate.yml`: checks that `supabase/installer/schema.sql` matches `supabase/migrations/*.sql`, then starts a local Supabase stack and runs `supabase db reset --local` to validate migrations end-to-end.
+
+`supabase/migrations/*.sql` remains the only schema source-of-truth. `supabase/installer/schema.sql` is a generated deployment artifact used by backend provisioning and should be regenerated via `npm run build:schema-installer` whenever migrations change.
 
 ### Manual dashboard setup (advanced / troubleshooting)
 
 Use this only if CLI access is blocked.
 
 1. Create a Supabase project.
-2. In SQL editor run migrations in order:
-   - `supabase/migrations/202603080001_init.sql`
-   - `supabase/migrations/202603090001_initialize_starter_workspace.sql`
-   - `supabase/migrations/202603090002_initialize_empty_workspace.sql`
-3. Enable email auth (magic link).
-4. Optionally run `supabase/seed/seed.sql`.
+2. In SQL editor run migrations in order from `supabase/migrations/` (single source-of-truth).
+3. Rebuild installer artifact for backend provisioning flows:
+   - `npm run build:schema-installer`
+4. Enable email auth (magic link).
+5. Optionally run `supabase/seed/seed.sql`.
 
 
 ## Workspace initialization idempotency
@@ -139,5 +146,5 @@ If the app starts without valid `VITE_SUPABASE_URL` or `VITE_SUPABASE_ANON_KEY`,
 
 - **Hosted deployments (recommended):** set these values in your hosting provider so app config is server-managed and users never need to paste credentials in-browser.
 - **Local/self-hosted development:** create `/workspace/promptmanager/.env.local` (project root) and provide both values there, or use the wizard which stores values in browser `localStorage` on that device.
-- **No CLI setup path:** Step 4 calls a backend endpoint (`/api/setup/supabase`) that performs Supabase provisioning + schema installation server-side. Set `SUPABASE_MANAGEMENT_PAT` on the backend; PAT is never returned to the browser.
+- **No CLI setup path:** Step 4 calls a backend endpoint (`/api/setup/supabase`) that performs Supabase provisioning + schema installation server-side by executing `supabase/installer/schema.sql` (generated from `supabase/migrations`). Set `SUPABASE_MANAGEMENT_PAT` on the backend; PAT is never returned to the browser.
 - **Dev-only PAT override:** optional and disabled by default. Enable `VITE_ENABLE_DEV_PAT_SETUP=true` (frontend) and `SUPABASE_ALLOW_DEV_PAT=true` (backend) to temporarily allow entering a short-lived PAT in local development only.

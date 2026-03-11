@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,21 +78,15 @@ async function supabaseApi<T>(apiPath: string, token: string, init?: RequestInit
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const migrationsDir = path.resolve(__dirname, '../../supabase/migrations');
+const schemaInstallerPath = path.resolve(__dirname, '../../supabase/installer/schema.sql');
 
-async function loadCanonicalMigrations() {
-  const files = await readdir(migrationsDir);
-  const migrationFiles = files.filter((file) => file.endsWith('.sql')).sort((a, b) => a.localeCompare(b));
-  if (!migrationFiles.length) {
-    throw new Error('No SQL migration files found in supabase/migrations.');
+async function loadSchemaInstallerSql() {
+  const sql = await readFile(schemaInstallerPath, 'utf8').catch(() => null);
+  if (!sql) {
+    throw new Error('Missing supabase/installer/schema.sql. Run `npm run build:schema-installer`.');
   }
 
-  return Promise.all(
-    migrationFiles.map(async (filename) => ({
-      filename,
-      sql: await readFile(path.join(migrationsDir, filename), 'utf8'),
-    })),
-  );
+  return sql;
 }
 
 async function waitForProjectReady(projectRef: string, token: string) {
@@ -141,13 +135,12 @@ async function createProjectIfRequested(payload: ProvisioningPayload, token: str
 }
 
 async function installSchema(projectRef: string, token: string): Promise<void> {
-  const migrations = await loadCanonicalMigrations();
-  for (const migration of migrations) {
-    await supabaseApi(`/projects/${projectRef}/database/query`, token, {
-      method: 'POST',
-      body: JSON.stringify({ query: migration.sql }),
-    });
-  }
+  const installerSql = await loadSchemaInstallerSql();
+
+  await supabaseApi(`/projects/${projectRef}/database/query`, token, {
+    method: 'POST',
+    body: JSON.stringify({ query: installerSql }),
+  });
 }
 
 async function runProvisioning(operationId: string, payload: ProvisioningPayload) {

@@ -5,12 +5,18 @@ on:
     paths:
       - 'supabase/**'
       - '.github/workflows/supabase-migrations-validate.yml'
+      - 'scripts/build-schema-installer.mjs'
+      - 'supabase/installer/schema.sql'
+      - 'package.json'
   push:
     branches:
       - main
     paths:
       - 'supabase/**'
       - '.github/workflows/supabase-migrations-validate.yml'
+      - 'scripts/build-schema-installer.mjs'
+      - 'supabase/installer/schema.sql'
+      - 'package.json'
 
 jobs:
   validate-migrations:
@@ -18,6 +24,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify schema installer is synchronized
+        run: npm run check:schema-installer
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
