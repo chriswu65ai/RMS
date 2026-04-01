@@ -4,6 +4,7 @@ import type { FrontmatterModel } from '../../types/models';
 
 type Props = {
   frontmatter: FrontmatterModel;
+  noteTypes: string[];
   onChange: (f: FrontmatterModel) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -20,7 +21,7 @@ const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; la
   { value: 'avoid', label: 'Avoid' },
 ];
 
-export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange, onIdentityBlur }: Props) {
+export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange, onIdentityBlur }: Props) {
   const [sectorsInput, setSectorsInput] = useState((frontmatter.sectors ?? []).join(', '));
 
   useEffect(() => {
@@ -73,12 +74,19 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
           />
         </label>
         <label className="block text-xs text-slate-500">Note type
-          <input
+          <select
             className="input mt-1"
             value={frontmatter.type ?? ''}
-            onChange={(e) => onChange({ ...frontmatter, type: e.target.value })}
-            onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
-          />
+            onChange={(e) => {
+              onChange({ ...frontmatter, type: e.target.value });
+              onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
+            }}
+          >
+            <option value="" disabled>Select note type</option>
+            {noteTypes.map((type) => (
+              <option key={type} value={type}>{type}</option>
+            ))}
+          </select>
         </label>
         <label className="block text-xs text-slate-500">Date
           <input
@@ -91,6 +99,7 @@ export function MetadataPanel({ frontmatter, onChange, collapsed, onToggleCollap
         </label>
         <label className="block text-xs text-slate-500">Sectors (comma separated)
           <input
+            type="date"
             className="input mt-1"
             value={sectorsInput}
             onChange={(e) => {

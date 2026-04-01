@@ -15,7 +15,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh } = usePromptStore();
+  const { files, selectedFileId, refresh, noteTypes } = usePromptStore();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
   const viewRef = useRef<EditorView | null>(null);
@@ -469,6 +469,7 @@ ${merged}`);
       </section>
       <MetadataPanel
         frontmatter={frontmatter}
+        noteTypes={noteTypes}
         onChange={setFrontmatter}
         onIdentityBlur={async ({ date, ticker, type }) => {
           const nextDate = date.trim();

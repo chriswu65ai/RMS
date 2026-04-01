@@ -139,12 +139,17 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
-                  const name = await dialog.prompt('Rename note file', file.name, 'New file name');
-                  if (!name) return;
+                  const tickerInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker');
+                  if (!tickerInput) return;
+                  const typeInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.type?.toString() ?? (noteTypes[0] ?? 'Research'), `Type (${noteTypes.join(', ')})`);
+                  if (!typeInput) return;
+                  const dateInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
+                  if (!dateInput) return;
+                  const name = buildCanonicalStockFileName(dateInput.trim(), tickerInput.trim().toUpperCase(), typeInput.trim());
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
-                  const path = `${folder?.path ? `${folder.path}/` : ''}${name.trim()}`;
-                  if (hasDuplicateInFolder(folder?.id ?? null, name.trim(), file.id)) return dialog.alert('Duplicate path', 'Another file already uses this path.');
-                  await updateFile(file.id, { name: name.trim(), path });
+                  const path = `${folder?.path ? `${folder.path}/` : ''}${name}`;
+                  if (hasDuplicateInFolder(folder?.id ?? null, name, file.id)) return dialog.alert('Duplicate path', 'Another file already uses this path.');
+                  await updateFile(file.id, { name, path });
                   await refresh();
                 }}><Pencil size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
