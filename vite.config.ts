@@ -1,19 +1,19 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
-import { handleSupabaseSetupRoute } from './server/routes/setupSupabase';
+import { handleLocalApiRoute } from './server/localApi';
 
-function setupApiPlugin(): Plugin {
+function localApiPlugin(): Plugin {
   return {
-    name: 'setup-api-plugin',
+    name: 'local-api-plugin',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleSupabaseSetupRoute(req, res);
+        const handled = await handleLocalApiRoute(req, res);
         if (!handled) next();
       });
     },
     configurePreviewServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleSupabaseSetupRoute(req, res);
+        const handled = await handleLocalApiRoute(req, res);
         if (!handled) next();
       });
     },
@@ -21,5 +21,5 @@ function setupApiPlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), setupApiPlugin()],
+  plugins: [react(), localApiPlugin()],
 });

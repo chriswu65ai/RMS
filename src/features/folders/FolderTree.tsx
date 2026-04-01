@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Settings, Tag, Trash2, Upload } from 'lucide-react';
 import { type ChangeEvent, useMemo, useState } from 'react';
-import { createFolder, createFile, deleteFolder } from '../../lib/dataApi';
-import { clearRuntimeSupabaseConfig, getSupabaseSetupState, supabase } from '../../lib/supabase';
+import { createFolder, createFile, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
@@ -14,13 +13,11 @@ const TAG_FILTER_NONE = '__NO_TAGS__';
 export function FolderTree({
   collapsed,
   onToggleCollapsed,
-  onSwitchProject,
 }: {
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  onSwitchProject: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, reset } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [tagsCollapsed, setTagsCollapsed] = useState(false);
@@ -128,32 +125,6 @@ export function FolderTree({
     } finally {
       setImporting(false);
     }
-  };
-
-  const switchSupabaseProject = async () => {
-    const setupState = getSupabaseSetupState();
-    if (setupState.source === 'env') {
-      await dialog.alert(
-        'Managed by environment',
-        'Supabase credentials are loaded from host environment variables. Update VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then reload the app.',
-      );
-      return;
-    }
-
-    clearRuntimeSupabaseConfig();
-    reset();
-    setSettingsOpen(false);
-    onSwitchProject();
-  };
-
-  const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      await dialog.alert('Sign out failed', error.message);
-      return;
-    }
-    reset();
-    setSettingsOpen(false);
   };
 
   const childrenByParent = useMemo(() => {
@@ -284,7 +255,7 @@ export function FolderTree({
               const name = await dialog.prompt('Rename folder', getFolderLabel(folder), 'New folder name');
               if (!name) return;
               const newPath = folder.parent_id ? `${folders.find((f) => f.id === folder.parent_id)?.path}/${name}` : name;
-              const { error } = await supabase.from('folders').update({ name, path: newPath, updated_at: new Date().toISOString() }).eq('id', folder.id);
+              const { error } = await renameFolder(folder.id, name, newPath);
               if (error) return dialog.alert('Rename failed', error.message);
               await refresh();
             }}><Pencil size={14} /></button>
@@ -460,27 +431,6 @@ export function FolderTree({
                       onChange={importMarkdownFiles}
                     />
                   </label>
-                </section>
-
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Supabase project</p>
-                  <p className="text-xs text-slate-500">Current config source: <strong>{getSupabaseSetupState().source}</strong></p>
-                  <button
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50"
-                    onClick={switchSupabaseProject}
-                  >
-                    Switch Supabase project
-                  </button>
-                </section>
-
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Account</p>
-                  <button
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
-                    onClick={signOut}
-                  >
-                    Sign out
-                  </button>
                 </section>
               </div>
             </div>
