@@ -189,7 +189,7 @@ function NewResearchPage() {
         <p><span className="font-medium">Research types:</span> {noteTypes.join(', ')}</p>
         <p className="mt-2"><span className="font-medium">Assignees:</span> {assignees.join(', ')}</p>
       </div>
-      <NewResearchBoard assignees={assignees} />
+      <NewResearchBoard assignees={assignees} noteTypes={noteTypes} />
     </div>
   );
 }

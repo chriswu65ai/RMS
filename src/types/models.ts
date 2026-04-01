@@ -44,12 +44,15 @@ export type NewResearchTask = {
   id: string;
   topic: string;
   ticker: string;
+  note_type: string;
   assignee: string;
   priority: string;
   deadline: string;
   status: NewResearchTaskStatus;
   date_completed: string;
   archived: boolean;
+  linked_note_file_id: string;
+  linked_note_path: string;
   created_at: string;
   updated_at: string;
 };
@@ -57,10 +60,13 @@ export type NewResearchTask = {
 export type NewResearchTaskInput = {
   topic: string;
   ticker: string;
+  note_type: string;
   assignee: string;
   priority: string;
   deadline: string;
   status: NewResearchTaskStatus;
   date_completed: string;
   archived: boolean;
+  linked_note_file_id?: string;
+  linked_note_path?: string;
 };

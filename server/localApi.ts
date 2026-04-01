@@ -11,12 +11,15 @@ type NewResearchTaskRow = {
   id: string;
   topic: string;
   ticker: string;
+  note_type: string;
   assignee: string;
   priority: string;
   deadline: string;
   status: 'ideas' | 'researching' | 'completed';
   date_completed: string;
   archived: number;
+  linked_note_file_id: string;
+  linked_note_path: string;
   created_at: string;
   updated_at: string;
 };
@@ -91,16 +94,34 @@ const ensureInitialized = () => {
     id text primary key,
     topic text not null default '',
     ticker text not null,
+    note_type text not null default 'Research',
     assignee text not null default '',
     priority text not null default '',
     deadline text not null default '',
     status text not null default 'ideas',
     date_completed text not null default '',
     archived integer not null default 0,
+    linked_note_file_id text not null default '',
+    linked_note_path text not null default '',
     created_at text not null,
     updated_at text not null
   );
   `);
+  try {
+    execSql(`alter table new_research_tasks add column note_type text not null default 'Research';`);
+  } catch {
+    // existing DBs may already include this column
+  }
+  try {
+    execSql(`alter table new_research_tasks add column linked_note_file_id text not null default '';`);
+  } catch {
+    // existing DBs may already include this column
+  }
+  try {
+    execSql(`alter table new_research_tasks add column linked_note_path text not null default '';`);
+  } catch {
+    // existing DBs may already include this column
+  }
   initialized = true;
 };
 
@@ -190,7 +211,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const now = new Date().toISOString();
       const id = randomUUID();
-      execSql(`insert into new_research_tasks (id, topic, ticker, assignee, priority, deadline, status, date_completed, archived, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(payload.priority ?? '')}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      execSql(`insert into new_research_tasks (id, topic, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(payload.priority ?? '')}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
       return true;
@@ -212,12 +233,15 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       execSql(`update new_research_tasks set
         topic = ${sqlEscape(payload.topic ?? existing.topic)},
         ticker = ${sqlEscape(ticker)},
+        note_type = ${sqlEscape(payload.note_type ?? existing.note_type)},
         assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
         priority = ${sqlEscape(payload.priority ?? existing.priority)},
         deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
         status = ${sqlEscape(payload.status ?? existing.status)},
         date_completed = ${sqlEscape(payload.date_completed ?? existing.date_completed)},
         archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
+        linked_note_file_id = ${sqlEscape(payload.linked_note_file_id ?? existing.linked_note_file_id)},
+        linked_note_path = ${sqlEscape(payload.linked_note_path ?? existing.linked_note_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
         where id = ${sqlEscape(taskId)}`);
       const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
