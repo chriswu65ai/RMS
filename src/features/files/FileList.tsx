@@ -17,6 +17,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
 
   const visible = useMemo(() => {
     const filtered = files.filter((file) => {
+      if (file.is_template) return false;
       const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
       if (!folderMatch) return false;
 

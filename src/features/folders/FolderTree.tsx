@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Settings, Tag, Trash2, Upload } from 'lucide-react';
-import { type ChangeEvent, useMemo, useState } from 'react';
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { createFolder, createFile, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -17,14 +17,23 @@ export function FolderTree({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, noteTypes, setNoteTypes } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, noteTypes, setNoteTypes, assignees, setAssignees } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [sectorsCollapsed, setSectorsCollapsed] = useState(false);
   const [noteTypesInput, setNoteTypesInput] = useState(noteTypes.join(', '));
+  const [assigneesInput, setAssigneesInput] = useState(assignees.join(', '));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importTargetFolderId, setImportTargetFolderId] = useState<string>('');
   const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    setNoteTypesInput(noteTypes.join(', '));
+  }, [noteTypes]);
+
+  useEffect(() => {
+    setAssigneesInput(assignees.join(', '));
+  }, [assignees]);
 
   const exportAllFiles = async () => {
     if (!workspace) return;
@@ -403,7 +412,7 @@ export function FolderTree({
                   </button>
                 </section>
                 <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Stock note types</p>
+                  <p className="text-sm text-slate-600">Research Types</p>
                   <input
                     className="input"
                     value={noteTypesInput}
@@ -414,6 +423,21 @@ export function FolderTree({
                       setNoteTypesInput(nextTypes.join(', '));
                     }}
                     placeholder="Research, Earnings, Valuation"
+                  />
+                </section>
+
+                <section className="space-y-3">
+                  <p className="text-sm text-slate-600">Assignees</p>
+                  <input
+                    className="input"
+                    value={assigneesInput}
+                    onChange={(event) => setAssigneesInput(event.target.value)}
+                    onBlur={() => {
+                      const nextAssignees = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
+                      setAssignees(nextAssignees);
+                      setAssigneesInput(nextAssignees.join(', '));
+                    }}
+                    placeholder="me, agent"
                   />
                 </section>
 
