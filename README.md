@@ -1,69 +1,24 @@
-# Prompt Manager
+# Stock Research Management System
 
-Prompt Manager is a Markdown-first web app for organizing prompts with folders, templates, and a split markdown editor.
+Stock Research Management System is a Markdown-first app for managing stock research notes with a local SQLite backend.
 
-## What changed
+## Part 1 Scope (Current Baseline)
 
-This project now runs fully local with **SQLite** and does **not** require Supabase or any setup wizard.
+- Local-first runtime using SQLite and local API routes (`/api/bootstrap`, `/api/files`, `/api/folders`).
+- Folder + file manager for stock research notes.
+- Metadata workflow with stock fields (`ticker`, `type`, `date`, `sectors`) and recommendation enum (`buy`, `hold`, `sell`, `avoid`, or blank).
+- Template-based note creation and canonical filename pattern:
+  - `YYYY-MM-DD <TICKER>-<TYPE>.md`
+- Markdown editor + preview panes.
+- Import/export support with folder structure parity.
 
-- Local API routes are served by the Vite server (`/api/*`).
-- Data is persisted in a SQLite DB file (`data/promptmanager.db` by default).
-- On first run, the app auto-creates a workspace plus starter folders/files.
+## Setup (Docker only)
 
-## Run locally
+1. Build and start:
+   ```bash
+   docker compose up --build
+   ```
+2. Open:
+   - `http://localhost:4173`
 
-```bash
-npm run dev
-```
-
-Then open `http://localhost:5173`.
-
-> Note: the local API uses the `sqlite3` CLI on your machine. If missing, install SQLite first.
-
-## Run with Docker
-
-```bash
-docker compose up --build
-```
-
-Then open `http://localhost:4173`.
-
-### Docker Desktop troubleshooting (Windows)
-
-If you see an error like:
-
-`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`
-
-that means the Docker daemon is not running yet. Do this:
-
-1. Open **Docker Desktop**.
-2. Wait until it says **Engine running**.
-3. Retry:
-
-```bash
-docker compose up --build
-```
-
-Useful checks:
-
-```bash
-docker version
-docker info
-```
-
-### Persistence
-
-The compose file mounts a named volume at `/data`, and the app stores SQLite at:
-
-- `/data/promptmanager.db`
-
-You can override this path with:
-
-- `SQLITE_PATH`
-
-## Stack
-
-- React + TypeScript + Vite
-- Zustand for app state
-- Tailwind CSS
-- SQLite (local file)
+SQLite data is persisted to `/data/researchmanager.db` in the compose volume.

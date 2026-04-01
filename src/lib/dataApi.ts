@@ -7,6 +7,26 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+function normalizeFrontmatterForApi(frontmatter: Record<string, unknown> | null | undefined) {
+  if (!frontmatter) return null;
+  const next = { ...frontmatter };
+  if (typeof next.sectors === 'string') {
+    next.sectors = next.sectors.split(',').map((value) => value.trim()).filter(Boolean);
+  }
+  if (Array.isArray(next.sectors)) {
+    next.sectors = next.sectors.map((value) => String(value).trim()).filter(Boolean);
+  }
+  if (typeof next.ticker === 'string') {
+    next.ticker = next.ticker.trim().toUpperCase();
+  }
+  const recommendation = typeof next.recommendation === 'string' ? next.recommendation.trim().toLowerCase() : '';
+  const stockRecommendation = typeof next.stock_recommendation === 'string' ? next.stock_recommendation.trim().toLowerCase() : '';
+  const finalRecommendation = recommendation || stockRecommendation || '';
+  next.recommendation = finalRecommendation;
+  next.stock_recommendation = finalRecommendation;
+  return next;
+}
+
 export async function bootstrapWorkspace() {
   const response = await fetch('/api/bootstrap');
   if (!response.ok) {
@@ -56,7 +76,7 @@ export async function createFile(params: {
       name: params.name,
       path,
       content: params.content,
-      frontmatter: params.frontmatter ?? null,
+      frontmatter: normalizeFrontmatterForApi(params.frontmatter ?? null),
       isTemplate: !!params.isTemplate,
     }),
   });
@@ -65,10 +85,14 @@ export async function createFile(params: {
 }
 
 export async function updateFile(fileId: string, values: Partial<PromptFile>): Promise<ApiResult> {
+  const payload: Partial<PromptFile> = { ...values };
+  if (values.frontmatter_json !== undefined) {
+    payload.frontmatter_json = normalizeFrontmatterForApi(values.frontmatter_json as Record<string, unknown> | null) as PromptFile['frontmatter_json'];
+  }
   const response = await fetch(`/api/files/${fileId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(values),
+    body: JSON.stringify(payload),
   });
 
   return readJson<ApiResult>(response);

@@ -28,7 +28,12 @@ export type PromptFile = {
 
 export type FrontmatterModel = {
   title?: string;
-  tags?: string[];
+  ticker?: string;
+  type?: string;
+  date?: string;
+  sectors?: string[];
+  recommendation?: '' | 'buy' | 'hold' | 'sell' | 'avoid';
+  stock_recommendation?: '' | 'buy' | 'hold' | 'sell' | 'avoid';
   template?: boolean;
   starred?: boolean;
 };
