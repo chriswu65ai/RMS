@@ -1,15 +1,13 @@
 import { FilePlus2 } from 'lucide-react';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
-import { usePromptStore } from '../../hooks/usePromptStore';
+import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
 import { createFile } from '../../lib/dataApi';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
-const EMPTY_FILE_NAME_ERROR = 'Cannot create file without a name';
-
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { files, workspace, selectedFolderId, folders, refresh } = usePromptStore();
+  const { files, workspace, selectedFolderId, folders, refresh, noteTypes } = usePromptStore();
   const dialog = useDialog();
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -27,7 +25,6 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
   );
   const selected = templates.find((t) => t.id === selectedId) ?? templates[0];
   const selectedBody = selected ? splitFrontmatter(selected.content).body : 'No template selected.';
-  const ensureMdExtension = (name: string) => (name.toLowerCase().endsWith('.md') ? name : `${name}.md`);
   const hasDuplicateInFolder = (folderId: string | null, fileName: string) => {
     const normalizedName = fileName.toLowerCase();
     return files.some((file) => file.folder_id === folderId && file.name.toLowerCase() === normalizedName);
@@ -61,14 +58,19 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const name = await dialog.prompt(
-                  'Create from template',
-                  '',
-                  'File name (.md extension will be added)',
-                  { validate: (value) => (value.trim() ? null : EMPTY_FILE_NAME_ERROR) },
-                );
-                if (!name) return;
-                const fileName = ensureMdExtension(name.trim());
+                const tickerInput = await dialog.prompt('Create stock note from template', '', 'Ticker (required)');
+                if (!tickerInput) return;
+                const typeInput = await dialog.prompt('Create stock note from template', noteTypes[0] ?? 'Research', `Type (${noteTypes.join(', ')})`);
+                if (!typeInput) return;
+                const dateInput = await dialog.prompt('Create stock note from template', toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
+                if (!dateInput) return;
+
+                const ticker = tickerInput.trim().toUpperCase();
+                const type = typeInput.trim();
+                const date = dateInput.trim();
+                if (!ticker || !type || !date) return;
+
+                const fileName = buildCanonicalStockFileName(date, ticker, type);
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
                 const parsed = splitFrontmatter(selected.content);
                 const duplicate = hasDuplicateInFolder(folder?.id ?? null, fileName);
@@ -76,7 +78,14 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                   await dialog.alert('Duplicate file', 'A file cannot be created because a file with the same name already exists in this folder.');
                   return;
                 }
-                const clonedFrontmatter = { ...parsed.frontmatter, template: false, title: fileName.replace(/\.md$/i, '') };
+                const clonedFrontmatter = {
+                  ...parsed.frontmatter,
+                  template: false,
+                  title: `${ticker} ${type}`,
+                  ticker,
+                  type,
+                  date,
+                };
                 const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
                 const { error } = await createFile({
                   workspaceId: workspace.id,
@@ -91,7 +100,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 await refresh();
                 onClose();
               }}
-            ><FilePlus2 size={14} />Create file from template</button>
+            ><FilePlus2 size={14} />Create stock note from template</button>
           </div>
         </div>
       </div>

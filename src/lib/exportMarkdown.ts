@@ -151,7 +151,7 @@ export async function exportWorkspaceMarkdownZip(workspace: Workspace, files: Pr
 
   const workspaceName = safeName(workspace.name || 'workspace') || 'workspace';
   const timestamp = new Date().toISOString().slice(0, 10);
-  const fileName = `${workspaceName}-prompts-${timestamp}.zip`;
+  const fileName = `${workspaceName}-stock-research-${timestamp}.zip`;
 
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');

@@ -17,10 +17,11 @@ export function FolderTree({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, noteTypes, setNoteTypes } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [tagsCollapsed, setTagsCollapsed] = useState(false);
+  const [sectorsCollapsed, setSectorsCollapsed] = useState(false);
+  const [noteTypesInput, setNoteTypesInput] = useState(noteTypes.join(', '));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importTargetFolderId, setImportTargetFolderId] = useState<string>('');
   const [importing, setImporting] = useState(false);
@@ -28,7 +29,7 @@ export function FolderTree({
   const exportAllFiles = async () => {
     if (!workspace) return;
     if (files.length === 0) {
-      await dialog.alert('Nothing to export', 'Create at least one prompt file before exporting.');
+      await dialog.alert('Nothing to export', 'Create at least one stock research note before exporting.');
       return;
     }
     await exportWorkspaceMarkdownZip(workspace, files);
@@ -89,8 +90,8 @@ export function FolderTree({
           : baseFolder;
 
         const fileName = fileNameWithExt.toLowerCase().endsWith('.md')
-          ? fileNameWithExt.slice(0, -3)
-          : fileNameWithExt;
+          ? fileNameWithExt
+          : `${fileNameWithExt}.md`;
         const finalPath = targetFolder ? `${targetFolder.path}/${fileName}` : fileName;
         const isDuplicate = files.some((file) => file.path === finalPath);
 
@@ -159,12 +160,12 @@ export function FolderTree({
     return true;
   }, [collapsedIds, expandableFolderIds]);
 
-  const tags = useMemo(() => {
+  const sectors = useMemo(() => {
     const map = new Map<string, number>();
     files.forEach((file) => {
       const parsed = splitFrontmatter(file.content);
-      const items = Array.isArray(parsed.frontmatter.tags) ? parsed.frontmatter.tags : [];
-      items.forEach((tag) => map.set(tag, (map.get(tag) ?? 0) + 1));
+      const items = Array.isArray(parsed.frontmatter.sectors) ? parsed.frontmatter.sectors : [];
+      items.forEach((sector) => map.set(sector, (map.get(sector) ?? 0) + 1));
     });
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [files]);
@@ -325,7 +326,7 @@ export function FolderTree({
         </div>
       </div>
       <button className="mx-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => selectFolder(null)}>
-        All prompts
+        All research notes
       </button>
       <div className="space-y-1 overflow-y-auto p-2">
         {(childrenByParent.get(null) ?? []).map((folder) => renderFolderNode(folder, 0))}
@@ -333,34 +334,34 @@ export function FolderTree({
 
       <div className="mt-auto border-t border-slate-200 p-2">
         <div className="mb-2 flex items-center justify-between px-2">
-          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Tags</h4>
+          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Sectors</h4>
           <button
             className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
-            title={tagsCollapsed ? 'Expand tags' : 'Hide tags'}
-            aria-label={tagsCollapsed ? 'Expand tags' : 'Hide tags'}
-            onClick={() => setTagsCollapsed((prev) => !prev)}
+            title={sectorsCollapsed ? 'Expand sectors' : 'Hide sectors'}
+            aria-label={sectorsCollapsed ? 'Expand sectors' : 'Hide sectors'}
+            onClick={() => setSectorsCollapsed((prev) => !prev)}
           >
-            {tagsCollapsed ? <ChevronsUpDown size={16} /> : <ChevronsDownUp size={16} />}
+            {sectorsCollapsed ? <ChevronsUpDown size={16} /> : <ChevronsDownUp size={16} />}
           </button>
         </div>
 
-        {!tagsCollapsed && (
+        {!sectorsCollapsed && (
           <>
             <button
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TAG_FILTER_ALL ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
               onClick={() => selectTag(TAG_FILTER_ALL)}
             >
-              All tags
+              All sectors
             </button>
             <button
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TAG_FILTER_NONE ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
               onClick={() => selectTag(TAG_FILTER_NONE)}
             >
-              No tags
+              No sectors
             </button>
             <div className="max-h-40 space-y-1 overflow-y-auto">
-              {tags.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No tags yet.</p>}
-              {tags.map(([tag, count]) => (
+              {sectors.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No sectors yet.</p>}
+              {sectors.map(([tag, count]) => (
                 <button
                   key={tag}
                   className={`w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === tag ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
@@ -393,13 +394,27 @@ export function FolderTree({
               </div>
               <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
                 <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Workspace</p>
+                  <p className="text-sm text-slate-600">Research workspace</p>
                   <button
                     className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
                     onClick={exportAllFiles}
                   >
-                    <Download size={16} /> Export All
+                    <Download size={16} /> Export all research notes
                   </button>
+                </section>
+                <section className="space-y-3">
+                  <p className="text-sm text-slate-600">Stock note types</p>
+                  <input
+                    className="input"
+                    value={noteTypesInput}
+                    onChange={(event) => setNoteTypesInput(event.target.value)}
+                    onBlur={() => {
+                      const nextTypes = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
+                      setNoteTypes(nextTypes);
+                      setNoteTypesInput(nextTypes.join(', '));
+                    }}
+                    placeholder="Research, Earnings, Valuation"
+                  />
                 </section>
 
                 <section className="space-y-3">
