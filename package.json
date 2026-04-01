@@ -5,17 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:schema-installer && tsc -b && vite build",
+    "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint .",
-    "build:schema-installer": "node scripts/build-schema-installer.mjs",
-    "check:schema-installer": "node scripts/build-schema-installer.mjs --check"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.3.3",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.3",
-    "@supabase/supabase-js": "^2.49.1",
     "@uiw/react-codemirror": "^4.24.2",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",
