@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { PanelLeftOpen } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { RecommendationBadge } from './components/shared/RecommendationBadge';
@@ -10,6 +11,7 @@ import { TemplateModal } from './features/templates/TemplateModal';
 import { usePromptStore } from './hooks/usePromptStore';
 import { fileToNoteModel, splitFrontmatter } from './lib/frontmatter';
 import { NewResearchBoard } from './features/newResearch/NewResearchBoard';
+import { SettingsPage } from './features/settings/SettingsPage';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
 
@@ -23,17 +25,17 @@ const formatCreatedDate = (value: string) => {
   return `${dd}/${mm}/${yy}`;
 };
 
-function LeftNavigation() {
+function TopNavigation() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
     `block rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`;
 
   return (
-    <div className="flex h-full flex-col p-3">
-      <nav className="space-y-1">
-        <NavLink className={navClass} to="/overview">Overview</NavLink>
-        <NavLink className={navClass} to="/new-research">New Research</NavLink>
-        <div className="my-3 border-t border-slate-200" />
+    <div className="flex items-center justify-between py-2">
+      <nav className="flex items-center gap-2">
+        <NavLink className={navClass} to="/overview">Dashboard</NavLink>
+        <NavLink className={navClass} to="/new-research">Progress</NavLink>
         <NavLink className={navClass} to="/stock-research">Stock Research</NavLink>
+        <NavLink className={navClass} to="/settings">Settings</NavLink>
       </nav>
     </div>
   );
@@ -120,7 +122,7 @@ function OverviewPage() {
   }), [assigneeFilter, recommendationFilter, rows, sectorFilter, tickerFilter, typeFilter]);
 
   return (
-    <CenterLayout title="Overview" description="Daily monitoring dashboard for active stock research notes. Click any row to jump directly into Stock Research Part 1 editing.">
+    <CenterLayout title="Dashboard" description="Daily monitoring dashboard for active stock research notes. Click any row to jump directly into Stock Research Part 1 editing.">
       <div className="mt-4 grid gap-2 md:grid-cols-5">
         <select className="input" value={tickerFilter} onChange={(e) => setTickerFilter(e.target.value)}><option value="">All tickers</option>{options.tickers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         <select className="input" value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}><option value="">All sectors</option>{options.sectors.map((value) => <option key={value} value={value}>{value}</option>)}</select>
@@ -130,7 +132,7 @@ function OverviewPage() {
       </div>
       <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="px-3 py-2">Ticker</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Sector</th><th className="px-3 py-2">Recommendation</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Assignee</th><th className="px-3 py-2">Updated</th></tr></thead>
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-32 px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="w-24 px-3 py-2">Ticker</th><th className="w-[32rem] px-3 py-2">Title</th><th className="w-32 px-3 py-2">Sector</th><th className="w-28 px-3 py-2">Recommendation</th><th className="w-24 px-3 py-2">Type</th><th className="w-24 px-3 py-2">Assignee</th><th className="w-44 px-3 py-2">Updated</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.map((row) => (
               <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/stock-research'); }}>
@@ -148,7 +150,7 @@ function OverviewPage() {
 function NewResearchPage() {
   const { assignees, noteTypes } = usePromptStore();
   return (
-    <CenterLayout title="New Research" description="Track idea-to-completion tasks across Ideas, Researching, and Completed with full SQLite persistence.">
+    <CenterLayout title="Progress" description="Track idea-to-completion tasks across Ideas, Researching, and Completed with full SQLite persistence.">
       <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
         <p><span className="font-medium">Research types:</span> {noteTypes.join(', ')}</p>
         <p className="mt-2"><span className="font-medium">Assignees:</span> {assignees.join(', ')}</p>
@@ -160,9 +162,17 @@ function NewResearchPage() {
 
 function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolderPanelCollapsed }: { openTemplatePicker: () => void; folderPanelCollapsed: boolean; setFolderPanelCollapsed: (collapsed: boolean) => void }) {
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <aside className="hidden border-r border-slate-200 bg-white lg:block"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
-      <div className="h-full"><div className="border-b border-slate-200 bg-white p-2 lg:hidden"><FileList openTemplatePicker={openTemplatePicker} /></div><div className="h-[calc(100%-1px)]"><EditorPane /></div></div>
+    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
+      {!folderPanelCollapsed && <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>}
+      <section className="relative border-r border-slate-200 bg-panel">
+        {folderPanelCollapsed && (
+          <button className="absolute left-2 top-2 z-10 rounded-md border border-slate-300 bg-white p-1.5" onClick={() => setFolderPanelCollapsed(false)} title="Show stocks">
+            <PanelLeftOpen size={14} />
+          </button>
+        )}
+        <FileList openTemplatePicker={openTemplatePicker} />
+      </section>
+      <div className="h-full"><EditorPane /></div>
     </div>
   );
 }
@@ -220,10 +230,9 @@ export function App() {
       <AppShell
         mobileSidebarOpen={mobileSidebarOpen}
         setMobileSidebarOpen={setMobileSidebarOpen}
-        leftNav={<LeftNavigation />}
-        headerRight={<div className="relative mx-auto flex w-full max-w-xl items-center gap-2"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search research notes (templates excluded)" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/stock-research'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
-        rightPanel={location.pathname.startsWith('/stock-research') ? <FileList openTemplatePicker={() => setFileModal(true)} /> : undefined}
-        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}`} replace />} /><Route path="/overview" element={<OverviewPage />} /><Route path="/new-research" element={<NewResearchPage />} /><Route path="/stock-research" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={folderPanelCollapsed} setFolderPanelCollapsed={setFolderPanelCollapsed} />} /></Routes>}
+        topNav={<TopNavigation />}
+        headerRight={<div className="relative mx-auto flex w-full max-w-lg items-center gap-2"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search research notes" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/stock-research'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
+        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}`} replace />} /><Route path="/overview" element={<OverviewPage />} /><Route path="/new-research" element={<NewResearchPage />} /><Route path="/stock-research" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={folderPanelCollapsed} setFolderPanelCollapsed={setFolderPanelCollapsed} />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
       />
       <TemplateModal open={fileModal} onClose={() => setFileModal(false)} />
     </>

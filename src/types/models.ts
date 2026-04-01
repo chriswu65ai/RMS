@@ -35,6 +35,7 @@ export enum Priority {
 export type SettingsList = {
   noteTypes: string[];
   assignees: string[];
+  sectors: string[];
 };
 
 export type Stock = {
@@ -62,7 +63,6 @@ export type FrontmatterModel = {
   date?: string;
   sectors?: string[];
   recommendation?: Recommendation | '';
-  stock_recommendation?: Recommendation | '';
   assignee?: string;
   template?: boolean;
   starred?: boolean;

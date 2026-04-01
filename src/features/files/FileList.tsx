@@ -92,7 +92,6 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 type: payload.type,
                 date: payload.date,
                 recommendation: '',
-                stock_recommendation: '',
               };
               const content = composeMarkdown(frontmatter, '');
               const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: payload.fileName, content, frontmatter });

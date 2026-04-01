@@ -1,11 +1,9 @@
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Settings, Tag, Trash2, Upload } from 'lucide-react';
-import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
-import { createFolder, createFile, deleteFolder, renameFolder } from '../../lib/dataApi';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { createFolder, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
-import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
 import { splitFrontmatter } from '../../lib/frontmatter';
-import type { Folder } from '../../types/models';
 
 const TAG_FILTER_ALL = '__ALL_TAGGED__';
 const TAG_FILTER_NONE = '__NO_TAGS__';
@@ -17,125 +15,10 @@ export function FolderTree({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, noteTypes, setNoteTypes, assignees, setAssignees } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [sectorsCollapsed, setSectorsCollapsed] = useState(false);
-  const [noteTypesInput, setNoteTypesInput] = useState(noteTypes.join(', '));
-  const [assigneesInput, setAssigneesInput] = useState(assignees.join(', '));
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [importTargetFolderId, setImportTargetFolderId] = useState<string>('');
-  const [importing, setImporting] = useState(false);
-
-  useEffect(() => {
-    setNoteTypesInput(noteTypes.join(', '));
-  }, [noteTypes]);
-
-  useEffect(() => {
-    setAssigneesInput(assignees.join(', '));
-  }, [assignees]);
-
-  const exportAllFiles = async () => {
-    if (!workspace) return;
-    if (files.length === 0) {
-      await dialog.alert('Nothing to export', 'Create at least one stock research note before exporting.');
-      return;
-    }
-    await exportWorkspaceMarkdownZip(workspace, files);
-  };
-
-  const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
-    const parts = path.split('/').filter(Boolean);
-    let parent = rootFolder;
-
-    for (const part of parts) {
-      const expectedPath = parent ? `${parent.path}/${part}` : part;
-      const existing = folders.find((folder) => folder.path === expectedPath);
-      if (existing) {
-        parent = existing;
-        continue;
-      }
-
-      const { error } = await createFolder(workspaceId, part, parent);
-      if (error) throw new Error(error.message);
-      await refresh();
-      const created = usePromptStore.getState().folders.find((folder) => folder.path === expectedPath);
-      if (!created) {
-        throw new Error(`Failed to create folder: ${expectedPath}`);
-      }
-      parent = created;
-    }
-
-    return parent;
-  };
-
-  const importMarkdownFiles = async (event: ChangeEvent<HTMLInputElement>) => {
-    const selected = event.target.files?.[0] ?? null;
-    event.target.value = '';
-    if (!selected || !workspace) return;
-
-    setImporting(true);
-    try {
-      const importedEntries = await readMarkdownEntriesFromImport(selected);
-      if (importedEntries.length === 0) {
-        await dialog.alert('No markdown files found', 'The selected file did not contain any .md files to import.');
-        return;
-      }
-
-      const baseFolder = importTargetFolderId
-        ? (folders.find((folder) => folder.id === importTargetFolderId) ?? null)
-        : null;
-
-      let importedCount = 0;
-      let skippedCount = 0;
-
-      for (const entry of importedEntries) {
-        const cleanPath = entry.path.replace(/^\/+/, '').replace(/\\/g, '/');
-        const pathParts = cleanPath.split('/').filter(Boolean);
-        const fileNameWithExt = pathParts[pathParts.length - 1] ?? 'untitled.md';
-        const folderPathFromImport = pathParts.slice(0, -1).join('/');
-        const targetFolder = folderPathFromImport
-          ? await ensureFolderPath(workspace.id, folderPathFromImport, baseFolder)
-          : baseFolder;
-
-        const fileName = fileNameWithExt.toLowerCase().endsWith('.md')
-          ? fileNameWithExt
-          : `${fileNameWithExt}.md`;
-        const finalPath = targetFolder ? `${targetFolder.path}/${fileName}` : fileName;
-        const isDuplicate = files.some((file) => file.path === finalPath);
-
-        if (isDuplicate) {
-          skippedCount += 1;
-          continue;
-        }
-
-        const parsed = splitFrontmatter(entry.content);
-        const { error } = await createFile({
-          workspaceId: workspace.id,
-          folderId: targetFolder?.id ?? null,
-          folderPath: targetFolder?.path ?? null,
-          name: fileName,
-          content: entry.content,
-          frontmatter: Object.keys(parsed.frontmatter).length > 0 ? parsed.frontmatter : null,
-        });
-
-        if (error) throw new Error(error.message);
-        importedCount += 1;
-      }
-
-      await refresh();
-      await dialog.alert(
-        'Import complete',
-        `Imported ${importedCount} file${importedCount === 1 ? '' : 's'}${
-          skippedCount > 0 ? ` (${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped)` : ''
-        }.`,
-      );
-    } catch (error) {
-      await dialog.alert('Import failed', error instanceof Error ? error.message : 'Unknown import error');
-    } finally {
-      setImporting(false);
-    }
-  };
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string | null, typeof folders>();
@@ -219,16 +102,6 @@ export function FolderTree({
         >
           <PanelLeftOpen size={16} />
         </button>
-        <div className="mt-auto border-t border-slate-200 pt-2">
-          <button
-            className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Open settings"
-            title="Settings"
-          >
-            <Settings size={16} />
-          </button>
-        </div>
       </div>
     );
   }
@@ -304,7 +177,7 @@ export function FolderTree({
           >
             <PanelLeftClose size={16} />
           </button>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Folders</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stocks</h3>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -383,99 +256,6 @@ export function FolderTree({
           </>
         )}
       </div>
-
-      <div className="border-t border-slate-200 p-2">
-        <button
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-slate-50"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings size={16} /> Settings
-        </button>
-      </div>
-
-      {settingsOpen && (
-        <div className="fixed inset-0 z-30 flex items-end justify-center bg-slate-900/30 p-0 md:items-center md:p-6">
-          <div className="grid h-[50vh] w-full max-w-3xl grid-cols-1 overflow-hidden rounded-t-2xl bg-white md:h-[45vh] md:rounded-2xl">
-            <div className="flex min-h-0 flex-col">
-              <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-                <h4 className="text-sm font-semibold">Settings</h4>
-                <button onClick={() => setSettingsOpen(false)} className="text-sm text-slate-500">Close</button>
-              </div>
-              <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Research workspace</p>
-                  <button
-                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50"
-                    onClick={exportAllFiles}
-                  >
-                    <Download size={16} /> Export all research notes
-                  </button>
-                </section>
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Research Types</p>
-                  <input
-                    className="input"
-                    value={noteTypesInput}
-                    onChange={(event) => setNoteTypesInput(event.target.value)}
-                    onBlur={() => {
-                      const nextTypes = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
-                      setNoteTypes(nextTypes);
-                      setNoteTypesInput(nextTypes.join(', '));
-                    }}
-                    placeholder="Research, Earnings, Valuation"
-                  />
-                </section>
-
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Assignees</p>
-                  <input
-                    className="input"
-                    value={assigneesInput}
-                    onChange={(event) => setAssigneesInput(event.target.value)}
-                    onBlur={() => {
-                      const nextAssignees = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
-                      setAssignees(nextAssignees);
-                      setAssigneesInput(nextAssignees.join(', '));
-                    }}
-                    placeholder="me, agent"
-                  />
-                </section>
-
-                <section className="space-y-3">
-                  <p className="text-sm text-slate-600">Import markdown</p>
-                  <p className="text-xs text-slate-500">Upload one <strong>.md</strong> file or an uncompressed <strong>.zip</strong> with <strong>.md</strong> files. Nested folders in the zip are preserved.</p>
-                  <label className="flex flex-col gap-1 text-xs text-slate-600">
-                    Target folder
-                    <select
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                      value={importTargetFolderId}
-                      onChange={(event) => setImportTargetFolderId(event.target.value)}
-                    >
-                      <option value="">Root</option>
-                      {folders
-                        .slice()
-                        .sort((a, b) => a.path.localeCompare(b.path))
-                        .map((folder) => (
-                          <option key={folder.id} value={folder.id}>{folder.path}</option>
-                        ))}
-                    </select>
-                  </label>
-                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">
-                    <Upload size={16} /> {importing ? 'Importing…' : 'Import .md/.zip'}
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept=".md,.zip"
-                      disabled={importing}
-                      onChange={importMarkdownFiles}
-                    />
-                  </label>
-                </section>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );
