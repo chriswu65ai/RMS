@@ -26,6 +26,29 @@ docker compose up --build
 
 Then open `http://localhost:4173`.
 
+### Docker Desktop troubleshooting (Windows)
+
+If you see an error like:
+
+`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`
+
+that means the Docker daemon is not running yet. Do this:
+
+1. Open **Docker Desktop**.
+2. Wait until it says **Engine running**.
+3. Retry:
+
+```bash
+docker compose up --build
+```
+
+Useful checks:
+
+```bash
+docker version
+docker info
+```
+
 ### Persistence
 
 The compose file mounts a named volume at `/data`, and the app stores SQLite at:
