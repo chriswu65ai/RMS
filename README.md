@@ -1,13 +1,13 @@
-# Prompt Manager
+# Stock Research Management System
 
-Prompt Manager is a Markdown-first web app for organizing prompts with folders, templates, and a split markdown editor.
+Stock Research Management System is a Markdown-first web app for organizing stock research notes with folders, templates, and a split markdown editor.
 
 ## What changed
 
 This project now runs fully local with **SQLite** and does **not** require Supabase or any setup wizard.
 
 - Local API routes are served by the Vite server (`/api/*`).
-- Data is persisted in a SQLite DB file (`data/promptmanager.db` by default).
+- Data is persisted in a SQLite DB file (`data/researchmanager.db` by default).
 - On first run, the app auto-creates a workspace plus starter folders/files.
 
 ## Run locally
@@ -55,7 +55,7 @@ docker info
 
 The compose file mounts a named volume at `/data`, and the app stores SQLite at:
 
-- `/data/promptmanager.db`
+- `/data/researchmanager.db`
 
 You can override this path with:
 
