@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, updateNewResearchTask } from '../../lib/dataApi';
+import { createFile, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
 import { composeMarkdown } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
@@ -32,6 +32,10 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [activityExpanded, setActivityExpanded] = useState(true);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [activityItems, setActivityItems] = useState<Array<{ id: string; description: string; created_at: string }>>([]);
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
 
@@ -44,6 +48,27 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   };
 
   useEffect(() => { void loadTasks(); }, []);
+
+  useEffect(() => {
+    if (!modalState?.id) {
+      setActivityItems([]);
+      setActivityError(null);
+      setActivityLoading(false);
+      return;
+    }
+    setActivityLoading(true);
+    setActivityError(null);
+    void (async () => {
+      try {
+        const events = await listTaskActivity(modalState.id as string);
+        setActivityItems(events);
+      } catch (err) {
+        setActivityError(err instanceof Error ? err.message : 'Failed to load task activity.');
+      } finally {
+        setActivityLoading(false);
+      }
+    })();
+  }, [modalState?.id]);
 
   const saveTask = async () => {
     if (!modalState) return;
@@ -187,6 +212,29 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
               <label className="text-sm">Date completed<input className="input mt-1" type="date" value={modalState.task.date_completed} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, date_completed: e.target.value } } : prev)} /></label>
             </div>
+            {modalState.id && (
+              <div className="mt-4 rounded-lg border border-slate-200">
+                <button className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-slate-700" onClick={() => setActivityExpanded((prev) => !prev)}>
+                  <span>Activity</span>
+                  <span>{activityExpanded ? '▾' : '▸'}</span>
+                </button>
+                {activityExpanded && (
+                  <div className="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+                    {activityLoading && <p>Loading activity…</p>}
+                    {activityError && <p className="text-rose-600">{activityError}</p>}
+                    {!activityLoading && !activityError && activityItems.length === 0 && <p>No activity yet.</p>}
+                    <ul className="space-y-2">
+                      {activityItems.map((item) => (
+                        <li key={item.id} className="rounded bg-slate-50 px-2 py-1">
+                          <p>{item.description}</p>
+                          <p className="text-[11px] text-slate-500">{new Date(item.created_at).toLocaleString()}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
             <datalist id="new-research-assignees">{assignees.map((assignee) => <option key={assignee} value={assignee} />)}</datalist>
             <datalist id="new-research-note-types">{noteTypes.map((type) => <option key={type} value={type} />)}</datalist>
             <div className="mt-4 flex justify-end gap-2">

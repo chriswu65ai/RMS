@@ -1,9 +1,9 @@
 import YAML from 'yaml';
-import type { FrontmatterModel, Note, PromptFile, Recommendation } from '../types/models';
+import { Recommendation, type FrontmatterModel, type Note, type PromptFile } from '../types/models';
 
 const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 
-const VALID_RECOMMENDATIONS = new Set<Recommendation>(['buy', 'hold', 'sell', 'avoid']);
+const VALID_RECOMMENDATIONS = new Set<Recommendation>(Object.values(Recommendation));
 
 export function normalizeRecommendation(value: unknown): Recommendation | '' {
   if (typeof value !== 'string') return '';
@@ -98,6 +98,7 @@ export function fileToNoteModel(file: PromptFile): Note {
       recommendation: frontmatter.recommendation ?? '',
     },
     path: file.path,
+    createdAt: file.created_at,
     updatedAt: file.updated_at,
   };
 }

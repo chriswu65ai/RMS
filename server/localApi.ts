@@ -24,6 +24,14 @@ type NewResearchTaskRow = {
   updated_at: string;
 };
 
+type TaskActivityRow = {
+  id: string;
+  task_id: string;
+  event_type: string;
+  description: string;
+  created_at: string;
+};
+
 type PromptFileRow = {
   id: string;
   workspace_id: string;
@@ -56,6 +64,11 @@ const queryJson = <T>(sql: string): T[] => {
   const out = execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8' });
   const trimmed = out.trim();
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+};
+
+const recordTaskEvent = (taskId: string, eventType: string, description: string) => {
+  const now = new Date().toISOString();
+  execSql(`insert into task_activity_events (id, task_id, event_type, description, created_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(taskId)}, ${sqlEscape(eventType)}, ${sqlEscape(description)}, ${sqlEscape(now)})`);
 };
 
 const ensureInitialized = () => {
@@ -105,6 +118,13 @@ const ensureInitialized = () => {
     linked_note_path text not null default '',
     created_at text not null,
     updated_at text not null
+  );
+  create table if not exists task_activity_events (
+    id text primary key,
+    task_id text not null,
+    event_type text not null,
+    description text not null,
+    created_at text not null
   );
   `);
   try {
@@ -202,6 +222,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'GET' && /^\/api\/research-tasks\/[^/]+\/activity$/.test(url)) {
+      const taskId = url.replace('/api/research-tasks/', '').replace('/activity', '').trim();
+      const activity = queryJson<TaskActivityRow>(`select * from task_activity_events where task_id = ${sqlEscape(taskId)} order by created_at desc`);
+      writeJson(res, 200, activity);
+      return true;
+    }
+
     if (req.method === 'POST' && url === '/api/research-tasks') {
       const payload = await readJsonBody(req);
       const ticker = String(payload.ticker ?? '').trim().toUpperCase();
@@ -212,6 +239,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const now = new Date().toISOString();
       const id = randomUUID();
       execSql(`insert into new_research_tasks (id, topic, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(payload.priority ?? '')}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
       return true;
@@ -244,6 +272,31 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         linked_note_path = ${sqlEscape(payload.linked_note_path ?? existing.linked_note_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
         where id = ${sqlEscape(taskId)}`);
+      const changedFields: string[] = [];
+      if (String(payload.topic ?? existing.topic) !== existing.topic) changedFields.push('topic');
+      if (ticker !== existing.ticker) changedFields.push('ticker');
+      if (String(payload.note_type ?? existing.note_type) !== existing.note_type) changedFields.push('note type');
+      if (String(payload.deadline ?? existing.deadline) !== existing.deadline) changedFields.push('deadline');
+      if (String(payload.date_completed ?? existing.date_completed) !== existing.date_completed) changedFields.push('completion date');
+
+      const nextStatus = String(payload.status ?? existing.status);
+      if (nextStatus !== existing.status) recordTaskEvent(taskId, 'status', `Status changed: ${existing.status} → ${nextStatus}.`);
+      const nextAssignee = String(payload.assignee ?? existing.assignee);
+      if (nextAssignee !== existing.assignee) recordTaskEvent(taskId, 'assignee', `Assignee changed: ${existing.assignee || '—'} → ${nextAssignee || '—'}.`);
+      const nextPriority = String(payload.priority ?? existing.priority);
+      if (nextPriority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${nextPriority || '—'}.`);
+      const nextLinked = String(payload.linked_note_file_id ?? existing.linked_note_file_id);
+      if (!existing.linked_note_file_id && nextLinked) {
+        recordTaskEvent(taskId, 'link', `Linked note: ${String(payload.linked_note_path ?? existing.linked_note_path) || nextLinked}.`);
+      } else if (existing.linked_note_file_id && !nextLinked) {
+        recordTaskEvent(taskId, 'unlink', 'Unlinked note.');
+      } else if (existing.linked_note_file_id && nextLinked !== existing.linked_note_file_id) {
+        recordTaskEvent(taskId, 'link', `Relinked note: ${String(payload.linked_note_path ?? existing.linked_note_path) || nextLinked}.`);
+      }
+      const nextArchived = payload.archived === undefined ? Boolean(existing.archived) : Boolean(payload.archived);
+      if (nextArchived !== Boolean(existing.archived)) recordTaskEvent(taskId, nextArchived ? 'archive' : 'unarchive', nextArchived ? 'Task archived.' : 'Task unarchived.');
+      if (changedFields.length > 0) recordTaskEvent(taskId, 'edit', `Updated ${changedFields.join(', ')}.`);
+
       const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(updated));
       return true;
