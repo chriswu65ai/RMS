@@ -1,12 +1,12 @@
 services:
-  promptmanager:
+  researchmanager:
     build: .
     ports:
       - "4173:4173"
     environment:
-      - SQLITE_PATH=/data/promptmanager.db
+      - SQLITE_PATH=/data/researchmanager.db
     volumes:
-      - promptmanager_data:/data
+      - researchmanager_data:/data
 
 volumes:
-  promptmanager_data:
+  researchmanager_data:

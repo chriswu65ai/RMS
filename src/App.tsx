@@ -24,7 +24,7 @@ export function App() {
         mobileSidebarOpen={mobileSidebarOpen}
         setMobileSidebarOpen={setMobileSidebarOpen}
         sidebarCollapsed={folderPanelCollapsed}
-        headerRight={<span className="text-xs text-slate-500">Local SQLite workspace</span>}
+        headerRight={<span className="text-xs text-slate-500">Local stock research workspace</span>}
         sidebar={<FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed((prev) => !prev)} />}
         fileList={<FileList openTemplatePicker={() => setFileModal(true)} />}
         main={
