@@ -19,7 +19,7 @@ export function AppShell({ headerRight, sidebar, fileList, main, mobileSidebarOp
           <button className="rounded-md p-2 hover:bg-slate-100 md:hidden" onClick={() => setMobileSidebarOpen(true)}>
             <Menu size={18} />
           </button>
-          <h1 className="text-sm font-semibold tracking-wide">Prompt Manager</h1>
+          <h1 className="text-sm font-semibold tracking-wide">Stock Research Management System</h1>
         </div>
         {headerRight}
       </header>

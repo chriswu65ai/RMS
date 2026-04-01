@@ -5,6 +5,7 @@ import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { usePromptStore } from '../../hooks/usePromptStore';
+import { buildCanonicalStockFileName } from '../../hooks/usePromptStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel } from '../../types/models';
@@ -39,7 +40,7 @@ export function EditorPane() {
   }, [frontmatter]);
 
 
-  if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a prompt file.</div>;
+  if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a stock research note.</div>;
 
   const merged = composeMarkdown(frontmatter, body);
   const editorValue = showMetadata ? merged : body;
@@ -469,6 +470,20 @@ ${merged}`);
       <MetadataPanel
         frontmatter={frontmatter}
         onChange={setFrontmatter}
+        onIdentityBlur={async ({ date, ticker, type }) => {
+          const nextDate = date.trim();
+          const nextTicker = ticker.trim().toUpperCase();
+          const nextType = type.trim();
+          if (!nextDate || !nextTicker || !nextType) return;
+          const nextName = buildCanonicalStockFileName(nextDate, nextTicker, nextType);
+          if (nextName === file.name) return;
+          const folderPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
+          const nextPath = folderPath ? `${folderPath}/${nextName}` : nextName;
+          const { error } = await updateFile(file.id, { name: nextName, path: nextPath });
+          if (!error) {
+            await refresh();
+          }
+        }}
         collapsed={metadataCollapsed}
         onToggleCollapsed={() => setMetadataCollapsed((prev) => !prev)}
         showMetadata={showMetadata}
