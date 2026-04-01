@@ -13,6 +13,61 @@ export type Folder = {
   updated_at: string;
 };
 
+export enum Recommendation {
+  Buy = 'buy',
+  Hold = 'hold',
+  Sell = 'sell',
+  Avoid = 'avoid',
+}
+
+export enum TaskStatus {
+  Ideas = 'ideas',
+  Researching = 'researching',
+  Completed = 'completed',
+}
+
+export enum Priority {
+  Low = 'low',
+  Medium = 'medium',
+  High = 'high',
+  Critical = 'critical',
+}
+
+export type SettingsList = {
+  noteTypes: string[];
+  assignees: string[];
+};
+
+export type Stock = {
+  ticker: string;
+  sectors: string[];
+  recommendation: Recommendation | '';
+};
+
+export type Note = {
+  id: string;
+  title: string;
+  type: string;
+  date: string;
+  assignee: string;
+  stock: Stock;
+  path: string;
+  updatedAt: string;
+};
+
+export type FrontmatterModel = {
+  title?: string;
+  ticker?: string;
+  type?: string;
+  date?: string;
+  sectors?: string[];
+  recommendation?: Recommendation | '';
+  stock_recommendation?: Recommendation | '';
+  assignee?: string;
+  template?: boolean;
+  starred?: boolean;
+};
+
 export type PromptFile = {
   id: string;
   workspace_id: string;
@@ -26,29 +81,15 @@ export type PromptFile = {
   updated_at: string;
 };
 
-export type FrontmatterModel = {
-  title?: string;
-  ticker?: string;
-  type?: string;
-  date?: string;
-  sectors?: string[];
-  recommendation?: '' | 'buy' | 'hold' | 'sell' | 'avoid';
-  stock_recommendation?: '' | 'buy' | 'hold' | 'sell' | 'avoid';
-  template?: boolean;
-  starred?: boolean;
-};
-
-export type NewResearchTaskStatus = 'ideas' | 'researching' | 'completed';
-
-export type NewResearchTask = {
+export type Task = {
   id: string;
   topic: string;
   ticker: string;
   note_type: string;
   assignee: string;
-  priority: string;
+  priority: Priority | '';
   deadline: string;
-  status: NewResearchTaskStatus;
+  status: TaskStatus;
   date_completed: string;
   archived: boolean;
   linked_note_file_id: string;
@@ -57,16 +98,21 @@ export type NewResearchTask = {
   updated_at: string;
 };
 
-export type NewResearchTaskInput = {
+export type TaskInput = {
   topic: string;
   ticker: string;
   note_type: string;
   assignee: string;
-  priority: string;
+  priority: Priority | '';
   deadline: string;
-  status: NewResearchTaskStatus;
+  status: TaskStatus;
   date_completed: string;
   archived: boolean;
   linked_note_file_id?: string;
   linked_note_path?: string;
 };
+
+// Backwards-compatible aliases for existing feature modules.
+export type NewResearchTaskStatus = TaskStatus;
+export type NewResearchTask = Task;
+export type NewResearchTaskInput = TaskInput;
