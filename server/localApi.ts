@@ -23,6 +23,7 @@ type NewResearchTaskRow = {
   created_at: string;
   updated_at: string;
 };
+const VALID_TASK_PRIORITIES = new Set(['', 'low', 'medium', 'high']);
 
 type TaskActivityRow = {
   id: string;
@@ -236,9 +237,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Ticker is required.' } });
         return true;
       }
+      const priority = String(payload.priority ?? '').trim().toLowerCase();
+      const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
       const now = new Date().toISOString();
       const id = randomUUID();
-      execSql(`insert into new_research_tasks (id, topic, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(payload.priority ?? '')}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      execSql(`insert into new_research_tasks (id, topic, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
@@ -258,17 +261,27 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Ticker is required.' } });
         return true;
       }
+      const nextLinkedFile = String(payload.linked_note_file_id ?? existing.linked_note_file_id).trim();
+      if (nextLinkedFile) {
+        const linkOwner = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} and id != ${sqlEscape(taskId)} limit 1`)[0];
+        if (linkOwner) {
+          writeJson(res, 409, { error: { message: 'That note is already linked to another task. Task↔note links must stay one-to-one.' } });
+          return true;
+        }
+      }
+      const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
+      const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
       execSql(`update new_research_tasks set
         topic = ${sqlEscape(payload.topic ?? existing.topic)},
         ticker = ${sqlEscape(ticker)},
         note_type = ${sqlEscape(payload.note_type ?? existing.note_type)},
         assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
-        priority = ${sqlEscape(payload.priority ?? existing.priority)},
+        priority = ${sqlEscape(normalizedPriority)},
         deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
         status = ${sqlEscape(payload.status ?? existing.status)},
         date_completed = ${sqlEscape(payload.date_completed ?? existing.date_completed)},
         archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
-        linked_note_file_id = ${sqlEscape(payload.linked_note_file_id ?? existing.linked_note_file_id)},
+        linked_note_file_id = ${sqlEscape(nextLinkedFile)},
         linked_note_path = ${sqlEscape(payload.linked_note_path ?? existing.linked_note_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
         where id = ${sqlEscape(taskId)}`);
@@ -276,6 +289,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (String(payload.topic ?? existing.topic) !== existing.topic) changedFields.push('topic');
       if (ticker !== existing.ticker) changedFields.push('ticker');
       if (String(payload.note_type ?? existing.note_type) !== existing.note_type) changedFields.push('note type');
+      if (normalizedPriority !== existing.priority) changedFields.push('priority');
       if (String(payload.deadline ?? existing.deadline) !== existing.deadline) changedFields.push('deadline');
       if (String(payload.date_completed ?? existing.date_completed) !== existing.date_completed) changedFields.push('completion date');
 
@@ -283,9 +297,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (nextStatus !== existing.status) recordTaskEvent(taskId, 'status', `Status changed: ${existing.status} → ${nextStatus}.`);
       const nextAssignee = String(payload.assignee ?? existing.assignee);
       if (nextAssignee !== existing.assignee) recordTaskEvent(taskId, 'assignee', `Assignee changed: ${existing.assignee || '—'} → ${nextAssignee || '—'}.`);
-      const nextPriority = String(payload.priority ?? existing.priority);
-      if (nextPriority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${nextPriority || '—'}.`);
-      const nextLinked = String(payload.linked_note_file_id ?? existing.linked_note_file_id);
+      if (normalizedPriority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${normalizedPriority || '—'}.`);
+      const nextLinked = nextLinkedFile;
       if (!existing.linked_note_file_id && nextLinked) {
         recordTaskEvent(taskId, 'link', `Linked note: ${String(payload.linked_note_path ?? existing.linked_note_path) || nextLinked}.`);
       } else if (existing.linked_note_file_id && !nextLinked) {

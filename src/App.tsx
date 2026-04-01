@@ -130,7 +130,7 @@ function OverviewPage() {
       </div>
       <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="px-3 py-2">Ticker</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Sector</th><th className="px-3 py-2">Recommendation</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Assignee</th><th className="px-3 py-2">Updated</th></tr></thead>
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="px-3 py-2">Ticker</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Sector</th><th className="px-3 py-2">Recommendation</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Assignee</th><th className="px-3 py-2">Updated</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.map((row) => (
               <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/stock-research'); }}>
@@ -190,7 +190,27 @@ export function App() {
   const globalResults = useMemo(() => {
     if (!search.trim()) return [];
     const q = search.toLowerCase();
-    return files.filter((file) => !file.is_template && (file.name.toLowerCase().includes(q) || file.content.toLowerCase().includes(q))).slice(0, 8);
+    return files
+      .filter((file) => !file.is_template)
+      .map((file) => {
+        const parsed = splitFrontmatter(file.content).frontmatter;
+        const ticker = parsed.ticker?.toString().trim().toLowerCase() ?? '';
+        const title = parsed.title?.toString().trim().toLowerCase() ?? '';
+        const fileName = file.name.toLowerCase();
+        const content = file.content.toLowerCase();
+        let score = 0;
+        if (ticker === q) score += 150;
+        else if (ticker.includes(q)) score += 90;
+        if (title === q) score += 120;
+        else if (title.includes(q)) score += 80;
+        if (fileName.includes(q)) score += 30;
+        if (content.includes(q)) score += 10;
+        return { file, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((item) => item.file);
   }, [files, search]);
 
   return (
