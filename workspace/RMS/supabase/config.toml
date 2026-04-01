@@ -1,8 +1,0 @@
-project_id = "promptmanager"
-
-[db]
-major_version = 15
-
-[db.seed]
-enabled = true
-sql_paths = ["./seed/seed.sql"]
