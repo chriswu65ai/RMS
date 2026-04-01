@@ -1,4 +1,4 @@
-import type { Folder, PromptFile, Workspace } from '../types/models';
+import type { Folder, NewResearchTask, NewResearchTaskInput, PromptFile, Workspace } from '../types/models';
 
 type ApiError = { message: string };
 type ApiResult = { error: ApiError | null };
@@ -105,5 +105,46 @@ export async function deleteFile(fileId: string): Promise<ApiResult> {
 
 export async function deleteFolder(folderId: string): Promise<ApiResult> {
   const response = await fetch(`/api/folders/${folderId}`, { method: 'DELETE' });
+  return readJson<ApiResult>(response);
+}
+
+
+export async function listNewResearchTasks(): Promise<NewResearchTask[]> {
+  const response = await fetch('/api/research-tasks');
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return readJson<NewResearchTask[]>(response);
+}
+
+export async function createNewResearchTask(values: NewResearchTaskInput): Promise<NewResearchTask> {
+  const response = await fetch('/api/research-tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return readJson<NewResearchTask>(response);
+}
+
+export async function updateNewResearchTask(taskId: string, values: NewResearchTaskInput): Promise<NewResearchTask> {
+  const response = await fetch(`/api/research-tasks/${taskId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(values),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return readJson<NewResearchTask>(response);
+}
+
+export async function deleteNewResearchTask(taskId: string): Promise<ApiResult> {
+  const response = await fetch(`/api/research-tasks/${taskId}`, { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
   return readJson<ApiResult>(response);
 }

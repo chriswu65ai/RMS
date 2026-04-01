@@ -6,6 +6,21 @@ import { execFileSync } from 'node:child_process';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
 type FolderRow = { id: string; workspace_id: string; parent_id: string | null; name: string; path: string; created_at: string; updated_at: string };
+
+type NewResearchTaskRow = {
+  id: string;
+  topic: string;
+  ticker: string;
+  assignee: string;
+  priority: string;
+  deadline: string;
+  status: 'ideas' | 'researching' | 'completed';
+  date_completed: string;
+  archived: number;
+  created_at: string;
+  updated_at: string;
+};
+
 type PromptFileRow = {
   id: string;
   workspace_id: string;
@@ -72,6 +87,19 @@ const ensureInitialized = () => {
     updated_at text not null,
     unique(workspace_id, path)
   );
+  create table if not exists new_research_tasks (
+    id text primary key,
+    topic text not null default '',
+    ticker text not null,
+    assignee text not null default '',
+    priority text not null default '',
+    deadline text not null default '',
+    status text not null default 'ideas',
+    date_completed text not null default '',
+    archived integer not null default 0,
+    created_at text not null,
+    updated_at text not null
+  );
   `);
   initialized = true;
 };
@@ -127,6 +155,15 @@ function listWorkspaceData(workspaceId: string) {
   return { workspace, folders, files };
 }
 
+
+
+function normalizeTaskRow(row: NewResearchTaskRow) {
+  return {
+    ...row,
+    archived: Boolean(row.archived),
+  };
+}
+
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
   ensureInitialized();
@@ -138,6 +175,63 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   }
 
   try {
+    if (req.method === 'GET' && url === '/api/research-tasks') {
+      const tasks = queryJson<NewResearchTaskRow>('select * from new_research_tasks order by created_at desc').map(normalizeTaskRow);
+      writeJson(res, 200, tasks);
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/research-tasks') {
+      const payload = await readJsonBody(req);
+      const ticker = String(payload.ticker ?? '').trim().toUpperCase();
+      if (!ticker) {
+        writeJson(res, 400, { error: { message: 'Ticker is required.' } });
+        return true;
+      }
+      const now = new Date().toISOString();
+      const id = randomUUID();
+      execSql(`insert into new_research_tasks (id, topic, ticker, assignee, priority, deadline, status, date_completed, archived, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(payload.priority ?? '')}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
+      writeJson(res, 200, normalizeTaskRow(created));
+      return true;
+    }
+
+    if (req.method === 'PATCH' && url.startsWith('/api/research-tasks/')) {
+      const taskId = url.replace('/api/research-tasks/', '').trim();
+      const payload = await readJsonBody(req);
+      const existing = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      if (!existing) {
+        writeJson(res, 404, { error: { message: 'Task not found.' } });
+        return true;
+      }
+      const ticker = String(payload.ticker ?? existing.ticker).trim().toUpperCase();
+      if (!ticker) {
+        writeJson(res, 400, { error: { message: 'Ticker is required.' } });
+        return true;
+      }
+      execSql(`update new_research_tasks set
+        topic = ${sqlEscape(payload.topic ?? existing.topic)},
+        ticker = ${sqlEscape(ticker)},
+        assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
+        priority = ${sqlEscape(payload.priority ?? existing.priority)},
+        deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
+        status = ${sqlEscape(payload.status ?? existing.status)},
+        date_completed = ${sqlEscape(payload.date_completed ?? existing.date_completed)},
+        archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
+        updated_at = ${sqlEscape(new Date().toISOString())}
+        where id = ${sqlEscape(taskId)}`);
+      const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      writeJson(res, 200, normalizeTaskRow(updated));
+      return true;
+    }
+
+    if (req.method === 'DELETE' && url.startsWith('/api/research-tasks/')) {
+      const taskId = url.replace('/api/research-tasks/', '').trim();
+      execSql(`delete from new_research_tasks where id = ${sqlEscape(taskId)}`);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
     if (req.method === 'POST' && url === '/api/folders') {
       const payload = await readJsonBody(req);
       const now = new Date().toISOString();

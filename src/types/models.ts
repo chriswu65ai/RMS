@@ -37,3 +37,30 @@ export type FrontmatterModel = {
   template?: boolean;
   starred?: boolean;
 };
+
+export type NewResearchTaskStatus = 'ideas' | 'researching' | 'completed';
+
+export type NewResearchTask = {
+  id: string;
+  topic: string;
+  ticker: string;
+  assignee: string;
+  priority: string;
+  deadline: string;
+  status: NewResearchTaskStatus;
+  date_completed: string;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NewResearchTaskInput = {
+  topic: string;
+  ticker: string;
+  assignee: string;
+  priority: string;
+  deadline: string;
+  status: NewResearchTaskStatus;
+  date_completed: string;
+  archived: boolean;
+};

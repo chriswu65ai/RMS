@@ -7,6 +7,7 @@ import { EditorPane } from './features/editor/EditorPane';
 import { TemplateModal } from './features/templates/TemplateModal';
 import { usePromptStore } from './hooks/usePromptStore';
 import { splitFrontmatter } from './lib/frontmatter';
+import { NewResearchBoard } from './features/newResearch/NewResearchBoard';
 
 function LeftNavigation() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -183,11 +184,12 @@ function NewResearchPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <h2 className="text-lg font-semibold">New Research</h2>
-      <p className="mt-2 text-sm text-slate-600">Use this shared scaffold to stage upcoming workflows for Part 2/3 while keeping settings-backed lists available.</p>
+      <p className="mt-2 text-sm text-slate-600">Track idea-to-completion tasks across Ideas, Researching, and Completed with full SQLite persistence.</p>
       <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
         <p><span className="font-medium">Research types:</span> {noteTypes.join(', ')}</p>
         <p className="mt-2"><span className="font-medium">Assignees:</span> {assignees.join(', ')}</p>
       </div>
+      <NewResearchBoard assignees={assignees} />
     </div>
   );
 }
