@@ -21,6 +21,7 @@ type PromptFileRow = {
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/promptmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
+let initialized = false;
 
 const sqlEscape = (value: unknown) => {
   if (value === null || value === undefined) return 'NULL';
@@ -39,37 +40,41 @@ const queryJson = <T>(sql: string): T[] => {
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
 };
 
-execSql(`
-create table if not exists workspaces (
-  id text primary key,
-  name text not null,
-  created_at text not null,
-  updated_at text not null
-);
-create table if not exists folders (
-  id text primary key,
-  workspace_id text not null,
-  parent_id text,
-  name text not null,
-  path text not null,
-  created_at text not null,
-  updated_at text not null,
-  unique(workspace_id, path)
-);
-create table if not exists prompt_files (
-  id text primary key,
-  workspace_id text not null,
-  folder_id text,
-  name text not null,
-  path text not null,
-  content text not null,
-  frontmatter_json text,
-  is_template integer not null default 0,
-  created_at text not null,
-  updated_at text not null,
-  unique(workspace_id, path)
-);
-`);
+const ensureInitialized = () => {
+  if (initialized) return;
+  execSql(`
+  create table if not exists workspaces (
+    id text primary key,
+    name text not null,
+    created_at text not null,
+    updated_at text not null
+  );
+  create table if not exists folders (
+    id text primary key,
+    workspace_id text not null,
+    parent_id text,
+    name text not null,
+    path text not null,
+    created_at text not null,
+    updated_at text not null,
+    unique(workspace_id, path)
+  );
+  create table if not exists prompt_files (
+    id text primary key,
+    workspace_id text not null,
+    folder_id text,
+    name text not null,
+    path text not null,
+    content text not null,
+    frontmatter_json text,
+    is_template integer not null default 0,
+    created_at text not null,
+    updated_at text not null,
+    unique(workspace_id, path)
+  );
+  `);
+  initialized = true;
+};
 
 const writeJson = (res: ServerResponse, status: number, body: unknown) => {
   res.statusCode = status;
@@ -124,6 +129,7 @@ function listWorkspaceData(workspaceId: string) {
 
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
+  ensureInitialized();
 
   if (req.method === 'GET' && url === '/api/bootstrap') {
     const workspace = ensureWorkspaceWithStarterContent();

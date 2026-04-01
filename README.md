@@ -18,6 +18,8 @@ npm run dev
 
 Then open `http://localhost:5173`.
 
+> Note: the local API uses the `sqlite3` CLI on your machine. If missing, install SQLite first.
+
 ## Run with Docker
 
 ```bash
