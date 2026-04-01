@@ -1,5 +1,5 @@
 import { normalizeFrontmatter } from './frontmatter';
-import { Priority, TaskStatus, type Folder, type NewResearchTask, type NewResearchTaskInput, type PromptFile, type Workspace } from '../types/models';
+import { Priority, TaskStatus, type Folder, type NewResearchTask, type NewResearchTaskInput, type PromptFile, type TaskActivityEvent, type Workspace } from '../types/models';
 
 type ApiError = { message: string };
 type ApiResult = { error: ApiError | null };
@@ -167,4 +167,10 @@ export async function deleteNewResearchTask(taskId: string): Promise<ApiResult> 
   const response = await fetch(`/api/research-tasks/${taskId}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(await response.text());
   return readJson<ApiResult>(response);
+}
+
+export async function listTaskActivity(taskId: string): Promise<TaskActivityEvent[]> {
+  const response = await fetch(`/api/research-tasks/${taskId}/activity`);
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<TaskActivityEvent[]>(response);
 }

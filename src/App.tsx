@@ -10,7 +10,18 @@ import { TemplateModal } from './features/templates/TemplateModal';
 import { usePromptStore } from './hooks/usePromptStore';
 import { fileToNoteModel, splitFrontmatter } from './lib/frontmatter';
 import { NewResearchBoard } from './features/newResearch/NewResearchBoard';
-import { Recommendation, type Note } from './types/models';
+import { listNewResearchTasks } from './lib/dataApi';
+import { Recommendation, type NewResearchTask, type Note } from './types/models';
+
+const normalizeSector = (value: string) => value.trim().toLowerCase();
+const formatCreatedDate = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yy = String(date.getFullYear()).slice(-2);
+  return `${dd}/${mm}/${yy}`;
+};
 
 function LeftNavigation() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -43,20 +54,54 @@ function CenterLayout({ title, description, children }: { title: string; descrip
 function OverviewPage() {
   const navigate = useNavigate();
   const { files, transitionFromOverviewRow } = usePromptStore();
+  const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [tickerFilter, setTickerFilter] = useState('');
   const [sectorFilter, setSectorFilter] = useState('');
   const [recommendationFilter, setRecommendationFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [dateSortDirection, setDateSortDirection] = useState<'desc' | 'asc'>('desc');
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setTasks(await listNewResearchTasks());
+      } catch {
+        setTasks([]);
+      }
+    })();
+  }, []);
+
+  const taskByLinkedFile = useMemo(() => {
+    const byFile = new Map<string, NewResearchTask>();
+    tasks.forEach((task) => {
+      if (!task.linked_note_file_id) return;
+      const existing = byFile.get(task.linked_note_file_id);
+      if (!existing || new Date(task.updated_at).getTime() > new Date(existing.updated_at).getTime()) {
+        byFile.set(task.linked_note_file_id, task);
+      }
+    });
+    return byFile;
+  }, [tasks]);
 
   const rows = useMemo<Note[]>(() => files
     .filter((file) => !file.is_template)
     .map(fileToNoteModel)
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()), [files]);
+    .map((row) => {
+      const linkedTask = taskByLinkedFile.get(row.id);
+      return linkedTask ? { ...row, assignee: linkedTask.assignee || row.assignee } : row;
+    })
+    .sort((a, b) => (
+      dateSortDirection === 'desc'
+        ? new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        : new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    )), [dateSortDirection, files, taskByLinkedFile]);
+
+  const sectorsForRow = (row: Note) => row.stock.sectors.map((sector) => sector.trim()).filter(Boolean);
 
   const options = useMemo(() => ({
     tickers: Array.from(new Set(rows.map((row) => row.stock.ticker).filter((value) => value !== '—'))),
-    sectors: Array.from(new Set(rows.map((row) => row.stock.sectors[0] || '—').filter((value) => value !== '—'))),
+    sectors: Array.from(new Set(rows.flatMap((row) => sectorsForRow(row).map((sector) => normalizeSector(sector))))),
     recommendations: Object.values(Recommendation).filter((value) => rows.some((row) => row.stock.recommendation === value)),
     types: Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== '—'))),
     assignees: Array.from(new Set(rows.map((row) => row.assignee).filter((value) => value !== '—'))),
@@ -64,7 +109,10 @@ function OverviewPage() {
 
   const filteredRows = useMemo(() => rows.filter((row) => {
     if (tickerFilter && row.stock.ticker !== tickerFilter) return false;
-    if (sectorFilter && (row.stock.sectors[0] || '—') !== sectorFilter) return false;
+    if (sectorFilter) {
+      const normalizedFilter = normalizeSector(sectorFilter);
+      if (!sectorsForRow(row).some((sector) => normalizeSector(sector) === normalizedFilter)) return false;
+    }
     if (recommendationFilter && row.stock.recommendation !== recommendationFilter) return false;
     if (typeFilter && row.type !== typeFilter) return false;
     if (assigneeFilter && row.assignee !== assigneeFilter) return false;
@@ -82,14 +130,14 @@ function OverviewPage() {
       </div>
       <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Ticker</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Sector</th><th className="px-3 py-2">Recommendation</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Assignee</th><th className="px-3 py-2">Updated</th></tr></thead>
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="px-3 py-2">Ticker</th><th className="px-3 py-2">Title</th><th className="px-3 py-2">Sector</th><th className="px-3 py-2">Recommendation</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Assignee</th><th className="px-3 py-2">Updated</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.map((row) => (
               <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/stock-research'); }}>
-                <td className="px-3 py-2 font-medium text-slate-900">{row.stock.ticker}</td><td className="px-3 py-2">{row.title}</td><td className="px-3 py-2">{row.stock.sectors[0] || '—'}</td><td className="px-3 py-2"><RecommendationBadge value={row.stock.recommendation} /></td><td className="px-3 py-2">{row.type}</td><td className="px-3 py-2">{row.assignee}</td><td className="px-3 py-2 text-slate-500">{new Date(row.updatedAt).toLocaleString()}</td>
+                <td className="px-3 py-2 text-slate-600">{formatCreatedDate(row.createdAt)}</td><td className="px-3 py-2 font-medium text-slate-900">{row.stock.ticker}</td><td className="px-3 py-2">{row.title}</td><td className="px-3 py-2">{sectorsForRow(row).join(', ') || '—'}</td><td className="px-3 py-2"><RecommendationBadge value={row.stock.recommendation} /></td><td className="px-3 py-2">{row.type}</td><td className="px-3 py-2">{row.assignee}</td><td className="px-3 py-2 text-slate-500">{new Date(row.updatedAt).toLocaleString()}</td>
               </tr>
             ))}
-            {filteredRows.length === 0 && <tr><td className="px-3 py-6" colSpan={7}><PageState kind="empty" message="No notes match the selected filters." /></td></tr>}
+            {filteredRows.length === 0 && <tr><td className="px-3 py-6" colSpan={8}><PageState kind="empty" message="No notes match the selected filters." /></td></tr>}
           </tbody>
         </table>
       </div>

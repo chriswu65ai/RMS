@@ -99,7 +99,7 @@ export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onT
         </label>
         <label className="block text-xs text-slate-500">Sectors (comma separated)
           <input
-            type="date"
+            type="text"
             className="input mt-1"
             value={sectorsInput}
             onChange={(e) => {

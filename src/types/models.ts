@@ -52,6 +52,7 @@ export type Note = {
   assignee: string;
   stock: Stock;
   path: string;
+  createdAt: string;
   updatedAt: string;
 };
 
@@ -116,3 +117,11 @@ export type TaskInput = {
 export type NewResearchTaskStatus = TaskStatus;
 export type NewResearchTask = Task;
 export type NewResearchTaskInput = TaskInput;
+
+export type TaskActivityEvent = {
+  id: string;
+  task_id: string;
+  event_type: string;
+  description: string;
+  created_at: string;
+};
