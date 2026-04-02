@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
@@ -220,11 +221,27 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     navigate('/stock-research');
   };
 
-  const onModalKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
+  useEffect(() => {
+    if (!modalState) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
       setModalState(null);
       transitionTaskModal(null);
-    }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [modalState, transitionTaskModal]);
+
+  const closeModal = () => {
+    setModalState(null);
+    transitionTaskModal(null);
   };
 
   return (
@@ -277,9 +294,12 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         </div>
       )}
 
-      {modalState && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4" onKeyDown={onModalKeyDown}>
-          <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl">
+      {modalState && createPortal(
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-900/40 p-4" onMouseDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          closeModal();
+        }}>
+          <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <h3 className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.topic} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, topic: e.target.value } } : prev)} /></label>
@@ -342,11 +362,12 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
             )}
             <div className="mt-4 flex justify-end gap-2">
               {modalState.mode === 'edit' && modalState.id && <button className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm" onClick={() => { const task = tasks.find((item) => item.id === modalState.id); if (task) void createNoteFromTask(task); }}>{modalState.task.linked_note_file_id ? 'Open linked note' : 'Create note from task'}</button>}
-              <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={() => { setModalState(null); transitionTaskModal(null); }}>Cancel</button>
+              <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
               <button className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving} onClick={() => void saveTask()}>{saving ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
