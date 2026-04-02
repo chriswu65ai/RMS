@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="RMS favicon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b3fa9"/>
+      <stop offset="100%" stop-color="#78d8ff"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#dff1ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#bg)" stroke="#0d4cc7" stroke-width="6"/>
+
+  <rect x="40" y="82" width="96" height="118" rx="10" fill="url(#panel)" stroke="#1e5fc8" stroke-width="4"/>
+  <polyline points="52,156 72,134 88,146 106,118 124,130" fill="none" stroke="#1ea35f" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <polygon points="124,130 122,113 139,118" fill="#1ea35f"/>
+
+  <path d="M150 70c22-12 47-8 65 10-12-3-21 1-27 11 9-1 18 2 25 10-8-1-16 3-22 11-9 14-24 22-42 22 13-15 13-41 1-64z" fill="#eef7ff" stroke="#1247a7" stroke-width="5"/>
+
+  <circle cx="130" cy="162" r="39" fill="#ebf8ff" stroke="#0d3d97" stroke-width="8"/>
+  <circle cx="130" cy="162" r="30" fill="#8ad9ff" opacity="0.45"/>
+  <line x1="158" y1="190" x2="194" y2="226" stroke="#0d3d97" stroke-width="14" stroke-linecap="round"/>
+  <line x1="158" y1="190" x2="194" y2="226" stroke="#8ed9ff" stroke-width="7" stroke-linecap="round"/>
+
+  <circle cx="202" cy="206" r="25" fill="#dff2ff" stroke="#1f57b8" stroke-width="6"/>
+  <path d="M190 206l8 8 14-16" fill="none" stroke="#1f57b8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
