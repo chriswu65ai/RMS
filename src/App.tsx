@@ -42,7 +42,7 @@ function TopNavigation() {
 
 function CenterLayout({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="h-full overflow-y-auto px-4 py-6">
       <div className="w-full">
         {title ? <h2 className="text-lg font-semibold">{title}</h2> : null}
         {description ? <p className="mt-2 text-sm text-slate-600">{description}</p> : null}
