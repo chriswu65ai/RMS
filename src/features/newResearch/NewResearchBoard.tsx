@@ -319,7 +319,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 {visibleTasks.filter((task) => task.status === column.key).map((task) => (
                   <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3" draggable onDragStart={() => setDraggingId(task.id)} onDragEnd={() => setDraggingId(null)}>
                     <div className="flex items-start justify-between gap-3">
-                      <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.topic || 'Untitled title'}</p><p className="text-xs text-slate-600">{task.ticker}</p></button>
+                      <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.topic || 'Untitled title'}</p><p className="text-xs font-semibold text-slate-700">{task.ticker}</p></button>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
                       <p>Assignee: {task.assignee || '—'}</p>
