@@ -36,7 +36,7 @@ const todayDate = () => new Date().toISOString().slice(0, 10);
 
 export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]; noteTypes: string[] }) {
   const navigate = useNavigate();
-  const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote } = usePromptStore();
+  const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote, selectedTaskId } = usePromptStore();
   const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +78,20 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   };
 
   useEffect(() => { void loadTasks(); }, []);
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    if (selectedTaskId === 'new') {
+      setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } });
+      setActivityExpanded(false);
+      return;
+    }
+    const selectedTask = tasks.find((task) => task.id === selectedTaskId);
+    if (!selectedTask) return;
+    if (modalState?.id === selectedTask.id) return;
+    setModalState({ mode: 'edit', id: selectedTask.id, task: { ...selectedTask } });
+    setActivityExpanded(false);
+  }, [selectedTaskId, tasks, noteTypes, modalState?.id]);
 
   useEffect(() => {
     if (!modalState?.id) {

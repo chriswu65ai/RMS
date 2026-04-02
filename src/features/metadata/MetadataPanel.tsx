@@ -12,6 +12,9 @@ type Props = {
   showMetadata: boolean;
   onShowMetadataChange: (show: boolean) => void;
   onIdentityBlur: (fields: { date: string; ticker: string; type: string }) => void;
+  onViewTask: () => void;
+  canViewTask: boolean;
+  viewTaskHelperText?: string;
 };
 
 const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; label: string }> = [
@@ -22,7 +25,20 @@ const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; la
   { value: 'avoid', label: 'Avoid' },
 ];
 
-export function MetadataPanel({ frontmatter, noteTypes, sectors, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange, onIdentityBlur }: Props) {
+export function MetadataPanel({
+  frontmatter,
+  noteTypes,
+  sectors,
+  onChange,
+  collapsed,
+  onToggleCollapsed,
+  showMetadata,
+  onShowMetadataChange,
+  onIdentityBlur,
+  onViewTask,
+  canViewTask,
+  viewTaskHelperText,
+}: Props) {
   const [selectedSector, setSelectedSector] = useState(frontmatter.sectors?.[0] ?? '');
 
   useEffect(() => {
@@ -156,6 +172,17 @@ export function MetadataPanel({ frontmatter, noteTypes, sectors, onChange, colla
             />
             Show metadata
           </label>
+        </div>
+        <div className="border-t border-slate-200 pt-3">
+          <button
+            className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${canViewTask ? 'bg-slate-900 text-white hover:bg-slate-800' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
+            type="button"
+            onClick={onViewTask}
+            disabled={!canViewTask}
+          >
+            View task
+          </button>
+          {viewTaskHelperText && <p className="mt-1 text-xs text-slate-500">{viewTaskHelperText}</p>}
         </div>
       </div>
     </aside>
