@@ -22,7 +22,7 @@ const normalizeList = (items: string[]) => {
   return normalized;
 };
 
-export type AppView = 'overview' | 'new-research' | 'stock-research';
+export type AppView = 'home' | 'dashboard' | 'notes';
 export type EditorTab = 'edit' | 'preview' | 'split';
 
 type Store = {
@@ -87,7 +87,7 @@ export const usePromptStore = create<Store>()(
       noteTypes: DEFAULT_SETTINGS.noteTypes,
       assignees: DEFAULT_SETTINGS.assignees,
       sectors: DEFAULT_SETTINGS.sectors,
-      lastView: 'stock-research',
+      lastView: 'notes',
       stockFoldersCollapsed: false,
       metadataPanelCollapsed: true,
       editorTab: 'split',
@@ -102,7 +102,7 @@ export const usePromptStore = create<Store>()(
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
       setEditorTab: (tab) => set({ editorTab: tab }),
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
-      selectFile: (id, view = 'stock-research') => {
+      selectFile: (id, view = 'notes') => {
         const file = get().files.find((item) => item.id === id) ?? null;
         const activeFolderId = get().selectedFolderId;
         const activeTag = get().selectedTag;
@@ -117,22 +117,22 @@ export const usePromptStore = create<Store>()(
       },
       selectTag: (tag) => set({ selectedTag: tag, selectedFolderId: null, selectedFileId: null, selectedTicker: null }),
       transitionFromOverviewRow: (fileId) => {
-        get().selectFile(fileId, 'stock-research');
+        get().selectFile(fileId, 'notes');
       },
       transitionFromSearchResult: (fileId) => {
-        get().selectFile(fileId, 'stock-research');
+        get().selectFile(fileId, 'notes');
         set({ search: '' });
       },
-      transitionTaskModal: (taskId) => set({ selectedTaskId: taskId ?? null, lastView: 'new-research' }),
+      transitionTaskModal: (taskId) => set({ selectedTaskId: taskId ?? null, lastView: 'dashboard' }),
       transitionTaskToNote: (task, createdFileId) => {
         const files = get().files;
         const linkedId = createdFileId ?? task.linked_note_file_id ?? '';
         const file = linkedId ? files.find((item) => item.id === linkedId) : undefined;
         if (!file) {
-          set({ selectedTaskId: task.id, selectedTicker: task.ticker.trim().toUpperCase() || null, lastView: 'new-research' });
+          set({ selectedTaskId: task.id, selectedTicker: task.ticker.trim().toUpperCase() || null, lastView: 'dashboard' });
           return { ok: false, reason: 'Linked note is missing, renamed, or deleted.' };
         }
-        get().selectFile(file.id, 'stock-research');
+        get().selectFile(file.id, 'notes');
         set({ selectedTaskId: task.id });
         return { ok: true };
       },
