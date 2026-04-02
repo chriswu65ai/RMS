@@ -6,8 +6,8 @@ import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } fr
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 
-const SECTOR_FILTER_ALL = '__ALL_TAGGED__';
-const SECTOR_FILTER_NONE = '__NO_TAGS__';
+const TYPE_FILTER_ALL = '__ALL_TYPED__';
+const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
   const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, setSearch, noteTypes } = usePromptStore();
@@ -27,11 +27,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
 
       if (selectedTag) {
         const parsed = splitFrontmatter(file.content);
-        const sectors = Array.isArray(parsed.frontmatter.sectors) ? parsed.frontmatter.sectors : [];
+        const noteType = parsed.frontmatter.type?.toString().trim() ?? '';
 
-        if (selectedTag === SECTOR_FILTER_ALL && sectors.length === 0) return false;
-        if (selectedTag === SECTOR_FILTER_NONE && sectors.length > 0) return false;
-        if (selectedTag !== SECTOR_FILTER_ALL && selectedTag !== SECTOR_FILTER_NONE && !sectors.includes(selectedTag)) return false;
+        if (selectedTag === TYPE_FILTER_ALL && !noteType) return false;
+        if (selectedTag === TYPE_FILTER_NONE && noteType) return false;
+        if (selectedTag !== TYPE_FILTER_ALL && selectedTag !== TYPE_FILTER_NONE && selectedTag !== noteType) return false;
       }
 
       if (!search) return true;

@@ -522,7 +522,7 @@ ${merged}`);
         onViewTask={() => {
           if (!linkedTask) return;
           transitionTaskModal(linkedTask.id);
-          navigate('/new-research');
+          navigate('/dashboard');
         }}
         viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.topic || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
       />

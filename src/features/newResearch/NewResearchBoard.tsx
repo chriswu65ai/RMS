@@ -11,7 +11,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
-  { key: TaskStatus.Researching, label: 'Researching' },
+  { key: TaskStatus.Researching, label: 'In Progress' },
   { key: TaskStatus.Completed, label: 'Completed' },
 ];
 
@@ -193,7 +193,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const openLinkedNote = (task: NewResearchTask) => {
     const transition = transitionTaskToNote(task);
     if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
-    navigate('/stock-research');
+    navigate('/notes');
   };
 
   const createNoteFromTask = async (task: NewResearchTask) => {
@@ -248,7 +248,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updatedTask : item)));
     const transition = transitionTaskToNote(updatedTask, created.id);
     if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
-    navigate('/stock-research');
+    navigate('/notes');
   };
 
   useEffect(() => {

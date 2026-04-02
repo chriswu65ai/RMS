@@ -5,8 +5,8 @@ import { usePromptStore } from '../../hooks/usePromptStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { splitFrontmatter } from '../../lib/frontmatter';
 
-const TAG_FILTER_ALL = '__ALL_TAGGED__';
-const TAG_FILTER_NONE = '__NO_TAGS__';
+const TYPE_FILTER_ALL = '__ALL_TYPED__';
+const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FolderTree({
   collapsed,
@@ -18,7 +18,7 @@ export function FolderTree({
   const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  const [sectorsCollapsed, setSectorsCollapsed] = useState(false);
+  const [typesCollapsed, setTypesCollapsed] = useState(false);
 
   const childrenByParent = useMemo(() => {
     const map = new Map<string | null, typeof folders>();
@@ -52,12 +52,13 @@ export function FolderTree({
     return true;
   }, [collapsedIds, expandableFolderIds]);
 
-  const sectors = useMemo(() => {
+  const noteTypes = useMemo(() => {
     const map = new Map<string, number>();
     files.forEach((file) => {
       const parsed = splitFrontmatter(file.content);
-      const items = Array.isArray(parsed.frontmatter.sectors) ? parsed.frontmatter.sectors : [];
-      items.forEach((sector) => map.set(sector, (map.get(sector) ?? 0) + 1));
+      const type = parsed.frontmatter.type?.toString().trim();
+      if (!type) return;
+      map.set(type, (map.get(type) ?? 0) + 1);
     });
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [files]);
@@ -216,34 +217,34 @@ export function FolderTree({
 
       <div className="mt-auto border-t border-slate-200 p-2">
         <div className="mb-2 flex items-center justify-between px-2">
-          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Sectors</h4>
+          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Note types</h4>
           <button
             className="rounded-md p-1 text-slate-600 hover:bg-slate-100"
-            title={sectorsCollapsed ? 'Expand sectors' : 'Hide sectors'}
-            aria-label={sectorsCollapsed ? 'Expand sectors' : 'Hide sectors'}
-            onClick={() => setSectorsCollapsed((prev) => !prev)}
+            title={typesCollapsed ? 'Expand note types' : 'Hide note types'}
+            aria-label={typesCollapsed ? 'Expand note types' : 'Hide note types'}
+            onClick={() => setTypesCollapsed((prev) => !prev)}
           >
-            {sectorsCollapsed ? <ChevronsUpDown size={16} /> : <ChevronsDownUp size={16} />}
+            {typesCollapsed ? <ChevronsUpDown size={16} /> : <ChevronsDownUp size={16} />}
           </button>
         </div>
 
-        {!sectorsCollapsed && (
+        {!typesCollapsed && (
           <>
             <button
-              className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TAG_FILTER_ALL ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
-              onClick={() => selectTag(TAG_FILTER_ALL)}
+              className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TYPE_FILTER_ALL ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
+              onClick={() => selectTag(TYPE_FILTER_ALL)}
             >
-              All sectors
+              All note types
             </button>
             <button
-              className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TAG_FILTER_NONE ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
-              onClick={() => selectTag(TAG_FILTER_NONE)}
+              className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TYPE_FILTER_NONE ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
+              onClick={() => selectTag(TYPE_FILTER_NONE)}
             >
-              No sectors
+              No note type
             </button>
             <div className="max-h-40 space-y-1 overflow-y-auto">
-              {sectors.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No sectors yet.</p>}
-              {sectors.map(([tag, count]) => (
+              {noteTypes.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No note types yet.</p>}
+              {noteTypes.map(([tag, count]) => (
                 <button
                   key={tag}
                   className={`w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === tag ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
