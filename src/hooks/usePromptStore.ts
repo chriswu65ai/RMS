@@ -145,7 +145,7 @@ export const usePromptStore = create<Store>()(
           return { ok: false, reason: 'Linked note is missing, renamed, or deleted.' };
         }
         get().selectFile(file.id, 'research');
-        set({ selectedTaskId: task.id });
+        set({ selectedTaskId: null });
         return { ok: true };
       },
       bootstrap: async () => {

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { usePromptStore } from '../../hooks/usePromptStore';
@@ -33,6 +33,11 @@ export function FolderTree({
 
     return map;
   }, [folders]);
+
+  const templatesFolder = useMemo(
+    () => folders.find((folder) => folder.parent_id === null && folder.name.trim().toLowerCase() === 'templates') ?? null,
+    [folders],
+  );
 
   const expandableFolderIds = useMemo(() => {
     const ids = new Set<string>();
@@ -113,6 +118,8 @@ export function FolderTree({
     const isCollapsed = collapsedIds.has(folder.id);
     const isExpanded = hasChildren && !isCollapsed;
     const count = files.filter((f) => f.folder_id === folder.id).length;
+    const isTemplatesFolder = Boolean(templatesFolder && templatesFolder.id === folder.id);
+    const selectedStyle = selectedFolderId === folder.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-100';
 
     return (
       <div key={folder.id}>
@@ -126,15 +133,16 @@ export function FolderTree({
           >
             {hasChildren ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
           </button>
-          <button
-            className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${
-              selectedFolderId === folder.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'
-            }`}
-            onClick={() => selectFolder(folder.id)}
-          >
-            {getFolderLabel(folder)} <span className="text-xs opacity-70">({count})</span>
+          <button className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm ${isTemplatesFolder ? `w-full font-semibold ${selectedStyle}` : selectedStyle}`} onClick={() => selectFolder(folder.id)}>
+            {isTemplatesFolder && (
+              <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center opacity-80">
+                <FileText size={14} />
+                <span className="absolute -bottom-1 -right-1 inline-flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-700 px-0.5 text-[8px] font-bold leading-none text-white">T</span>
+              </span>
+            )}
+            <span>{getFolderLabel(folder)} <span className="text-xs opacity-70">({count})</span></span>
           </button>
-          <div className="hidden items-center gap-1 group-hover:flex">
+          <div className={`items-center gap-1 ${isTemplatesFolder ? 'hidden' : 'hidden group-hover:flex'}`}>
             <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
               const name = await dialog.prompt('Rename folder', getFolderLabel(folder), 'New folder name');
               if (!name) return;
@@ -208,14 +216,22 @@ export function FolderTree({
           </button>
         </div>
       </div>
-      <button className="mx-2 rounded-lg py-2 pl-9 pr-3 text-left text-sm hover:bg-slate-100" onClick={() => selectFolder(null)}>
-        All research notes
+      <button className={`mx-2 flex items-center gap-2 rounded-lg py-2 pl-3 pr-3 text-left text-sm font-semibold ${selectedFolderId === null ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`} onClick={() => selectFolder(null)}>
+        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+          <FileText size={14} />
+        </span>
+        <span>All notes</span>
       </button>
-      <div className="space-y-1 overflow-y-auto p-2">
-        {(childrenByParent.get(null) ?? []).map((folder) => renderFolderNode(folder, 0))}
+      {templatesFolder && (
+        <div className="px-2 pb-1 pt-1">
+          {renderFolderNode(templatesFolder, 0)}
+        </div>
+      )}
+      <div className="flex-1 space-y-1 overflow-y-auto p-2">
+        {(childrenByParent.get(null) ?? []).filter((folder) => !templatesFolder || folder.id !== templatesFolder.id).map((folder) => renderFolderNode(folder, 0))}
       </div>
 
-      <div className="mt-auto border-t border-slate-200 p-2">
+      <div className="border-t border-slate-200 p-2">
         <div className="mb-2 flex items-center justify-between px-2">
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Note types</h4>
           <button
@@ -242,7 +258,7 @@ export function FolderTree({
             >
               No note type
             </button>
-            <div className="max-h-40 space-y-1 overflow-y-auto">
+            <div className="space-y-1">
               {noteTypes.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No note types yet.</p>}
               {noteTypes.map(([tag, count]) => (
                 <button
