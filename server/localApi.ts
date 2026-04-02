@@ -386,16 +386,29 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 404, { error: { message: 'File not found.' } });
         return true;
       }
+      const nextPath = String(payload.path ?? existing.path);
+      const pathChanged = nextPath !== existing.path;
+      const now = new Date().toISOString();
+      const linkedTasks = pathChanged
+        ? queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`)
+        : [];
 
       execSql(`update prompt_files set
         name = ${sqlEscape(payload.name ?? existing.name)},
-        path = ${sqlEscape(payload.path ?? existing.path)},
+        path = ${sqlEscape(nextPath)},
         folder_id = ${payload.folder_id === undefined ? sqlEscape(existing.folder_id) : sqlEscape(payload.folder_id)},
         content = ${sqlEscape(payload.content ?? existing.content)},
         frontmatter_json = ${payload.frontmatter_json === undefined ? sqlEscape(existing.frontmatter_json) : sqlEscape(payload.frontmatter_json ? JSON.stringify(payload.frontmatter_json) : null)},
         is_template = ${payload.is_template === undefined ? sqlEscape(existing.is_template) : sqlEscape(payload.is_template ? 1 : 0)},
-        updated_at = ${sqlEscape(new Date().toISOString())}
+        updated_at = ${sqlEscape(now)}
         where id = ${sqlEscape(fileId)}`);
+
+      if (pathChanged) {
+        execSql(`update new_research_tasks set linked_note_path = ${sqlEscape(nextPath)}, updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        linkedTasks.forEach((task) => {
+          recordTaskEvent(task.id, 'link_path_sync', `Linked note path synced to ${nextPath}.`);
+        });
+      }
       writeJson(res, 200, { error: null });
       return true;
     }

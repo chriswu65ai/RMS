@@ -17,3 +17,4 @@
 - [ ] Import/export still works for markdown + zip workflows.
 - [ ] Editor pane metadata + rename-on-identity-blur still functional.
 - [ ] Templates and file list behavior unchanged in Stock Research route.
+- [ ] Renaming/moving a file from File List updates `linked_note_path` on linked New Research task cards after refresh.
