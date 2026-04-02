@@ -10,6 +10,7 @@ type FolderRow = { id: string; workspace_id: string; parent_id: string | null; n
 type NewResearchTaskRow = {
   id: string;
   topic: string;
+  details: string;
   ticker: string;
   note_type: string;
   assignee: string;
@@ -107,6 +108,7 @@ const ensureInitialized = () => {
   create table if not exists new_research_tasks (
     id text primary key,
     topic text not null default '',
+    details text not null default '',
     ticker text not null,
     note_type text not null default 'Research',
     assignee text not null default '',
@@ -140,6 +142,11 @@ const ensureInitialized = () => {
   }
   try {
     execSql(`alter table new_research_tasks add column linked_note_path text not null default '';`);
+  } catch {
+    // existing DBs may already include this column
+  }
+  try {
+    execSql(`alter table new_research_tasks add column details text not null default '';`);
   } catch {
     // existing DBs may already include this column
   }
@@ -241,7 +248,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
       const now = new Date().toISOString();
       const id = randomUUID();
-      execSql(`insert into new_research_tasks (id, topic, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      execSql(`insert into new_research_tasks (id, topic, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
@@ -273,6 +280,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
       execSql(`update new_research_tasks set
         topic = ${sqlEscape(payload.topic ?? existing.topic)},
+        details = ${sqlEscape(payload.details ?? existing.details)},
         ticker = ${sqlEscape(ticker)},
         note_type = ${sqlEscape(payload.note_type ?? existing.note_type)},
         assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
@@ -287,6 +295,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         where id = ${sqlEscape(taskId)}`);
       const changedFields: string[] = [];
       if (String(payload.topic ?? existing.topic) !== existing.topic) changedFields.push('topic');
+      if (String(payload.details ?? existing.details) !== existing.details) changedFields.push('details');
       if (ticker !== existing.ticker) changedFields.push('ticker');
       if (String(payload.note_type ?? existing.note_type) !== existing.note_type) changedFields.push('note type');
       if (normalizedPriority !== existing.priority) changedFields.push('priority');

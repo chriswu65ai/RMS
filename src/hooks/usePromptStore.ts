@@ -38,12 +38,16 @@ type Store = {
   assignees: string[];
   sectors: string[];
   lastView: AppView;
+  stockFoldersCollapsed: boolean;
+  metadataPanelCollapsed: boolean;
   loading: boolean;
   error: string | null;
   setSearch: (search: string) => void;
   setNoteTypes: (types: string[]) => void;
   setAssignees: (assignees: string[]) => void;
   setLastView: (view: AppView) => void;
+  setStockFoldersCollapsed: (collapsed: boolean) => void;
+  setMetadataPanelCollapsed: (collapsed: boolean) => void;
   setSectors: (sectors: string[]) => void;
   selectFolder: (id: string | null) => void;
   selectFile: (id: string | null, view?: AppView) => void;
@@ -81,6 +85,8 @@ export const usePromptStore = create<Store>()(
       assignees: DEFAULT_SETTINGS.assignees,
       sectors: DEFAULT_SETTINGS.sectors,
       lastView: 'stock-research',
+      stockFoldersCollapsed: false,
+      metadataPanelCollapsed: true,
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
@@ -88,6 +94,8 @@ export const usePromptStore = create<Store>()(
       setAssignees: (assignees) => set({ assignees: normalizeList(assignees) }),
       setSectors: (sectors) => set({ sectors: normalizeList(sectors) }),
       setLastView: (view) => set({ lastView: view }),
+      setStockFoldersCollapsed: (collapsed) => set({ stockFoldersCollapsed: collapsed }),
+      setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'stock-research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
@@ -174,6 +182,8 @@ export const usePromptStore = create<Store>()(
         assignees: state.assignees,
         sectors: state.sectors,
         lastView: state.lastView,
+        stockFoldersCollapsed: state.stockFoldersCollapsed,
+        metadataPanelCollapsed: state.metadataPanelCollapsed,
         selectedTicker: state.selectedTicker,
       }),
     },
