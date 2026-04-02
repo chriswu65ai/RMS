@@ -59,6 +59,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   }, [tasks]);
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
+  const defaultResearchFolder = useMemo(() => folders.find((folder) => folder.path === 'Research') ?? null, [folders]);
 
   const findTickerFolder = (ticker: string, availableFolders: Folder[]) => {
     const normalizedTicker = ticker.trim().toUpperCase();
@@ -68,6 +69,35 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       const path = folder.path.trim().toUpperCase();
       return name === normalizedTicker || path === normalizedTicker || path.endsWith(`/${normalizedTicker}`);
     }) ?? null;
+  };
+
+  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask) => {
+    const ticker = task.ticker.trim().toUpperCase();
+    const selectedFolder = task.research_location_folder_id
+      ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
+      : (task.research_location_path ? (folders.find((folder) => folder.path === task.research_location_path) ?? null) : null);
+    const tickerFolder = findTickerFolder(ticker, folders);
+    const fallbackPath = ticker ? `${defaultResearchFolder ? `${defaultResearchFolder.path}/` : ''}${ticker}` : (defaultResearchFolder?.path ?? 'Root');
+
+    const explicitPath = task.research_location_path.trim();
+    const explicitFolderMissing = Boolean(explicitPath && !selectedFolder);
+
+    const destinationPath = selectedFolder?.path
+      ?? (explicitFolderMissing ? explicitPath : (tickerFolder?.path ?? fallbackPath));
+    const needsFolderCreation = explicitFolderMissing || Boolean(!selectedFolder && ticker && !tickerFolder);
+    const missingFolderName = explicitFolderMissing ? explicitPath : (ticker || '');
+
+    return {
+      selectedPath: selectedFolder?.path || explicitPath || 'Auto (ticker/default)',
+      fallbackPath,
+      destinationPath,
+      needsFolderCreation,
+      missingFolderName,
+      explicitFolderMissing,
+      ticker,
+      selectedFolder,
+      tickerFolder,
+    };
   };
 
   const loadTasks = async () => {
@@ -167,27 +197,25 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   const createNoteFromTask = async (task: NewResearchTask) => {
     if (!workspace) return setError('Workspace is not ready yet.');
-    const ticker = task.ticker.trim().toUpperCase();
+    const preview = resolveDestinationPreview(task);
+    const ticker = preview.ticker;
     if (!ticker) return setError('Ticker is required before creating a note.');
 
     const type = (task.note_type || noteTypes[0] || 'Research').trim();
     const date = toLocalDateInputValue();
     const name = buildCanonicalStockFileName(date, ticker, type);
-    const defaultFolder = folders.find((folder) => folder.path === 'Research') ?? null;
-    const explicitFolder = task.research_location_folder_id
-      ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
-      : (task.research_location_path ? (folders.find((folder) => folder.path === task.research_location_path) ?? null) : null);
-    let targetFolder = explicitFolder ?? findTickerFolder(ticker, folders) ?? defaultFolder;
+    let targetFolder = preview.selectedFolder ?? preview.tickerFolder ?? defaultResearchFolder;
 
-    if (!explicitFolder && !findTickerFolder(ticker, folders) && ticker) {
-      const confirmed = window.confirm(`No folder exists for ticker ${ticker}. A new folder will be created${defaultFolder ? ` under ${defaultFolder.path}` : ''}. Continue?`);
+    if (preview.needsFolderCreation) {
+      const confirmed = window.confirm(`Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
       if (!confirmed) return;
-      const { error: createFolderError } = await createFolder(workspace.id, ticker, defaultFolder);
+      const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
+      const createParent = preview.explicitFolderMissing ? null : defaultResearchFolder;
+      const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
       if (createFolderError) return setError(createFolderError.message);
       await refresh();
-      const expectedPath = defaultFolder ? `${defaultFolder.path}/${ticker}` : ticker;
-      targetFolder = usePromptStore.getState().folders.find((folder) => folder.path === expectedPath) ?? null;
-      if (!targetFolder) return setError(`Folder was created for ${ticker}, but it could not be found.`);
+      targetFolder = usePromptStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
+      if (!targetFolder) return setError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
     }
 
     const existing = files.find((file) => !file.is_template && file.name === name && file.folder_id === (targetFolder?.id ?? null));
@@ -243,6 +271,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     setModalState(null);
     transitionTaskModal(null);
   };
+
+  const modalDestinationPreview = useMemo(
+    () => (modalState ? resolveDestinationPreview(modalState.task) : null),
+    [modalState, folders, defaultResearchFolder],
+  );
 
   return (
     <div className="mt-4 space-y-4">
@@ -316,7 +349,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     research_location_path: matchedFolder?.path ?? prev.task.research_location_path ?? '',
                   },
                 };
-              })} /></label>
+              })} />
+                {modalDestinationPreview && (
+                  <p className={`mt-1 text-xs ${modalDestinationPreview.needsFolderCreation ? 'text-amber-700' : 'text-slate-500'}`}>
+                    {modalDestinationPreview.needsFolderCreation
+                      ? `Folder "${modalDestinationPreview.missingFolderName}" not found. A new folder will be created on note creation.`
+                      : `Ticker folder preview: ${modalDestinationPreview.fallbackPath}`}
+                  </p>
+                )}
+              </label>
               <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
               <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
               <label className="text-sm">Research location<select className="input mt-1" value={modalState.task.research_location_folder_id || ''} onChange={(e) => setModalState((prev) => {
@@ -330,7 +371,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     research_location_path: selectedFolder?.path ?? '',
                   },
                 };
-              })}><option value="">Auto (ticker/default)</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.path}</option>)}</select></label>
+              })}><option value="">Auto (ticker/default)</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.path}</option>)}</select>
+                {modalDestinationPreview && (
+                  <p className={`mt-1 text-xs ${modalDestinationPreview.needsFolderCreation ? 'text-amber-700' : 'text-slate-500'}`}>
+                    {modalDestinationPreview.needsFolderCreation
+                      ? `Destination preview: ${modalDestinationPreview.destinationPath} (will be created).`
+                      : `Destination preview: ${modalDestinationPreview.destinationPath}`}
+                  </p>
+                )}
+              </label>
               <label className="text-sm">Priority<select className="input mt-1" value={modalState.task.priority} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, priority: e.target.value as Priority | '' } } : prev)}><option value="">—</option>{Object.values(Priority).map((value) => <option key={value} value={value}>{PRIORITY_LABEL[value]}</option>)}</select></label>
               <label className="text-sm">Deadline<input className="input mt-1" type="date" value={modalState.task.deadline} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, deadline: e.target.value } } : prev)} /></label>
               <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
