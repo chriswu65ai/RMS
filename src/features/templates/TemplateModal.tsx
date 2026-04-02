@@ -58,11 +58,11 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const tickerInput = await dialog.prompt('Create stock note from template', '', 'Ticker (required)');
+                const tickerInput = await dialog.prompt('Create note from template', '', 'Ticker (required)');
                 if (!tickerInput) return;
-                const typeInput = await dialog.prompt('Create stock note from template', noteTypes[0] ?? 'Research', `Type (${noteTypes.join(', ')})`);
+                const typeInput = await dialog.prompt('Create note from template', noteTypes[0] ?? 'Research', `Type (${noteTypes.join(', ')})`);
                 if (!typeInput) return;
-                const dateInput = await dialog.prompt('Create stock note from template', toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
+                const dateInput = await dialog.prompt('Create note from template', toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
                 if (!dateInput) return;
 
                 const ticker = tickerInput.trim().toUpperCase();
@@ -100,7 +100,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 await refresh();
                 onClose();
               }}
-            ><FilePlus2 size={14} />Create stock note from template</button>
+            ><FilePlus2 size={14} />Create note from template</button>
           </div>
         </div>
       </div>

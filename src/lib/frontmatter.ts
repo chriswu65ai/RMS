@@ -69,16 +69,26 @@ export function splitFrontmatter(markdown: string): { frontmatter: FrontmatterMo
 
 export function composeMarkdown(frontmatter: FrontmatterModel, body: string): string {
   const normalized = normalizeFrontmatter(frontmatter as Record<string, unknown>);
-  const cleaned = Object.fromEntries(
+  const cleanedRaw = Object.fromEntries(
     Object.entries(normalized).filter(([, v]) => v !== '' && v !== undefined && v !== null),
   ) as Record<string, unknown>;
-  if (Object.keys(cleaned).length === 0) return body;
+  if (Object.keys(cleanedRaw).length === 0) return body;
 
-  const sectors = Array.isArray(cleaned.sectors) ? cleaned.sectors : undefined;
-  if (sectors) delete cleaned.sectors;
+  const orderedFrontmatter: Record<string, unknown> = {};
+  const orderedKeys = ['date', 'title', 'ticker', 'sectors', 'recommendation', 'type', 'template', 'starred'];
+  orderedKeys.forEach((key) => {
+    if (key in cleanedRaw) orderedFrontmatter[key] = cleanedRaw[key];
+  });
+  Object.entries(cleanedRaw).forEach(([key, value]) => {
+    if (key in orderedFrontmatter) return;
+    orderedFrontmatter[key] = value;
+  });
+
+  const sectors = Array.isArray(orderedFrontmatter.sectors) ? orderedFrontmatter.sectors : undefined;
+  if (sectors) delete orderedFrontmatter.sectors;
 
   const yamlSections: string[] = [];
-  if (Object.keys(cleaned).length > 0) yamlSections.push(YAML.stringify(cleaned).trimEnd());
+  if (Object.keys(orderedFrontmatter).length > 0) yamlSections.push(YAML.stringify(orderedFrontmatter).trimEnd());
   if (sectors && sectors.length > 0) yamlSections.push(`sectors: ${sectors.join(', ')}`);
 
   return `---\n${yamlSections.join('\n')}\n---\n${body.startsWith('\n') ? body.slice(1) : body}`;
