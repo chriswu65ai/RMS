@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { PanelLeftOpen } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { RecommendationBadge } from './components/shared/RecommendationBadge';
@@ -161,9 +162,22 @@ function NewResearchPage() {
 
 function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolderPanelCollapsed }: { openTemplatePicker: () => void; folderPanelCollapsed: boolean; setFolderPanelCollapsed: (collapsed: boolean) => void }) {
   return (
+<<<<<<< codex/implement-comprehensive-ui-changes-xkwdpv
     <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[48px_minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
       <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
       <section className="border-r border-slate-200 bg-panel"><FileList openTemplatePicker={openTemplatePicker} /></section>
+=======
+    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
+      {!folderPanelCollapsed && <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>}
+      <section className="relative border-r border-slate-200 bg-panel">
+        {folderPanelCollapsed && (
+          <button className="absolute left-2 top-2 z-10 rounded-md border border-slate-300 bg-white p-1.5" onClick={() => setFolderPanelCollapsed(false)} title="Show stocks">
+            <PanelLeftOpen size={14} />
+          </button>
+        )}
+        <FileList openTemplatePicker={openTemplatePicker} />
+      </section>
+>>>>>>> main
       <div className="h-full"><EditorPane /></div>
     </div>
   );
