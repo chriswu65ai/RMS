@@ -131,7 +131,7 @@ function OverviewPage() {
       </div>
       <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-32 px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="w-24 px-3 py-2">Ticker</th><th className="w-[32rem] px-3 py-2">Title</th><th className="w-32 px-3 py-2">Sector</th><th className="w-28 px-3 py-2">Recommendation</th><th className="w-24 px-3 py-2">Type</th><th className="w-24 px-3 py-2">Assignee</th><th className="w-44 px-3 py-2">Updated</th></tr></thead>
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-32 px-3 py-2"><button className="text-xs font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="w-24 px-3 py-2">Ticker</th><th className="w-[32rem] px-3 py-2">Title</th><th className="w-32 px-3 py-2">Sector</th><th className="w-28 px-3 py-2">Recommendation</th><th className="w-24 px-3 py-2">Type</th><th className="w-24 px-3 py-2">Assignee</th><th className="w-44 px-3 py-2">Updated</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.map((row) => (
               <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/research.html'); }}>

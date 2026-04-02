@@ -123,7 +123,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
         </div>
       </div>
       <div className="overflow-y-auto p-2">
-        {visible.length === 0 && <p className="p-3 text-sm text-slate-500">No stock research notes found.</p>}
+        {visible.length === 0 && <p className="p-3 text-center text-sm text-slate-500">No files</p>}
         {visible.map((file) => {
           const { frontmatter } = splitFrontmatter(file.content);
           return (
