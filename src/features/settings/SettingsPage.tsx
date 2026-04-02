@@ -123,7 +123,7 @@ export function SettingsPage() {
               const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
               setNoteTypes(next);
               setNoteTypesInput(next.join(', '));
-            }} placeholder="Research, Earnings, Valuation" />
+            }} placeholder="Event, Earnings, Deepdive, Summary" />
           </section>
 
           <section className="space-y-3">
@@ -132,7 +132,7 @@ export function SettingsPage() {
               const next = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
               setAssignees(next);
               setAssigneesInput(next.join(', '));
-            }} placeholder="me, agent" />
+            }} placeholder="Agent, Me" />
           </section>
 
           <section className="space-y-3">
@@ -141,7 +141,7 @@ export function SettingsPage() {
               const next = sectorsInput.split(',').map((value) => value.trim()).filter(Boolean);
               setSectors(next);
               setSectorsInput(next.join(', '));
-            }} placeholder="Technology, Healthcare, Industrials" />
+            }} placeholder="Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate" />
           </section>
 
           <section className="space-y-3">
