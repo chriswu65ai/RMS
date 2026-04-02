@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
+import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
+import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
 import { composeMarkdown } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
@@ -29,7 +29,7 @@ type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: st
 
 const blankTask = (): NewResearchTaskInput => ({
   topic: '', details: '', ticker: '', note_type: 'Research', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
-  date_completed: '', archived: false, linked_note_file_id: '', linked_note_path: '',
+  date_completed: '', archived: false, linked_note_file_id: '', linked_note_path: '', research_location_folder_id: '', research_location_path: '',
 });
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
@@ -58,6 +58,16 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   }, [tasks]);
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
+
+  const findTickerFolder = (ticker: string, availableFolders: Folder[]) => {
+    const normalizedTicker = ticker.trim().toUpperCase();
+    if (!normalizedTicker) return null;
+    return availableFolders.find((folder) => {
+      const name = folder.name.trim().toUpperCase();
+      const path = folder.path.trim().toUpperCase();
+      return name === normalizedTicker || path === normalizedTicker || path.endsWith(`/${normalizedTicker}`);
+    }) ?? null;
+  };
 
   const loadTasks = async () => {
     setLoading(true);
@@ -149,7 +159,23 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const date = toLocalDateInputValue();
     const name = buildCanonicalStockFileName(date, ticker, type);
     const defaultFolder = folders.find((folder) => folder.path === 'Research') ?? null;
-    const existing = files.find((file) => !file.is_template && file.name === name && file.folder_id === (defaultFolder?.id ?? null));
+    const explicitFolder = task.research_location_folder_id
+      ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
+      : (task.research_location_path ? (folders.find((folder) => folder.path === task.research_location_path) ?? null) : null);
+    let targetFolder = explicitFolder ?? findTickerFolder(ticker, folders) ?? defaultFolder;
+
+    if (!explicitFolder && !findTickerFolder(ticker, folders) && ticker) {
+      const confirmed = window.confirm(`No folder exists for ticker ${ticker}. A new folder will be created${defaultFolder ? ` under ${defaultFolder.path}` : ''}. Continue?`);
+      if (!confirmed) return;
+      const { error: createFolderError } = await createFolder(workspace.id, ticker, defaultFolder);
+      if (createFolderError) return setError(createFolderError.message);
+      await refresh();
+      const expectedPath = defaultFolder ? `${defaultFolder.path}/${ticker}` : ticker;
+      targetFolder = usePromptStore.getState().folders.find((folder) => folder.path === expectedPath) ?? null;
+      if (!targetFolder) return setError(`Folder was created for ${ticker}, but it could not be found.`);
+    }
+
+    const existing = files.find((file) => !file.is_template && file.name === name && file.folder_id === (targetFolder?.id ?? null));
 
     if (existing) {
       const linkedOwner = taskByLinkedFileId.get(existing.id);
@@ -166,11 +192,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const frontmatter: FrontmatterModel = { title: `${ticker} ${type}`, ticker, type, date, recommendation: '' };
     const taskContext = task.details || task.topic || '-';
     const content = composeMarkdown(frontmatter, `# ${ticker} ${type}\n\n## Task context\n${taskContext}\n`);
-    const result = await createFile({ workspaceId: workspace.id, folderId: defaultFolder?.id ?? null, folderPath: defaultFolder?.path ?? null, name, content, frontmatter });
+    const result = await createFile({ workspaceId: workspace.id, folderId: targetFolder?.id ?? null, folderPath: targetFolder?.path ?? null, name, content, frontmatter });
     if (result.error) return setError(result.error.message);
 
     await refresh();
-    const created = usePromptStore.getState().files.find((file) => !file.is_template && file.path === `${defaultFolder?.path ? `${defaultFolder.path}/` : ''}${name}`);
+    const created = usePromptStore.getState().files.find((file) => !file.is_template && file.path === `${targetFolder?.path ? `${targetFolder.path}/` : ''}${name}`);
     if (!created) return setError('Note created, but it could not be selected automatically.');
 
     const updatedTask = await updateNewResearchTask(task.id, { ...task, linked_note_file_id: created.id, linked_note_path: created.path });
@@ -242,9 +268,34 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
             <h3 className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.topic} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, topic: e.target.value } } : prev)} /></label>
-              <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, ticker: e.target.value.toUpperCase() } } : prev)} /></label>
+              <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => {
+                if (!prev) return prev;
+                const ticker = e.target.value.toUpperCase();
+                const matchedFolder = findTickerFolder(ticker, folders);
+                return {
+                  ...prev,
+                  task: {
+                    ...prev.task,
+                    ticker,
+                    research_location_folder_id: matchedFolder?.id ?? prev.task.research_location_folder_id ?? '',
+                    research_location_path: matchedFolder?.path ?? prev.task.research_location_path ?? '',
+                  },
+                };
+              })} /></label>
               <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
               <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
+              <label className="text-sm">Research location<select className="input mt-1" value={modalState.task.research_location_folder_id || ''} onChange={(e) => setModalState((prev) => {
+                if (!prev) return prev;
+                const selectedFolder = folders.find((folder) => folder.id === e.target.value) ?? null;
+                return {
+                  ...prev,
+                  task: {
+                    ...prev.task,
+                    research_location_folder_id: selectedFolder?.id ?? '',
+                    research_location_path: selectedFolder?.path ?? '',
+                  },
+                };
+              })}><option value="">Auto (ticker/default)</option>{folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.path}</option>)}</select></label>
               <label className="text-sm">Priority<select className="input mt-1" value={modalState.task.priority} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, priority: e.target.value as Priority | '' } } : prev)}><option value="">—</option>{Object.values(Priority).map((value) => <option key={value} value={value}>{PRIORITY_LABEL[value]}</option>)}</select></label>
               <label className="text-sm">Deadline<input className="input mt-1" type="date" value={modalState.task.deadline} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, deadline: e.target.value } } : prev)} /></label>
               <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
