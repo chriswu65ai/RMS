@@ -19,7 +19,7 @@ try {
     logLevel: 'silent',
   });
 
-  const { splitFrontmatter } = require(outfile);
+  const { splitFrontmatter, composeMarkdown } = require(outfile);
 
   const markdown = [
     '---',
@@ -50,6 +50,28 @@ try {
   assert.equal(parsed.frontmatter.starred, false);
   assert.equal(typeof parsed.frontmatter.starred, 'boolean');
   assert.equal(parsed.frontmatter.customKey, 'custom value');
+
+  const composed = composeMarkdown(
+    {
+      date: '2026-03-31',
+      title: 'ACME Research',
+      ticker: 'MSFT',
+      sectors: ['software'],
+      recommendation: 'buy',
+      type: 'Research',
+    },
+    '# Body\n',
+  );
+  const frontmatterBlock = composed.split('---\n')[1] ?? '';
+  const lines = frontmatterBlock.trim().split('\n');
+  assert.deepEqual(lines.slice(0, 6), [
+    'date: 2026-03-31',
+    'title: ACME Research',
+    'ticker: MSFT',
+    'sectors: software',
+    'recommendation: buy',
+    'type: Research',
+  ]);
 
   console.log('frontmatter regression check passed');
 } finally {

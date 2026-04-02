@@ -94,24 +94,27 @@ export function composeMarkdown(frontmatter: FrontmatterModel, body: string): st
   ) as Record<string, unknown>;
   if (Object.keys(cleanedRaw).length === 0) return body;
 
-  const orderedFrontmatter: Record<string, unknown> = {};
   const orderedKeys = ['date', 'title', 'ticker', 'sectors', 'recommendation', 'type', 'template', 'starred'];
+  const consumedKeys = new Set<string>();
+  const lines: string[] = [];
+
   orderedKeys.forEach((key) => {
-    if (key in cleanedRaw) orderedFrontmatter[key] = cleanedRaw[key];
+    if (!(key in cleanedRaw)) return;
+    consumedKeys.add(key);
+    if (key === 'sectors') {
+      const sectors = Array.isArray(cleanedRaw.sectors) ? cleanedRaw.sectors : [];
+      if (sectors.length > 0) lines.push(`sectors: ${sectors.join(', ')}`);
+      return;
+    }
+    lines.push(YAML.stringify({ [key]: cleanedRaw[key] }).trimEnd());
   });
+
   Object.entries(cleanedRaw).forEach(([key, value]) => {
-    if (key in orderedFrontmatter) return;
-    orderedFrontmatter[key] = value;
+    if (consumedKeys.has(key)) return;
+    lines.push(YAML.stringify({ [key]: value }).trimEnd());
   });
 
-  const sectors = Array.isArray(orderedFrontmatter.sectors) ? orderedFrontmatter.sectors : undefined;
-  if (sectors) delete orderedFrontmatter.sectors;
-
-  const yamlSections: string[] = [];
-  if (Object.keys(orderedFrontmatter).length > 0) yamlSections.push(YAML.stringify(orderedFrontmatter).trimEnd());
-  if (sectors && sectors.length > 0) yamlSections.push(`sectors: ${sectors.join(', ')}`);
-
-  return `---\n${yamlSections.join('\n')}\n---\n${body.startsWith('\n') ? body.slice(1) : body}`;
+  return `---\n${lines.join('\n')}\n---\n${body.startsWith('\n') ? body.slice(1) : body}`;
 }
 
 export function fileToNoteModel(file: PromptFile): Note {
