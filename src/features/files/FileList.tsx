@@ -16,8 +16,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   const [moveFolderId, setMoveFolderId] = useState<string>('');
 
   const visible = useMemo(() => {
+    const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
+    const selectedFolderPath = selectedFolder?.path.toLowerCase() ?? '';
+    const viewingTemplateFolder = selectedFolderPath.includes('template');
+
     const filtered = files.filter((file) => {
-      if (file.is_template) return false;
+      if (!viewingTemplateFolder && file.is_template) return false;
       const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
       if (!folderMatch) return false;
 
@@ -44,7 +48,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     });
 
     return [...starred, ...regular];
-  }, [files, search, selectedFolderId, selectedTag]);
+  }, [files, folders, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
 
@@ -92,7 +96,6 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 type: payload.type,
                 date: payload.date,
                 recommendation: '',
-                stock_recommendation: '',
               };
               const content = composeMarkdown(frontmatter, '');
               const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: payload.fileName, content, frontmatter });

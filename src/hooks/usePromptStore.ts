@@ -7,6 +7,7 @@ import { splitFrontmatter } from '../lib/frontmatter';
 const DEFAULT_SETTINGS: SettingsList = {
   noteTypes: ['Research', 'Earnings', 'Valuation', 'Catalyst'],
   assignees: ['me', 'agent'],
+  sectors: ['Technology', 'Healthcare', 'Financials', 'Consumer', 'Energy'],
 };
 
 const normalizeList = (items: string[]) => {
@@ -35,6 +36,7 @@ type Store = {
   search: string;
   noteTypes: string[];
   assignees: string[];
+  sectors: string[];
   lastView: AppView;
   loading: boolean;
   error: string | null;
@@ -42,6 +44,7 @@ type Store = {
   setNoteTypes: (types: string[]) => void;
   setAssignees: (assignees: string[]) => void;
   setLastView: (view: AppView) => void;
+  setSectors: (sectors: string[]) => void;
   selectFolder: (id: string | null) => void;
   selectFile: (id: string | null, view?: AppView) => void;
   selectTag: (tag: string | null) => void;
@@ -76,12 +79,14 @@ export const usePromptStore = create<Store>()(
       search: '',
       noteTypes: DEFAULT_SETTINGS.noteTypes,
       assignees: DEFAULT_SETTINGS.assignees,
+      sectors: DEFAULT_SETTINGS.sectors,
       lastView: 'stock-research',
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
       setNoteTypes: (types) => set({ noteTypes: normalizeList(types) }),
       setAssignees: (assignees) => set({ assignees: normalizeList(assignees) }),
+      setSectors: (sectors) => set({ sectors: normalizeList(sectors) }),
       setLastView: (view) => set({ lastView: view }),
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'stock-research') => {
@@ -167,6 +172,7 @@ export const usePromptStore = create<Store>()(
       partialize: (state) => ({
         noteTypes: state.noteTypes,
         assignees: state.assignees,
+        sectors: state.sectors,
         lastView: state.lastView,
         selectedTicker: state.selectedTicker,
       }),

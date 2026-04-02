@@ -5,6 +5,7 @@ import type { FrontmatterModel } from '../../types/models';
 type Props = {
   frontmatter: FrontmatterModel;
   noteTypes: string[];
+  sectors: string[];
   onChange: (f: FrontmatterModel) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -21,11 +22,11 @@ const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; la
   { value: 'avoid', label: 'Avoid' },
 ];
 
-export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange, onIdentityBlur }: Props) {
-  const [sectorsInput, setSectorsInput] = useState((frontmatter.sectors ?? []).join(', '));
+export function MetadataPanel({ frontmatter, noteTypes, sectors, onChange, collapsed, onToggleCollapsed, showMetadata, onShowMetadataChange, onIdentityBlur }: Props) {
+  const [selectedSector, setSelectedSector] = useState(frontmatter.sectors?.[0] ?? '');
 
   useEffect(() => {
-    setSectorsInput((frontmatter.sectors ?? []).join(', '));
+    setSelectedSector(frontmatter.sectors?.[0] ?? '');
   }, [frontmatter.sectors]);
 
   if (collapsed) {
@@ -50,7 +51,7 @@ export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onT
       <div className="flex items-center justify-between py-2 pl-3 pr-4">
         <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <BadgeInfo size={12} />
-          Stock metadata
+          Metadata
         </h3>
         <button
           className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
@@ -97,20 +98,21 @@ export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onT
             onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
           />
         </label>
-        <label className="block text-xs text-slate-500">Sectors (comma separated)
-          <input
-            type="text"
+        <label className="block text-xs text-slate-500">Sector
+          <select
             className="input mt-1"
-            value={sectorsInput}
-            onChange={(e) => {
-              setSectorsInput(e.target.value);
+            value={selectedSector}
+            onChange={(event) => {
+              const sector = event.target.value;
+              setSelectedSector(sector);
+              onChange({ ...frontmatter, sectors: sector ? [sector] : [] });
             }}
-            onBlur={() => {
-              const nextSectors = sectorsInput.split(',').map((x) => x.trim()).filter(Boolean);
-              onChange({ ...frontmatter, sectors: nextSectors });
-              setSectorsInput(nextSectors.join(', '));
-            }}
-          />
+          >
+            <option value="">—</option>
+            {sectors.map((sector) => (
+              <option key={sector} value={sector}>{sector}</option>
+            ))}
+          </select>
         </label>
         <label className="block text-xs text-slate-500">Recommendation
           <select
@@ -118,7 +120,7 @@ export function MetadataPanel({ frontmatter, noteTypes, onChange, collapsed, onT
             value={frontmatter.recommendation ?? ''}
             onChange={(event) => {
               const recommendation = event.target.value as FrontmatterModel['recommendation'];
-              onChange({ ...frontmatter, recommendation, stock_recommendation: recommendation });
+              onChange({ ...frontmatter, recommendation });
             }}
           >
             {RECOMMENDATIONS.map((item) => (

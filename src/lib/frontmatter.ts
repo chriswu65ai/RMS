@@ -36,7 +36,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
   const stockRecommendation = normalizeRecommendation(normalized.stock_recommendation);
   const finalRecommendation = recommendation || stockRecommendation;
   normalized.recommendation = finalRecommendation;
-  normalized.stock_recommendation = finalRecommendation;
+  delete normalized.stock_recommendation;
 
   if (typeof normalized.title === 'string') normalized.title = normalized.title.trim();
   if (typeof normalized.type === 'string') normalized.type = normalized.type.trim();

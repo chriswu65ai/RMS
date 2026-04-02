@@ -163,7 +163,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       return;
     }
 
-    const frontmatter: FrontmatterModel = { title: `${ticker} ${type}`, ticker, type, date, recommendation: '', stock_recommendation: '' };
+    const frontmatter: FrontmatterModel = { title: `${ticker} ${type}`, ticker, type, date, recommendation: '' };
     const content = composeMarkdown(frontmatter, `# ${ticker} ${type}\n\n## Task context\n${task.topic || '-'}\n`);
     const result = await createFile({ workspaceId: workspace.id, folderId: defaultFolder?.id ?? null, folderPath: defaultFolder?.path ?? null, name, content, frontmatter });
     if (result.error) return setError(result.error.message);
