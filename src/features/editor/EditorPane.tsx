@@ -16,12 +16,11 @@ import { useDialog } from '../../components/ui/DialogProvider';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal } = usePromptStore();
+  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal, editorTab, setEditorTab } = usePromptStore();
   const navigate = useNavigate();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
   const viewRef = useRef<EditorView | null>(null);
-  const [tab, setTab] = useState<'edit' | 'preview' | 'split'>('split');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
@@ -308,14 +307,11 @@ export function EditorPane() {
     const line = doc.lineAt(sel.from);
 
     if (line.text.trim() === '---') {
-      let from = line.from;
-      let to = line.to;
-      if (line.to < doc.length) {
-        to = line.to + 1;
-      } else if (line.from > 1) {
-        from = line.from - 1;
-      }
-      view.dispatch({ changes: { from, to, insert: '' }, scrollIntoView: true });
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: '' },
+        selection: { anchor: line.from },
+        scrollIntoView: true,
+      });
       view.focus();
       return;
     }
@@ -393,13 +389,23 @@ ${merged}`);
         <div className="border-b border-slate-200 bg-white px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex gap-2">
-              {(['edit', 'preview', 'split'] as const).map((t) => (
-                <button key={t} className={`rounded-md px-3 py-1 text-xs ${tab === t ? 'bg-slate-900 text-white' : 'bg-slate-100'}`} onClick={() => setTab(t)}>{t}</button>
+              {([
+                { key: 'edit', label: 'EDIT' },
+                { key: 'split', label: 'SPLIT' },
+                { key: 'preview', label: 'PREVIEW' },
+              ] as const).map((t) => (
+                <button
+                  key={t.key}
+                  className={`rounded-md px-3 py-1 text-xs ${editorTab === t.key ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}
+                  onClick={() => setEditorTab(t.key)}
+                >
+                  {t.label}
+                </button>
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <button className="rounded-md border p-1.5 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="inline" size={14} /></button>
-              <button className="rounded-md border p-1.5 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="inline" size={14} /></button>
+              <button className="rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="mr-1 inline" size={14} />Download</button>
+              <button className="rounded-md border px-2 py-1 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="mr-1 inline" size={14} />Share</button>
               <button className="rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1 inline" size={14} />Copy</button>
               <button
                 className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
@@ -421,12 +427,13 @@ ${merged}`);
               </button>
             </div>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
+          {editorTab !== 'preview' && (
+            <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
             <button className={btn(active.h1)} onClick={() => toggleHeading(1)}>H1</button>
             <button className={btn(active.h2)} onClick={() => toggleHeading(2)}>H2</button>
             <button className={btn(active.h3)} onClick={() => toggleHeading(3)}>H3</button>
-            <button className={btn(active.bold)} onClick={() => toggleWrap('**', 'bold text')}>Bold</button>
-            <button className={btn(active.italic)} onClick={() => toggleWrap('*', 'italic text')}>Italic</button>
+            <button className={btn(active.bold)} onClick={() => toggleWrap('**', 'bold text')}><strong>Bold</strong></button>
+            <button className={btn(active.italic)} onClick={() => toggleWrap('*', 'italic text')}><em>Italic</em></button>
             <button className={btn(active.ul)} onClick={() => toggleLinePrefix('- ')}><List size={14} /></button>
             <button className={btn(active.ol)} onClick={toggleOrderedList}><ListOrdered size={14} /></button>
             <button className={btn(active.task)} onClick={() => toggleLinePrefix('- [ ] ')}><ListTodo size={14} /></button>
@@ -451,11 +458,12 @@ ${merged}`);
               <Table className="inline" size={12} />
             </button>
             <button className="rounded border px-2 py-1" onClick={() => setEmojiOpen(true)} title="Emoji" aria-label="Emoji"><Smile className="inline" size={12} /></button>
-          </div>
+            </div>
+          )}
         </div>
 
-        <div className={`grid min-h-0 flex-1 ${tab === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-          {(tab === 'edit' || tab === 'split') && (
+        <div className={`grid min-h-0 flex-1 ${editorTab === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
+          {(editorTab === 'edit' || editorTab === 'split') && (
             <CodeMirror
               value={editorValue}
               className="min-h-0 flex-1 overflow-auto"
@@ -475,7 +483,7 @@ ${merged}`);
               }}
             />
           )}
-          {(tab === 'preview' || tab === 'split') && (
+          {(editorTab === 'preview' || editorTab === 'split') && (
             <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white px-5 pb-5 pt-2 text-sm">
               {showMetadata && metadataSyntax && (
                 <pre className="mb-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-600">
