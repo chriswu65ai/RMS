@@ -56,7 +56,7 @@ try {
       date: '2026-03-31',
       title: 'ACME Research',
       ticker: 'MSFT',
-      sectors: ['software'],
+      sector: 'software',
       recommendation: 'buy',
       type: 'Research',
     },
@@ -68,7 +68,7 @@ try {
     'date: 2026-03-31',
     'title: ACME Research',
     'ticker: MSFT',
-    'sectors: software',
+    'sector: software',
     'recommendation: buy',
     'type: Research',
   ]);
