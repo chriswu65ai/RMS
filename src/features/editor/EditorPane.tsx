@@ -55,7 +55,7 @@ export function EditorPane() {
   const metadataSyntax = useMemo(() => {
     const withFrontmatterOnly = composeMarkdown(frontmatter, '');
     const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
-    return match ? `---\n${match[1]}\n---` : '';
+    return match ? match[1] : '';
   }, [frontmatter]);
 
 
@@ -390,9 +390,9 @@ ${merged}`);
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex gap-2">
               {([
-                { key: 'edit', label: 'EDIT' },
-                { key: 'split', label: 'SPLIT' },
-                { key: 'preview', label: 'PREVIEW' },
+                { key: 'edit', label: 'Edit' },
+                { key: 'split', label: 'Split' },
+                { key: 'preview', label: 'Preview' },
               ] as const).map((t) => (
                 <button
                   key={t.key}

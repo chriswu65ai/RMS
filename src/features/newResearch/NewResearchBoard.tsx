@@ -59,8 +59,6 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   }, [tasks]);
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
-  const defaultResearchFolder = useMemo(() => folders.find((folder) => folder.path === 'Research') ?? null, [folders]);
-
   const findTickerFolder = (ticker: string, availableFolders: Folder[]) => {
     const normalizedTicker = ticker.trim().toUpperCase();
     if (!normalizedTicker) return null;
@@ -78,7 +76,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
       : (researchLocationPath ? (folders.find((folder) => folder.path === researchLocationPath) ?? null) : null);
     const tickerFolder = findTickerFolder(ticker, folders);
-    const fallbackPath = ticker ? `${defaultResearchFolder ? `${defaultResearchFolder.path}/` : ''}${ticker}` : (defaultResearchFolder?.path ?? 'Root');
+    const fallbackPath = ticker || 'Root';
 
     const explicitPath = researchLocationPath;
     const explicitFolderMissing = Boolean(explicitPath && !selectedFolder);
@@ -205,13 +203,13 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const type = (task.note_type || noteTypes[0] || 'Research').trim();
     const date = toLocalDateInputValue();
     const name = buildCanonicalStockFileName(date, ticker, type);
-    let targetFolder = preview.selectedFolder ?? preview.tickerFolder ?? defaultResearchFolder;
+    let targetFolder = preview.selectedFolder ?? preview.tickerFolder;
 
     if (preview.needsFolderCreation) {
       const confirmed = window.confirm(`Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
       if (!confirmed) return;
       const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
-      const createParent = preview.explicitFolderMissing ? null : defaultResearchFolder;
+      const createParent = null;
       const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
       if (createFolderError) return setError(createFolderError.message);
       await refresh();
@@ -275,7 +273,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   const modalDestinationPreview = useMemo(
     () => (modalState ? resolveDestinationPreview(modalState.task) : null),
-    [modalState, folders, defaultResearchFolder],
+    [modalState, folders],
   );
 
   return (

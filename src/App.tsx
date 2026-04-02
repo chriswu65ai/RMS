@@ -40,12 +40,12 @@ function TopNavigation() {
   );
 }
 
-function CenterLayout({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+function CenterLayout({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-6xl">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mt-2 text-sm text-slate-600">{description}</p>
+        {title ? <h2 className="text-lg font-semibold">{title}</h2> : null}
+        {description ? <p className="mt-2 text-sm text-slate-600">{description}</p> : null}
         {children}
       </div>
     </div>
@@ -121,7 +121,7 @@ function OverviewPage() {
   }), [assigneeFilter, recommendationFilter, rows, sectorFilter, tickerFilter, typeFilter]);
 
   return (
-    <CenterLayout title="Dashboard" description="Daily monitoring dashboard for active stock research notes. Click any row to jump directly into Stock Research Part 1 editing.">
+    <CenterLayout>
       <div className="mt-4 grid gap-2 md:grid-cols-5">
         <select className="input" value={tickerFilter} onChange={(e) => setTickerFilter(e.target.value)}><option value="">All tickers</option>{options.tickers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         <select className="input" value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}><option value="">All sectors</option>{options.sectors.map((value) => <option key={value} value={value}>{value}</option>)}</select>
@@ -149,11 +149,7 @@ function OverviewPage() {
 function NewResearchPage() {
   const { assignees, noteTypes } = usePromptStore();
   return (
-    <CenterLayout title="Progress" description="Track idea-to-completion tasks across Ideas, Researching, and Completed with full SQLite persistence.">
-      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 text-sm">
-        <p><span className="font-medium">Research types:</span> {noteTypes.join(', ')}</p>
-        <p className="mt-2"><span className="font-medium">Assignees:</span> {assignees.join(', ')}</p>
-      </div>
+    <CenterLayout>
       <NewResearchBoard assignees={assignees} noteTypes={noteTypes} />
     </CenterLayout>
   );
