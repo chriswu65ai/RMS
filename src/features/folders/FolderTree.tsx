@@ -120,27 +120,31 @@ export function FolderTree({
     const count = files.filter((f) => f.folder_id === folder.id).length;
     const isTemplatesFolder = Boolean(templatesFolder && templatesFolder.id === folder.id);
     const selectedStyle = selectedFolderId === folder.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-100';
+    const showChevron = hasChildren && !isTemplatesFolder;
 
     return (
       <div key={folder.id}>
         <div className="group flex items-center gap-1" style={{ paddingLeft: `${depth * 14}px` }}>
-          <button
-            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${hasChildren ? 'text-slate-500 hover:bg-slate-100' : 'text-transparent'}`}
-            onClick={() => {
-              if (hasChildren) toggleFolderExpanded(folder.id);
-            }}
-            aria-label={isExpanded ? `Collapse ${getFolderLabel(folder)}` : `Expand ${getFolderLabel(folder)}`}
-          >
-            {hasChildren ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />) : <span />}
-          </button>
-          <button className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm ${isTemplatesFolder ? `w-full font-semibold ${selectedStyle}` : selectedStyle}`} onClick={() => selectFolder(folder.id)}>
+          {showChevron ? (
+            <button
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100"
+              onClick={() => toggleFolderExpanded(folder.id)}
+              aria-label={isExpanded ? `Collapse ${getFolderLabel(folder)}` : `Expand ${getFolderLabel(folder)}`}
+            >
+              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+          ) : null}
+          <button className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm ${isTemplatesFolder ? `w-full pl-3 font-semibold ${selectedStyle}` : selectedStyle}`} onClick={() => selectFolder(folder.id)}>
             {isTemplatesFolder && (
               <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center opacity-80">
                 <FileText size={14} />
                 <span className="absolute -bottom-1 -right-1 inline-flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-700 px-0.5 text-[8px] font-bold leading-none text-white">T</span>
               </span>
             )}
-            <span>{getFolderLabel(folder)} <span className="text-xs opacity-70">({count})</span></span>
+            <span>
+              {getFolderLabel(folder)}
+              {!isTemplatesFolder && <span className="text-xs opacity-70"> ({count})</span>}
+            </span>
           </button>
           <div className={`items-center gap-1 ${isTemplatesFolder ? 'hidden' : 'hidden group-hover:flex'}`}>
             <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
@@ -259,7 +263,6 @@ export function FolderTree({
               No note type
             </button>
             <div className="space-y-1">
-              {noteTypes.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No note types yet.</p>}
               {noteTypes.map(([tag, count]) => (
                 <button
                   key={tag}

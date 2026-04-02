@@ -23,6 +23,7 @@ button { @apply transition; }
 .markdown-preview > :first-child { @apply mt-0; }
 
 .cm-editor .cm-content .cm-header,
-.cm-editor .cm-content .tok-heading {
+.cm-editor .cm-content .tok-heading,
+.cm-editor .cm-content .cm-formatting-header {
   text-decoration: none !important;
 }
