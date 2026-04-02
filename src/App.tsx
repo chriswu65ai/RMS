@@ -32,8 +32,8 @@ function TopNavigation() {
     <div className="flex items-center justify-between py-2">
       <nav className="flex items-center gap-2">
         <NavLink className={navClass} to="/home">Home</NavLink>
-        <NavLink className={navClass} to="/dashboard">Dashboard</NavLink>
-        <NavLink className={navClass} to="/notes">Notes</NavLink>
+        <NavLink className={navClass} to="/tasks.html">Tasks</NavLink>
+        <NavLink className={navClass} to="/research.html">Research</NavLink>
         <NavLink className={navClass} to="/settings">Settings</NavLink>
       </nav>
     </div>
@@ -134,7 +134,7 @@ function OverviewPage() {
           <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="w-32 px-3 py-2"><button className="font-semibold" onClick={() => setDateSortDirection((prev) => prev === 'desc' ? 'asc' : 'desc')}>Date Created {dateSortDirection === 'desc' ? '↓' : '↑'}</button></th><th className="w-24 px-3 py-2">Ticker</th><th className="w-[32rem] px-3 py-2">Title</th><th className="w-32 px-3 py-2">Sector</th><th className="w-28 px-3 py-2">Recommendation</th><th className="w-24 px-3 py-2">Type</th><th className="w-24 px-3 py-2">Assignee</th><th className="w-44 px-3 py-2">Updated</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {filteredRows.map((row) => (
-              <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/notes'); }}>
+              <tr key={row.id} className="cursor-pointer hover:bg-slate-50" onClick={() => { transitionFromOverviewRow(row.id); navigate('/research.html'); }}>
                 <td className="px-3 py-2 text-slate-600">{formatCreatedDate(row.createdAt)}</td><td className="px-3 py-2 font-medium text-slate-900">{row.stock.ticker}</td><td className="px-3 py-2">{row.title}</td><td className="px-3 py-2">{sectorsForRow(row).join(', ') || '—'}</td><td className="px-3 py-2"><RecommendationBadge value={row.stock.recommendation} /></td><td className="px-3 py-2">{row.type}</td><td className="px-3 py-2">{row.assignee}</td><td className="px-3 py-2 text-slate-500">{new Date(row.updatedAt).toLocaleString()}</td>
               </tr>
             ))}
@@ -178,12 +178,12 @@ export function App() {
 
   useEffect(() => {
     if (location.pathname === '/') {
-      navigate(`/${lastView}`, { replace: true });
+      navigate(`/${lastView}.html`, { replace: true });
       return;
     }
     if (location.pathname.startsWith('/home')) setLastView('home');
-    if (location.pathname.startsWith('/dashboard')) setLastView('dashboard');
-    if (location.pathname.startsWith('/notes')) setLastView('notes');
+    if (location.pathname.startsWith('/tasks')) setLastView('tasks');
+    if (location.pathname.startsWith('/research')) setLastView('research');
   }, [lastView, location.pathname, navigate, setLastView]);
 
   const globalResults = useMemo(() => {
@@ -220,8 +220,8 @@ export function App() {
         mobileSidebarOpen={mobileSidebarOpen}
         setMobileSidebarOpen={setMobileSidebarOpen}
         topNav={<TopNavigation />}
-        headerRight={<div className="relative ml-auto flex w-full max-w-2xl items-center gap-2 md:w-2/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/notes'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
-        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}`} replace />} /><Route path="/home" element={<OverviewPage />} /><Route path="/dashboard" element={<NewResearchPage />} /><Route path="/notes" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={stockFoldersCollapsed} setFolderPanelCollapsed={setStockFoldersCollapsed} />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
+        headerRight={<div className="relative ml-auto flex w-full max-w-2xl items-center gap-2 md:w-2/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/research.html'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
+        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}.html`} replace />} /><Route path="/home" element={<OverviewPage />} /><Route path="/home.html" element={<Navigate to="/home" replace />} /><Route path="/tasks" element={<Navigate to="/tasks.html" replace />} /><Route path="/tasks.html" element={<NewResearchPage />} /><Route path="/dashboard" element={<Navigate to="/tasks.html" replace />} /><Route path="/research" element={<Navigate to="/research.html" replace />} /><Route path="/research.html" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={stockFoldersCollapsed} setFolderPanelCollapsed={setStockFoldersCollapsed} />} /><Route path="/notes" element={<Navigate to="/research.html" replace />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
       />
       <TemplateModal open={fileModal} onClose={() => setFileModal(false)} />
     </>

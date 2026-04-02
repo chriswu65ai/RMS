@@ -5,7 +5,7 @@ import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } 
 import { Priority, TaskStatus } from '../../types/models';
 import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
-import { composeMarkdown } from '../../lib/frontmatter';
+import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
 
@@ -35,6 +35,7 @@ const blankTask = (): NewResearchTaskInput => ({
 });
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
+const stripExtension = (value: string) => value.replace(/\.[^/.]+$/, '');
 
 export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]; noteTypes: string[] }) {
   const navigate = useNavigate();
@@ -68,6 +69,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       const name = folder.name.trim().toUpperCase();
       const path = folder.path.trim().toUpperCase();
       return name === normalizedTicker || path === normalizedTicker || path.endsWith(`/${normalizedTicker}`);
+    }) ?? null;
+  };
+  const matchingTemplateForType = (typeValue: string) => {
+    const target = typeValue.trim().toLowerCase();
+    if (!target) return null;
+    return files.find((file) => {
+      if (!file.is_template) return false;
+      if (!file.path.toLowerCase().includes('template')) return false;
+      return stripExtension(file.name).trim().toLowerCase() === target;
     }) ?? null;
   };
 
@@ -193,7 +203,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const openLinkedNote = (task: NewResearchTask) => {
     const transition = transitionTaskToNote(task);
     if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
-    navigate('/notes');
+    navigate('/research.html');
   };
 
   const createNoteFromTask = async (task: NewResearchTask) => {
@@ -233,10 +243,16 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       return;
     }
 
-    const noteTitle = task.topic.trim() || `${ticker} ${type}`;
-    const frontmatter: FrontmatterModel = { title: noteTitle, ticker, type, date, recommendation: '' };
     const taskContext = task.details || task.topic || '-';
-    const content = composeMarkdown(frontmatter, `# ${ticker} ${type}\n\n## Task context\n${taskContext}\n`);
+    const template = matchingTemplateForType(type);
+    const noteTitle = task.topic.trim() || `${ticker} ${type}`;
+    const taskContextBlock = `### Task context\n${taskContext}\n`;
+    const frontmatter: FrontmatterModel = template
+      ? { ...splitFrontmatter(template.content).frontmatter, template: false, title: noteTitle, ticker, type, date }
+      : { title: noteTitle, ticker, type, date, recommendation: '' };
+    const templateBody = template ? splitFrontmatter(template.content).body.trimEnd() : '';
+    const body = templateBody ? `${templateBody}\n\n${taskContextBlock}` : taskContextBlock;
+    const content = composeMarkdown(frontmatter, body);
     const result = await createFile({ workspaceId: workspace.id, folderId: targetFolder?.id ?? null, folderPath: targetFolder?.path ?? null, name, content, frontmatter });
     if (result.error) return setError(result.error.message);
 
@@ -248,7 +264,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updatedTask : item)));
     const transition = transitionTaskToNote(updatedTask, created.id);
     if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
-    navigate('/notes');
+    navigate('/research.html');
   };
 
   useEffect(() => {
@@ -360,7 +376,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                   </p>
                 )}
               </label>
-              <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+              <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+                {matchingTemplateForType(modalState.task.note_type)
+                  ? <p className="mt-1 text-xs text-emerald-700">Template found and will be used.</p>
+                  : null}
+              </label>
               <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
               <label className="text-sm">Research location<select className="input mt-1" value={modalState.task.research_location_folder_id || ''} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;

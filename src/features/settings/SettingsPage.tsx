@@ -118,13 +118,6 @@ export function SettingsPage() {
         <h2 className="text-lg font-semibold">Settings</h2>
         <div className="w-full rounded-xl border border-slate-200 bg-white p-5 space-y-6">
           <section className="space-y-3">
-            <p className="text-sm text-slate-600">Research workspace</p>
-            <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={exportAllFiles}>
-              <Download size={16} /> Export all research notes
-            </button>
-          </section>
-
-          <section className="space-y-3">
             <p className="text-sm text-slate-600">Research Types</p>
             <input className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
               const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
@@ -166,6 +159,13 @@ export function SettingsPage() {
               <Upload size={16} /> {importing ? 'Importing…' : 'Import .md/.zip'}
               <input type="file" className="hidden" accept=".md,.zip" disabled={importing} onChange={importMarkdownFiles} />
             </label>
+          </section>
+
+          <section className="space-y-3">
+            <p className="text-sm text-slate-600">Export markdown</p>
+            <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={exportAllFiles}>
+              <Download size={16} /> Export markdown
+            </button>
           </section>
         </div>
       </div>

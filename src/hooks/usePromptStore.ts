@@ -5,9 +5,21 @@ import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
 
 const DEFAULT_SETTINGS: SettingsList = {
-  noteTypes: ['Research', 'Earnings', 'Valuation', 'Catalyst'],
-  assignees: ['me', 'agent'],
-  sectors: ['Technology', 'Healthcare', 'Financials', 'Consumer', 'Energy'],
+  noteTypes: ['Event', 'Earnings', 'Deepdive', 'Summary'],
+  assignees: ['Agent', 'Me'],
+  sectors: [
+    'Energy',
+    'Materials',
+    'Industrials',
+    'Consumer Discretionary',
+    'Consumer Staples',
+    'Health Care',
+    'Financials',
+    'Information Technology',
+    'Communication Services',
+    'Utilities',
+    'Real Estate',
+  ],
 };
 
 const normalizeList = (items: string[]) => {
@@ -22,7 +34,7 @@ const normalizeList = (items: string[]) => {
   return normalized;
 };
 
-export type AppView = 'home' | 'dashboard' | 'notes';
+export type AppView = 'home' | 'tasks' | 'research';
 export type EditorTab = 'edit' | 'preview' | 'split';
 
 type Store = {
@@ -87,7 +99,7 @@ export const usePromptStore = create<Store>()(
       noteTypes: DEFAULT_SETTINGS.noteTypes,
       assignees: DEFAULT_SETTINGS.assignees,
       sectors: DEFAULT_SETTINGS.sectors,
-      lastView: 'notes',
+      lastView: 'research',
       stockFoldersCollapsed: false,
       metadataPanelCollapsed: true,
       editorTab: 'split',
@@ -102,7 +114,7 @@ export const usePromptStore = create<Store>()(
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
       setEditorTab: (tab) => set({ editorTab: tab }),
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
-      selectFile: (id, view = 'notes') => {
+      selectFile: (id, view = 'research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
         const activeFolderId = get().selectedFolderId;
         const activeTag = get().selectedTag;
@@ -117,22 +129,22 @@ export const usePromptStore = create<Store>()(
       },
       selectTag: (tag) => set({ selectedTag: tag, selectedFolderId: null, selectedFileId: null, selectedTicker: null }),
       transitionFromOverviewRow: (fileId) => {
-        get().selectFile(fileId, 'notes');
+        get().selectFile(fileId, 'research');
       },
       transitionFromSearchResult: (fileId) => {
-        get().selectFile(fileId, 'notes');
+        get().selectFile(fileId, 'research');
         set({ search: '' });
       },
-      transitionTaskModal: (taskId) => set({ selectedTaskId: taskId ?? null, lastView: 'dashboard' }),
+      transitionTaskModal: (taskId) => set({ selectedTaskId: taskId ?? null, lastView: 'tasks' }),
       transitionTaskToNote: (task, createdFileId) => {
         const files = get().files;
         const linkedId = createdFileId ?? task.linked_note_file_id ?? '';
         const file = linkedId ? files.find((item) => item.id === linkedId) : undefined;
         if (!file) {
-          set({ selectedTaskId: task.id, selectedTicker: task.ticker.trim().toUpperCase() || null, lastView: 'dashboard' });
+          set({ selectedTaskId: task.id, selectedTicker: task.ticker.trim().toUpperCase() || null, lastView: 'tasks' });
           return { ok: false, reason: 'Linked note is missing, renamed, or deleted.' };
         }
-        get().selectFile(file.id, 'notes');
+        get().selectFile(file.id, 'research');
         set({ selectedTaskId: task.id });
         return { ok: true };
       },
