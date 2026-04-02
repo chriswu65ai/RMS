@@ -115,59 +115,70 @@ export function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <h2 className="text-lg font-semibold">Settings</h2>
-        <div className="w-full rounded-xl border border-slate-200 bg-white p-5 space-y-6">
-          <section className="space-y-3">
-            <p className="text-sm text-slate-600">Research Types</p>
-            <input className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
-              const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
-              setNoteTypes(next);
-              setNoteTypesInput(next.join(', '));
-            }} placeholder="Event, Earnings, Deepdive, Summary" />
-          </section>
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Metadata</h2>
+          <div className="w-full rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <section className="space-y-3">
+                <p className="text-sm text-slate-600">Note type</p>
+                <input className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
+                  const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
+                  setNoteTypes(next);
+                  setNoteTypesInput(next.join(', '));
+                }} placeholder="Event, Earnings, Deepdive, Summary" />
+              </section>
 
-          <section className="space-y-3">
-            <p className="text-sm text-slate-600">Assignees</p>
-            <input className="input" value={assigneesInput} onChange={(event) => setAssigneesInput(event.target.value)} onBlur={() => {
-              const next = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
-              setAssignees(next);
-              setAssigneesInput(next.join(', '));
-            }} placeholder="Agent, Me" />
-          </section>
+              <section className="space-y-3">
+                <p className="text-sm text-slate-600">Assignees</p>
+                <input className="input" value={assigneesInput} onChange={(event) => setAssigneesInput(event.target.value)} onBlur={() => {
+                  const next = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
+                  setAssignees(next);
+                  setAssigneesInput(next.join(', '));
+                }} placeholder="Agent, Me" />
+              </section>
 
-          <section className="space-y-3">
-            <p className="text-sm text-slate-600">Sectors</p>
-            <input className="input" value={sectorsInput} onChange={(event) => setSectorsInput(event.target.value)} onBlur={() => {
-              const next = sectorsInput.split(',').map((value) => value.trim()).filter(Boolean);
-              setSectors(next);
-              setSectorsInput(next.join(', '));
-            }} placeholder="Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate" />
-          </section>
+              <section className="space-y-3">
+                <p className="text-sm text-slate-600">Sectors</p>
+                <input className="input" value={sectorsInput} onChange={(event) => setSectorsInput(event.target.value)} onBlur={() => {
+                  const next = sectorsInput.split(',').map((value) => value.trim()).filter(Boolean);
+                  setSectors(next);
+                  setSectorsInput(next.join(', '));
+                }} placeholder="Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate" />
+              </section>
+            </div>
+          </div>
+        </section>
 
-          <section className="space-y-3">
-            <p className="text-sm text-slate-600">Import markdown</p>
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              Target folder
-              <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" value={importTargetFolderId} onChange={(event) => setImportTargetFolderId(event.target.value)}>
-                <option value="">Root</option>
-                {folders.slice().sort((a, b) => a.path.localeCompare(b.path)).map((folder) => (
-                  <option key={folder.id} value={folder.id}>{folder.path}</option>
-                ))}
-              </select>
-            </label>
-            <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">
-              <Upload size={16} /> {importing ? 'Importing…' : 'Import .md/.zip'}
-              <input type="file" className="hidden" accept=".md,.zip" disabled={importing} onChange={importMarkdownFiles} />
-            </label>
-          </section>
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Backup</h2>
+          <div className="w-full rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <section className="space-y-3">
+                <p className="text-sm text-slate-600">Import markdown</p>
+                <label className="flex flex-col gap-1 text-xs text-slate-600">
+                  Target folder
+                  <select className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" value={importTargetFolderId} onChange={(event) => setImportTargetFolderId(event.target.value)}>
+                    <option value="">Root</option>
+                    {folders.slice().sort((a, b) => a.path.localeCompare(b.path)).map((folder) => (
+                      <option key={folder.id} value={folder.id}>{folder.path}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">
+                  <Upload size={16} /> {importing ? 'Importing…' : 'Import .md/.zip'}
+                  <input type="file" className="hidden" accept=".md,.zip" disabled={importing} onChange={importMarkdownFiles} />
+                </label>
+              </section>
 
-          <section className="space-y-3">
-            <p className="text-sm text-slate-600">Export markdown</p>
-            <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={exportAllFiles}>
-              <Download size={16} /> Export markdown
-            </button>
-          </section>
-        </div>
+              <section className="space-y-3">
+                <p className="text-sm text-slate-600">Export markdown</p>
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={exportAllFiles}>
+                  <Download size={16} /> Export markdown
+                </button>
+              </section>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   );
