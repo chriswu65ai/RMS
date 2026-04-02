@@ -21,3 +21,8 @@ button { @apply transition; }
 .markdown-preview th { @apply border border-slate-300 bg-slate-50 px-2 py-1 text-left font-semibold; }
 .markdown-preview td { @apply border border-slate-300 px-2 py-1 align-top; }
 .markdown-preview > :first-child { @apply mt-0; }
+
+.cm-editor .cm-content .cm-header,
+.cm-editor .cm-content .tok-heading {
+  text-decoration: none !important;
+}

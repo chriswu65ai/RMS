@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
@@ -299,7 +300,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   return (
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <button className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white" onClick={() => { setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } }); setActivityExpanded(false); transitionTaskModal('new'); }}>+ Add task</button>
+        <button className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-2 py-1 text-xs text-white" onClick={() => { setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } }); setActivityExpanded(false); transitionTaskModal('new'); }}><Plus size={14} />Add task</button>
         <label className="inline-flex items-center gap-2 text-sm text-slate-600"><input checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} type="checkbox" />Show archived</label>
       </div>
 
@@ -376,7 +377,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 )}
               </label>
               <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
-              <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+              <label className="text-sm">Note type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
                 {matchingTemplateForType(modalState.task.note_type)
                   ? <p className="mt-1 text-xs text-emerald-700">Template found and will be used.</p>
                   : null}

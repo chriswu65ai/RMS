@@ -537,6 +537,11 @@ ${merged}`);
                   key={emoji}
                   className={`rounded-lg border px-2 py-2 text-xl ${selectedEmoji === emoji ? 'border-slate-900 bg-slate-100' : 'border-slate-200'}`}
                   onClick={() => setSelectedEmoji(emoji)}
+                  onDoubleClick={() => {
+                    setSelectedEmoji(emoji);
+                    insertAndMoveCaretRight(emoji);
+                    setEmojiOpen(false);
+                  }}
                 >
                   {emoji}
                 </button>
