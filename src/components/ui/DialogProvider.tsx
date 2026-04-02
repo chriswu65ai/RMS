@@ -7,12 +7,14 @@ type DialogState = {
   title: string;
   message?: string;
   defaultValue?: string;
+  options?: string[];
   validate?: (value: string) => string | null;
   resolve: (value: boolean | string | null) => void;
 } | null;
 
 type PromptOptions = {
   validate?: (value: string) => string | null;
+  options?: string[];
 };
 
 type DialogAPI = {
@@ -28,11 +30,11 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [inputValue, setInputValue] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  const open = useCallback((kind: DialogKind, title: string, message?: string, defaultValue?: string, validate?: (value: string) => string | null) => {
+  const open = useCallback((kind: DialogKind, title: string, message?: string, defaultValue?: string, validate?: (value: string) => string | null, options?: string[]) => {
     return new Promise<boolean | string | null>((resolve) => {
       setInputValue(defaultValue ?? '');
       setValidationError(null);
-      setDialog({ kind, title, message, defaultValue, validate, resolve });
+      setDialog({ kind, title, message, defaultValue, validate, options, resolve });
     });
   }, []);
 
@@ -57,7 +59,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       await open('alert', title, message);
     },
     confirm: async (title, message) => open('confirm', title, message) as Promise<boolean>,
-    prompt: async (title, defaultValue, message, options) => open('prompt', title, message, defaultValue, options?.validate) as Promise<string | null>,
+    prompt: async (title, defaultValue, message, options) => open('prompt', title, message, defaultValue, options?.validate, options?.options) as Promise<string | null>,
   }), [open]);
 
   return (
@@ -69,17 +71,30 @@ export function DialogProvider({ children }: { children: ReactNode }) {
             <h3 className="text-sm font-semibold text-slate-900">{dialog.title}</h3>
             {dialog.message && <p className="mt-2 text-sm text-slate-600">{dialog.message}</p>}
             {dialog.kind === 'prompt' && (
-              <input
-                className="input mt-3"
-                autoFocus
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    resolvePrompt();
-                  }
-                }}
-              />
+              dialog.options && dialog.options.length > 0 ? (
+                <select
+                  className="input mt-3"
+                  autoFocus
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                >
+                  {dialog.options.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="input mt-3"
+                  autoFocus
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      resolvePrompt();
+                    }
+                  }}
+                />
+              )
             )}
             {dialog.kind === 'prompt' && validationError && (
               <p className="mt-2 text-sm text-red-600">{validationError}</p>

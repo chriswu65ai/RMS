@@ -105,12 +105,13 @@ export const usePromptStore = create<Store>()(
       selectFile: (id, view = 'stock-research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
         const activeFolderId = get().selectedFolderId;
+        const activeTag = get().selectedTag;
         const nextFolderId = activeFolderId === null ? null : (file?.folder_id ?? null);
         set({
           selectedFileId: file?.id ?? null,
           selectedTicker: toSelectedTicker(file),
           selectedFolderId: nextFolderId,
-          selectedTag: null,
+          selectedTag: activeTag,
           lastView: view,
         });
       },
