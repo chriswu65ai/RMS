@@ -1,4 +1,4 @@
-import { CopyPlus, FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
+import { FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
@@ -143,11 +143,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
-                  const tickerInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker');
+                  const tickerInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker');
                   if (!tickerInput) return;
-                  const typeInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.type?.toString() ?? (noteTypes[0] ?? 'Research'), `Type (${noteTypes.join(', ')})`);
+                  const typeInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.type?.toString() ?? (noteTypes[0] ?? 'Research'), 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
                   if (!typeInput) return;
-                  const dateInput = await dialog.prompt('Rename stock note', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
+                  const dateInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
                   if (!dateInput) return;
                   const name = buildCanonicalStockFileName(dateInput.trim(), tickerInput.trim().toUpperCase(), typeInput.trim());
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
@@ -156,18 +156,6 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   await updateFile(file.id, { name, path });
                   await refresh();
                 }}><Pencil size={14} /></button>
-                <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
-                  const payload = await promptForCanonicalInputs();
-                  if (!payload || !workspace) return;
-                  const folder = folders.find((f) => f.id === file.folder_id) ?? null;
-                  const duplicate = hasDuplicateInFolder(folder?.id ?? null, payload.fileName);
-                  if (duplicate) return dialog.alert('Duplicate file', 'A file with this name already exists in this folder.');
-                  const parsed = splitFrontmatter(file.content);
-                  const clonedFrontmatter = { ...parsed.frontmatter, template: false, ticker: payload.ticker, type: payload.type, date: payload.date, title: `${payload.ticker} ${payload.type}` };
-                  const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
-                  await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: payload.fileName, content: clonedContent, isTemplate: false, frontmatter: clonedFrontmatter });
-                  await refresh();
-                }}><CopyPlus size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => {
                   setMoveFileId(file.id);
                   setMoveFolderId(file.folder_id ?? '');

@@ -7,6 +7,7 @@ import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask,
 import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
 import { composeMarkdown } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
+import { useDialog } from '../../components/ui/DialogProvider';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -37,6 +38,7 @@ const todayDate = () => new Date().toISOString().slice(0, 10);
 
 export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]; noteTypes: string[] }) {
   const navigate = useNavigate();
+  const dialog = useDialog();
   const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote, selectedTaskId } = usePromptStore();
   const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -206,7 +208,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     let targetFolder = preview.selectedFolder ?? preview.tickerFolder;
 
     if (preview.needsFolderCreation) {
-      const confirmed = window.confirm(`Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
+      const confirmed = await dialog.confirm('Create note from task', `Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
       if (!confirmed) return;
       const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
       const createParent = null;

@@ -177,7 +177,7 @@ export function FolderTree({
           >
             <PanelLeftClose size={16} />
           </button>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stocks</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Folders</h3>
         </div>
         <div className="flex items-center gap-1">
           <button

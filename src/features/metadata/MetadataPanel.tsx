@@ -67,7 +67,7 @@ export function MetadataPanel({
       <div className="flex items-center justify-between py-2 pl-3 pr-4">
         <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
           <BadgeInfo size={12} />
-          Research metadata
+          Metadata
         </h3>
         <button
           className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
