@@ -23,6 +23,7 @@ const normalizeList = (items: string[]) => {
 };
 
 export type AppView = 'overview' | 'new-research' | 'stock-research';
+export type EditorTab = 'edit' | 'preview' | 'split';
 
 type Store = {
   workspace: Workspace | null;
@@ -40,6 +41,7 @@ type Store = {
   lastView: AppView;
   stockFoldersCollapsed: boolean;
   metadataPanelCollapsed: boolean;
+  editorTab: EditorTab;
   loading: boolean;
   error: string | null;
   setSearch: (search: string) => void;
@@ -48,6 +50,7 @@ type Store = {
   setLastView: (view: AppView) => void;
   setStockFoldersCollapsed: (collapsed: boolean) => void;
   setMetadataPanelCollapsed: (collapsed: boolean) => void;
+  setEditorTab: (tab: EditorTab) => void;
   setSectors: (sectors: string[]) => void;
   selectFolder: (id: string | null) => void;
   selectFile: (id: string | null, view?: AppView) => void;
@@ -87,6 +90,7 @@ export const usePromptStore = create<Store>()(
       lastView: 'stock-research',
       stockFoldersCollapsed: false,
       metadataPanelCollapsed: true,
+      editorTab: 'split',
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
@@ -96,13 +100,14 @@ export const usePromptStore = create<Store>()(
       setLastView: (view) => set({ lastView: view }),
       setStockFoldersCollapsed: (collapsed) => set({ stockFoldersCollapsed: collapsed }),
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
+      setEditorTab: (tab) => set({ editorTab: tab }),
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'stock-research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
         set({
           selectedFileId: file?.id ?? null,
           selectedTicker: toSelectedTicker(file),
-          selectedFolderId: null,
+          selectedFolderId: file?.folder_id ?? null,
           selectedTag: null,
           lastView: view,
         });
@@ -184,6 +189,7 @@ export const usePromptStore = create<Store>()(
         lastView: state.lastView,
         stockFoldersCollapsed: state.stockFoldersCollapsed,
         metadataPanelCollapsed: state.metadataPanelCollapsed,
+        editorTab: state.editorTab,
         selectedTicker: state.selectedTicker,
       }),
     },
