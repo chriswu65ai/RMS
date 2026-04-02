@@ -95,6 +95,8 @@ export type Task = {
   archived: boolean;
   linked_note_file_id: string;
   linked_note_path: string;
+  research_location_folder_id: string;
+  research_location_path: string;
   created_at: string;
   updated_at: string;
 };
@@ -112,6 +114,8 @@ export type TaskInput = {
   archived: boolean;
   linked_note_file_id?: string;
   linked_note_path?: string;
+  research_location_folder_id?: string;
+  research_location_path?: string;
 };
 
 // Backwards-compatible aliases for existing feature modules.

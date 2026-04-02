@@ -37,6 +37,8 @@ export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTas
     archived: Boolean(values.archived),
     linked_note_file_id: values.linked_note_file_id?.trim() ?? '',
     linked_note_path: values.linked_note_path?.trim() ?? '',
+    research_location_folder_id: values.research_location_folder_id?.trim() ?? '',
+    research_location_path: values.research_location_path?.trim() ?? '',
   };
 }
 
@@ -54,6 +56,8 @@ export function mapTaskRowToModel(row: TaskApiRow): NewResearchTask {
     archived: row.archived === true || row.archived === 1 || row.archived === '1',
     linked_note_file_id: row.linked_note_file_id || '',
     linked_note_path: row.linked_note_path || '',
+    research_location_folder_id: row.research_location_folder_id || '',
+    research_location_path: row.research_location_path || '',
   };
 }
 
