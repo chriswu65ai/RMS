@@ -207,7 +207,7 @@ export function FolderTree({
           </button>
         </div>
       </div>
-      <button className="mx-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => selectFolder(null)}>
+      <button className="mx-2 rounded-lg py-2 pl-9 pr-3 text-left text-sm hover:bg-slate-100" onClick={() => selectFolder(null)}>
         All research notes
       </button>
       <div className="space-y-1 overflow-y-auto p-2">

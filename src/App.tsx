@@ -162,6 +162,11 @@ function NewResearchPage() {
 
 function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolderPanelCollapsed }: { openTemplatePicker: () => void; folderPanelCollapsed: boolean; setFolderPanelCollapsed: (collapsed: boolean) => void }) {
   return (
+<<<<<<< codex/implement-comprehensive-ui-changes-xkwdpv
+    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[48px_minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
+      <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
+      <section className="border-r border-slate-200 bg-panel"><FileList openTemplatePicker={openTemplatePicker} /></section>
+=======
     <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
       {!folderPanelCollapsed && <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>}
       <section className="relative border-r border-slate-200 bg-panel">
@@ -172,6 +177,7 @@ function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolder
         )}
         <FileList openTemplatePicker={openTemplatePicker} />
       </section>
+>>>>>>> main
       <div className="h-full"><EditorPane /></div>
     </div>
   );
