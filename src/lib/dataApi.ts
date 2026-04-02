@@ -26,6 +26,7 @@ export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTas
   return {
     ...values,
     topic: values.topic.trim(),
+    details: values.details.trim(),
     ticker: values.ticker.trim().toUpperCase(),
     note_type: values.note_type.trim() || 'Research',
     assignee: values.assignee.trim(),

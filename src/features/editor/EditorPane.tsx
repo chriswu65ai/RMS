@@ -15,14 +15,13 @@ import { useDialog } from '../../components/ui/DialogProvider';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh, noteTypes, sectors } = usePromptStore();
+  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed } = usePromptStore();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
   const viewRef = useRef<EditorView | null>(null);
   const [tab, setTab] = useState<'edit' | 'preview' | 'split'>('split');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
-  const [metadataCollapsed, setMetadataCollapsed] = useState(true);
   const [showMetadata, setShowMetadata] = useState(false);
   const parsed = useMemo(() => splitFrontmatter(file?.content ?? ''), [file?.content]);
   const [body, setBody] = useState(parsed.body);
@@ -368,7 +367,7 @@ ${merged}`);
   };
 
   return (
-    <div className={`grid h-full grid-cols-1 ${metadataCollapsed ? 'lg:grid-cols-[1fr_48px]' : 'lg:grid-cols-[1fr_300px]'}`}>
+    <div className={`grid h-full grid-cols-1 ${metadataPanelCollapsed ? 'lg:grid-cols-[1fr_48px]' : 'lg:grid-cols-[1fr_300px]'}`}>
       <section className="flex min-h-0 flex-col">
         <div className="border-b border-slate-200 bg-white px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -486,8 +485,8 @@ ${merged}`);
             await refresh();
           }
         }}
-        collapsed={metadataCollapsed}
-        onToggleCollapsed={() => setMetadataCollapsed((prev) => !prev)}
+        collapsed={metadataPanelCollapsed}
+        onToggleCollapsed={() => setMetadataPanelCollapsed(!metadataPanelCollapsed)}
         showMetadata={showMetadata}
         onShowMetadataChange={setShowMetadata}
       />

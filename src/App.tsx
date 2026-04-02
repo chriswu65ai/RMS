@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { PanelLeftOpen } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { RecommendationBadge } from './components/shared/RecommendationBadge';
@@ -162,14 +161,9 @@ function NewResearchPage() {
 
 function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolderPanelCollapsed }: { openTemplatePicker: () => void; folderPanelCollapsed: boolean; setFolderPanelCollapsed: (collapsed: boolean) => void }) {
   return (
-    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
-      {!folderPanelCollapsed && <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>}
+    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[48px_minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
+      <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
       <section className="relative border-r border-slate-200 bg-panel">
-        {folderPanelCollapsed && (
-          <button className="absolute left-2 top-2 z-10 rounded-md border border-slate-300 bg-white p-1.5" onClick={() => setFolderPanelCollapsed(false)} title="Show stocks">
-            <PanelLeftOpen size={14} />
-          </button>
-        )}
         <FileList openTemplatePicker={openTemplatePicker} />
       </section>
       <div className="h-full"><EditorPane /></div>
@@ -178,10 +172,9 @@ function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolder
 }
 
 export function App() {
-  const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult } = usePromptStore();
+  const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult, stockFoldersCollapsed, setStockFoldersCollapsed } = usePromptStore();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
-  const [folderPanelCollapsed, setFolderPanelCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -232,7 +225,7 @@ export function App() {
         setMobileSidebarOpen={setMobileSidebarOpen}
         topNav={<TopNavigation />}
         headerRight={<div className="relative mx-auto flex w-full max-w-lg items-center gap-2"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search research notes" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/stock-research'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
-        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}`} replace />} /><Route path="/overview" element={<OverviewPage />} /><Route path="/new-research" element={<NewResearchPage />} /><Route path="/stock-research" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={folderPanelCollapsed} setFolderPanelCollapsed={setFolderPanelCollapsed} />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
+        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}`} replace />} /><Route path="/overview" element={<OverviewPage />} /><Route path="/new-research" element={<NewResearchPage />} /><Route path="/stock-research" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={stockFoldersCollapsed} setFolderPanelCollapsed={setStockFoldersCollapsed} />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
       />
       <TemplateModal open={fileModal} onClose={() => setFileModal(false)} />
     </>

@@ -84,6 +84,7 @@ export type PromptFile = {
 export type Task = {
   id: string;
   topic: string;
+  details: string;
   ticker: string;
   note_type: string;
   assignee: string;
@@ -100,6 +101,7 @@ export type Task = {
 
 export type TaskInput = {
   topic: string;
+  details: string;
   ticker: string;
   note_type: string;
   assignee: string;
