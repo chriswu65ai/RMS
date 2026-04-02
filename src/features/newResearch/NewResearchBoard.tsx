@@ -301,7 +301,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-2 py-1 text-xs text-white" onClick={() => { setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } }); setActivityExpanded(false); transitionTaskModal('new'); }}><Plus size={14} />Add task</button>
-        <label className="inline-flex items-center gap-2 text-sm text-slate-600"><input checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} type="checkbox" />Show archived</label>
+        <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+          <input
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+          />
+          Show archived
+        </label>
       </div>
 
       {error && <PageState kind="error" message={error} />}

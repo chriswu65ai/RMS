@@ -59,7 +59,7 @@ export function EditorPane() {
   }, [frontmatter]);
 
 
-  if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a stock research note.</div>;
+  if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a note to view</div>;
 
   const merged = composeMarkdown(frontmatter, body);
   const editorValue = showMetadata ? merged : body;
