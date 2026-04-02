@@ -3,19 +3,21 @@ import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
 import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile, Table } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { usePromptStore } from '../../hooks/usePromptStore';
 import { buildCanonicalStockFileName } from '../../hooks/usePromptStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
-import { updateFile } from '../../lib/dataApi';
-import type { FrontmatterModel } from '../../types/models';
+import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
+import type { FrontmatterModel, NewResearchTask } from '../../types/models';
 import { MetadataPanel } from '../metadata/MetadataPanel';
 import { useDialog } from '../../components/ui/DialogProvider';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed } = usePromptStore();
+  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal } = usePromptStore();
+  const navigate = useNavigate();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
   const viewRef = useRef<EditorView | null>(null);
@@ -23,6 +25,7 @@ export function EditorPane() {
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
+  const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
   const parsed = useMemo(() => splitFrontmatter(file?.content ?? ''), [file?.content]);
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
@@ -31,6 +34,24 @@ export function EditorPane() {
     setBody(parsed.body);
     setFrontmatter(parsed.frontmatter);
   }, [file?.id, parsed.body, parsed.frontmatter]);
+
+  useEffect(() => {
+    if (!selectedFileId) {
+      setLinkedTask(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tasks = await listNewResearchTasks();
+        if (cancelled) return;
+        setLinkedTask(tasks.find((task) => task.linked_note_file_id === selectedFileId) ?? null);
+      } catch {
+        if (!cancelled) setLinkedTask(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedFileId]);
 
   const metadataSyntax = useMemo(() => {
     const withFrontmatterOnly = composeMarkdown(frontmatter, '');
@@ -489,6 +510,13 @@ ${merged}`);
         onToggleCollapsed={() => setMetadataPanelCollapsed(!metadataPanelCollapsed)}
         showMetadata={showMetadata}
         onShowMetadataChange={setShowMetadata}
+        canViewTask={linkedTask !== null}
+        onViewTask={() => {
+          if (!linkedTask) return;
+          transitionTaskModal(linkedTask.id);
+          navigate('/new-research');
+        }}
+        viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.topic || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
       />
 
       {emojiOpen && (
