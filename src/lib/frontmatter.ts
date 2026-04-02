@@ -14,6 +14,13 @@ export function normalizeRecommendation(value: unknown): Recommendation | '' {
 export function normalizeFrontmatter(input: Record<string, unknown> | null | undefined): FrontmatterModel {
   if (!input) return {};
   const normalized = { ...input } as Record<string, unknown>;
+
+  Object.entries(normalized).forEach(([key, value]) => {
+    if (typeof value === 'string') {
+      normalized[key] = value.trim();
+    }
+  });
+
   delete normalized.templateType;
 
   if (typeof normalized.tags === 'string' && !Array.isArray(normalized.sectors)) {
@@ -30,6 +37,18 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
 
   if (typeof normalized.ticker === 'string') {
     normalized.ticker = normalized.ticker.trim().toUpperCase();
+  }
+
+  if (typeof normalized.template === 'string') {
+    const value = normalized.template.trim().toLowerCase();
+    if (value === 'true') normalized.template = true;
+    if (value === 'false') normalized.template = false;
+  }
+
+  if (typeof normalized.starred === 'string') {
+    const value = normalized.starred.trim().toLowerCase();
+    if (value === 'true') normalized.starred = true;
+    if (value === 'false') normalized.starred = false;
   }
 
   const recommendation = normalizeRecommendation(normalized.recommendation);
@@ -54,9 +73,10 @@ export function splitFrontmatter(markdown: string): { frontmatter: FrontmatterMo
 
   const [, rawYaml] = match;
   const body = markdown.slice(match[0].length);
+  const normalizedYaml = rawYaml.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   try {
-    const parsed = YAML.parse(rawYaml);
+    const parsed = YAML.parse(normalizedYaml);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { frontmatter: {}, body };
     }
