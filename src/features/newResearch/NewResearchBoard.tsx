@@ -27,6 +27,12 @@ const PRIORITY_STYLE: Record<Priority, string> = {
   [Priority.Medium]: 'bg-amber-100 text-amber-700 border-amber-200',
   [Priority.Low]: 'bg-emerald-100 text-emerald-700 border-emerald-200',
 };
+const PRIORITY_RANK: Record<Priority | '', number> = {
+  [Priority.High]: 0,
+  [Priority.Medium]: 1,
+  [Priority.Low]: 2,
+  '': 3,
+};
 
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
 
@@ -63,6 +69,10 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   }, [tasks]);
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
+  const prioritizedTasks = useMemo(
+    () => [...visibleTasks].sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]),
+    [visibleTasks],
+  );
   const findTickerFolder = (ticker: string, availableFolders: Folder[]) => {
     const normalizedTicker = ticker.trim().toUpperCase();
     if (!normalizedTicker) return null;
@@ -323,9 +333,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               await moveTask(task, column.key);
               setDraggingId(null);
             }}>
-              <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold text-slate-800">{column.label}</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{visibleTasks.filter((task) => task.status === column.key).length}</span></div>
+              <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold text-slate-800">{column.label}</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{prioritizedTasks.filter((task) => task.status === column.key).length}</span></div>
               <div className="space-y-2">
-                {visibleTasks.filter((task) => task.status === column.key).map((task) => (
+                {prioritizedTasks.filter((task) => task.status === column.key).map((task) => (
                   <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3" draggable onDragStart={() => setDraggingId(task.id)} onDragEnd={() => setDraggingId(null)}>
                     <div className="flex items-start justify-between gap-3">
                       <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.topic || 'Untitled title'}</p><p className="text-xs font-semibold text-slate-700">{task.ticker}</p></button>
@@ -346,7 +356,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{task.linked_note_file_id ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
-                {visibleTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
+                {prioritizedTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
               </div>
             </div>
           ))}

@@ -24,8 +24,8 @@ export function AppShell({ headerRight, topNav, main, mobileSidebarOpen, setMobi
         </div>
       </header>
       {topNav && <div className="shrink-0 border-b border-slate-200 bg-white px-4"><div className="w-full">{topNav}</div></div>}
-      <div className="flex-1 min-h-0">
-        <main className="min-h-0 h-full">{main}</main>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <main className="h-full min-h-0 overflow-hidden">{main}</main>
       </div>
 
       {mobileSidebarOpen && (

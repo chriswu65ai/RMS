@@ -197,10 +197,6 @@ begin;
 insert into workspaces (id, name, created_at, updated_at) values (${sqlEscape(workspaceId)}, 'Workspace', ${sqlEscape(now)}, ${sqlEscape(now)});
 insert into folders (id, workspace_id, parent_id, name, path, created_at, updated_at) values (${sqlEscape(researchFolderId)}, ${sqlEscape(workspaceId)}, NULL, 'Research', 'Research', ${sqlEscape(now)}, ${sqlEscape(now)});
 insert into folders (id, workspace_id, parent_id, name, path, created_at, updated_at) values (${sqlEscape(templatesFolderId)}, ${sqlEscape(workspaceId)}, NULL, 'Templates', 'Templates', ${sqlEscape(now)}, ${sqlEscape(now)});
-insert into prompt_files (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at)
-values (${sqlEscape(randomUUID())}, ${sqlEscape(workspaceId)}, ${sqlEscape(researchFolderId)}, 'weekly-research.md', 'Research/weekly-research.md', ${sqlEscape(`---\ntitle: Weekly Research\nsectors: [research, finance]\nrecommendation: hold\nstock_recommendation: hold\n---\n# Weekly Stock Research\nSummarize the key market themes for this week.`)}, ${sqlEscape('{"title":"Weekly Research","sectors":["research","finance"],"recommendation":"hold","stock_recommendation":"hold"}')}, 0, ${sqlEscape(now)}, ${sqlEscape(now)});
-insert into prompt_files (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at)
-values (${sqlEscape(randomUUID())}, ${sqlEscape(workspaceId)}, ${sqlEscape(templatesFolderId)}, 'research-template.md', 'Templates/research-template.md', ${sqlEscape(`---\ntitle: Weekly Research\ntemplate: true\nsectors: [research]\nrecommendation: ''\nstock_recommendation: ''\n---\n# Weekly Stock Research\n## Context\n## Questions\n## Deliverable`)}, ${sqlEscape('{"title":"Weekly Research","template":true,"sectors":["research"],"recommendation":"","stock_recommendation":""}')}, 1, ${sqlEscape(now)}, ${sqlEscape(now)});
 commit;
 `);
 

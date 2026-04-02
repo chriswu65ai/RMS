@@ -23,10 +23,17 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
 
   delete normalized.templateType;
 
-  if (typeof normalized.tags === 'string' && !Array.isArray(normalized.sectors)) {
-    normalized.sectors = normalized.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
+  if (typeof normalized.tags === 'string' && typeof normalized.sector !== 'string' && !Array.isArray(normalized.sectors)) {
+    normalized.sector = normalized.tags.split(',').map((tag) => tag.trim()).filter(Boolean)[0] ?? '';
   }
   delete normalized.tags;
+
+  if (typeof normalized.sector !== 'string' && Array.isArray(normalized.sectors)) {
+    normalized.sector = normalized.sectors.map((item) => String(item).trim()).filter(Boolean)[0] ?? '';
+  }
+  if (typeof normalized.sector === 'string') {
+    normalized.sector = normalized.sector.trim();
+  }
 
   if (typeof normalized.sectors === 'string') {
     normalized.sectors = normalized.sectors.split(',').map((item) => item.trim()).filter(Boolean);
@@ -34,6 +41,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
   if (Array.isArray(normalized.sectors)) {
     normalized.sectors = normalized.sectors.map((item) => String(item).trim()).filter(Boolean);
   }
+  delete normalized.sectors;
 
   if (typeof normalized.ticker === 'string') {
     normalized.ticker = normalized.ticker.trim().toUpperCase();
@@ -94,16 +102,16 @@ export function composeMarkdown(frontmatter: FrontmatterModel, body: string): st
   ) as Record<string, unknown>;
   if (Object.keys(cleanedRaw).length === 0) return body;
 
-  const orderedKeys = ['date', 'title', 'ticker', 'sectors', 'recommendation', 'type', 'template', 'starred'];
+  const orderedKeys = ['date', 'title', 'ticker', 'sector', 'recommendation', 'type', 'template', 'starred'];
   const consumedKeys = new Set<string>();
   const lines: string[] = [];
 
   orderedKeys.forEach((key) => {
     if (!(key in cleanedRaw)) return;
     consumedKeys.add(key);
-    if (key === 'sectors') {
-      const sectors = Array.isArray(cleanedRaw.sectors) ? cleanedRaw.sectors : [];
-      if (sectors.length > 0) lines.push(`sectors: ${sectors.join(', ')}`);
+    if (key === 'sector') {
+      const sector = typeof cleanedRaw.sector === 'string' ? cleanedRaw.sector.trim() : '';
+      if (sector) lines.push(`sector: ${sector}`);
       return;
     }
     lines.push(YAML.stringify({ [key]: cleanedRaw[key] }).trimEnd());
@@ -127,7 +135,7 @@ export function fileToNoteModel(file: PromptFile): Note {
     assignee: frontmatter.assignee || '—',
     stock: {
       ticker: frontmatter.ticker || '—',
-      sectors: frontmatter.sectors ?? [],
+      sectors: frontmatter.sector ? [frontmatter.sector] : [],
       recommendation: frontmatter.recommendation ?? '',
     },
     path: file.path,

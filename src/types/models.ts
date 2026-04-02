@@ -61,6 +61,7 @@ export type FrontmatterModel = {
   ticker?: string;
   type?: string;
   date?: string;
+  sector?: string;
   sectors?: string[];
   recommendation?: Recommendation | '';
   assignee?: string;
