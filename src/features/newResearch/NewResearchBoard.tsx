@@ -73,13 +73,14 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask) => {
     const ticker = task.ticker.trim().toUpperCase();
+    const researchLocationPath = (task.research_location_path ?? '').trim();
     const selectedFolder = task.research_location_folder_id
       ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
-      : (task.research_location_path ? (folders.find((folder) => folder.path === task.research_location_path) ?? null) : null);
+      : (researchLocationPath ? (folders.find((folder) => folder.path === researchLocationPath) ?? null) : null);
     const tickerFolder = findTickerFolder(ticker, folders);
     const fallbackPath = ticker ? `${defaultResearchFolder ? `${defaultResearchFolder.path}/` : ''}${ticker}` : (defaultResearchFolder?.path ?? 'Root');
 
-    const explicitPath = task.research_location_path.trim();
+    const explicitPath = researchLocationPath;
     const explicitFolderMissing = Boolean(explicitPath && !selectedFolder);
 
     const destinationPath = selectedFolder?.path
