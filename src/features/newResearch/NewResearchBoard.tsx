@@ -319,11 +319,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                   <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3" draggable onDragStart={() => setDraggingId(task.id)} onDragEnd={() => setDraggingId(null)}>
                     <div className="flex items-start justify-between gap-3">
                       <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.topic || 'Untitled title'}</p><p className="text-xs text-slate-600">{task.ticker}</p></button>
-                      <button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button>
                     </div>
-                    <div className="mt-2 space-y-1 text-xs text-slate-600">
+                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
                       <p>Assignee: {task.assignee || '—'}</p>
-                      <p>Research type: {task.note_type || '—'}</p>
                       <p>
                         Priority:{' '}
                         {task.priority
@@ -333,9 +331,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       <p>Deadline: {task.deadline || '—'}</p>
                       <p>Completed: {task.date_completed || '—'}</p>
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
-                      <p>Linked note: {task.linked_note_path || '—'}</p>
+                      <p className="col-span-2">Linked note: {task.linked_note_path || '—'}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{task.linked_note_file_id ? 'Reopen note' : 'Create note from task'}</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div>
+                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{task.linked_note_file_id ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
                 {visibleTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
@@ -376,12 +374,12 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                   </p>
                 )}
               </label>
+              <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
               <label className="text-sm">Research type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
                 {matchingTemplateForType(modalState.task.note_type)
                   ? <p className="mt-1 text-xs text-emerald-700">Template found and will be used.</p>
                   : null}
               </label>
-              <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
               <label className="text-sm">Research location<select className="input mt-1" value={modalState.task.research_location_folder_id || ''} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;
                 const selectedFolder = folders.find((folder) => folder.id === e.target.value) ?? null;
@@ -402,9 +400,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                   </p>
                 )}
               </label>
+              <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
               <label className="text-sm">Priority<select className="input mt-1" value={modalState.task.priority} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, priority: e.target.value as Priority | '' } } : prev)}><option value="">—</option>{Object.values(Priority).map((value) => <option key={value} value={value}>{PRIORITY_LABEL[value]}</option>)}</select></label>
               <label className="text-sm">Deadline<input className="input mt-1" type="date" value={modalState.task.deadline} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, deadline: e.target.value } } : prev)} /></label>
-              <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
               <label className="text-sm">Date completed<input className="input mt-1" type="date" value={modalState.task.date_completed} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, date_completed: e.target.value } } : prev)} /></label>
               <label className="text-sm md:col-span-2">Details<textarea className="input mt-1 min-h-32" value={modalState.task.details} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, details: e.target.value } } : prev)} /></label>
             </div>
@@ -422,7 +420,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     <ul className="space-y-2">
                       {activityItems.map((item) => (
                         <li key={item.id} className="rounded bg-slate-50 px-2 py-1">
-                          <p>{item.description}</p>
+                          <p>{item.description.endsWith('.') ? item.description.slice(0, -1) : item.description}</p>
                           <p className="text-[11px] text-slate-500">{new Date(item.created_at).toLocaleString()}</p>
                         </li>
                       ))}
