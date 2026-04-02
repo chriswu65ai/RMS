@@ -79,6 +79,15 @@ export function MetadataPanel({
         </button>
       </div>
       <div className="space-y-3 px-4 pb-4">
+        <label className="block text-xs text-slate-500">Date
+          <input
+            type="date"
+            className="input mt-1"
+            value={frontmatter.date ?? ''}
+            onChange={(e) => onChange({ ...frontmatter, date: e.target.value })}
+            onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
+          />
+        </label>
         <label className="block text-xs text-slate-500">Title
           <input className="input mt-1" value={frontmatter.title ?? ''} onChange={(e) => onChange({ ...frontmatter, title: e.target.value })} />
         </label>
@@ -87,30 +96,6 @@ export function MetadataPanel({
             className="input mt-1"
             value={frontmatter.ticker ?? ''}
             onChange={(e) => onChange({ ...frontmatter, ticker: e.target.value.toUpperCase() })}
-            onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
-          />
-        </label>
-        <label className="block text-xs text-slate-500">Note type
-          <select
-            className="input mt-1"
-            value={frontmatter.type ?? ''}
-            onChange={(e) => {
-              onChange({ ...frontmatter, type: e.target.value });
-              onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
-            }}
-          >
-            <option value="" disabled>Select note type</option>
-            {noteTypes.map((type) => (
-              <option key={type} value={type}>{type}</option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-xs text-slate-500">Date
-          <input
-            type="date"
-            className="input mt-1"
-            value={frontmatter.date ?? ''}
-            onChange={(e) => onChange({ ...frontmatter, date: e.target.value })}
             onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
           />
         </label>
@@ -141,6 +126,21 @@ export function MetadataPanel({
           >
             {RECOMMENDATIONS.map((item) => (
               <option key={item.label} value={item.value}>{item.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-slate-500">Note type
+          <select
+            className="input mt-1"
+            value={frontmatter.type ?? ''}
+            onChange={(e) => {
+              onChange({ ...frontmatter, type: e.target.value });
+              onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
+            }}
+          >
+            <option value="" disabled>Select note type</option>
+            {noteTypes.map((type) => (
+              <option key={type} value={type}>{type}</option>
             ))}
           </select>
         </label>

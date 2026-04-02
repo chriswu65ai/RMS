@@ -104,10 +104,12 @@ export const usePromptStore = create<Store>()(
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'stock-research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
+        const activeFolderId = get().selectedFolderId;
+        const nextFolderId = activeFolderId === null ? null : (file?.folder_id ?? null);
         set({
           selectedFileId: file?.id ?? null,
           selectedTicker: toSelectedTicker(file),
-          selectedFolderId: file?.folder_id ?? null,
+          selectedFolderId: nextFolderId,
           selectedTag: null,
           lastView: view,
         });
@@ -202,4 +204,4 @@ export const toLocalDateInputValue = (date = new Date()) => {
 };
 
 export const buildCanonicalStockFileName = (date: string, ticker: string, type: string) =>
-  `${date} ${ticker.trim().toUpperCase()}-${type.trim().toUpperCase()}.md`;
+  `${date} ${ticker.trim().toUpperCase()}-${type.trim().toLowerCase()}.md`;
