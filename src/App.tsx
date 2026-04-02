@@ -43,7 +43,7 @@ function TopNavigation() {
 function CenterLayout({ title, description, children }: { title?: string; description?: string; children: ReactNode }) {
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         {title ? <h2 className="text-lg font-semibold">{title}</h2> : null}
         {description ? <p className="mt-2 text-sm text-slate-600">{description}</p> : null}
         {children}
@@ -220,7 +220,7 @@ export function App() {
         mobileSidebarOpen={mobileSidebarOpen}
         setMobileSidebarOpen={setMobileSidebarOpen}
         topNav={<TopNavigation />}
-        headerRight={<div className="relative ml-auto flex w-full max-w-2xl items-center gap-2 md:w-2/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/research.html'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
+        headerRight={<div className="relative ml-auto flex w-full max-w-xl items-center gap-2 md:w-1/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No non-template matches found." />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/research.html'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
         main={<Routes><Route path="/" element={<Navigate to={`/${lastView}.html`} replace />} /><Route path="/home" element={<OverviewPage />} /><Route path="/tasks.html" element={<NewResearchPage />} /><Route path="/research.html" element={<StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={stockFoldersCollapsed} setFolderPanelCollapsed={setStockFoldersCollapsed} />} /><Route path="/settings" element={<SettingsPage />} /></Routes>}
       />
       <TemplateModal open={fileModal} onClose={() => setFileModal(false)} />

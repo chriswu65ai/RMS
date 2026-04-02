@@ -195,7 +195,8 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   };
 
   const removeTask = async (taskId: string) => {
-    if (!window.confirm('Delete this task permanently?')) return;
+    const confirmed = await dialog.confirm('Delete task', 'Delete this task permanently?');
+    if (!confirmed) return;
     try { await deleteNewResearchTask(taskId); setTasks((prev) => prev.filter((task) => task.id !== taskId)); }
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete task.'); }
   };
@@ -251,7 +252,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       ? { ...splitFrontmatter(template.content).frontmatter, template: false, title: noteTitle, ticker, type, date }
       : { title: noteTitle, ticker, type, date, recommendation: '' };
     const templateBody = template ? splitFrontmatter(template.content).body.trimEnd() : '';
-    const body = templateBody ? `${templateBody}\n\n${taskContextBlock}` : taskContextBlock;
+    const body = templateBody ? `${taskContextBlock}\n${templateBody}` : taskContextBlock;
     const content = composeMarkdown(frontmatter, body);
     const result = await createFile({ workspaceId: workspace.id, folderId: targetFolder?.id ?? null, folderPath: targetFolder?.path ?? null, name, content, frontmatter });
     if (result.error) return setError(result.error.message);

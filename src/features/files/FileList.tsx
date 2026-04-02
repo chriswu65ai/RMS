@@ -10,7 +10,7 @@ const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
-  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, setSearch, noteTypes } = usePromptStore();
+  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes } = usePromptStore();
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
@@ -39,6 +39,16 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
       return file.name.toLowerCase().includes(q) || file.content.toLowerCase().includes(q);
     });
 
+    const parseDateFromFileName = (fileName: string) => {
+      const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!match) return Number.NEGATIVE_INFINITY;
+      return Number(`${match[1]}${match[2]}${match[3]}`);
+    };
+
+    const byNewestDate = (a: (typeof filtered)[number], b: (typeof filtered)[number]) => (
+      parseDateFromFileName(b.name) - parseDateFromFileName(a.name)
+    );
+
     const starred: typeof filtered = [];
     const regular: typeof filtered = [];
     filtered.forEach((file) => {
@@ -47,7 +57,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
       else regular.push(file);
     });
 
-    return [...starred, ...regular];
+    return [...starred.sort(byNewestDate), ...regular.sort(byNewestDate)];
   }, [files, folders, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
@@ -79,7 +89,6 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-2 border-b border-slate-200 p-3">
-        <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ticker/note content" />
         <div className="flex gap-2">
           <button
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
