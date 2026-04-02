@@ -11,6 +11,8 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
   const dialog = useDialog();
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const requireTicker = (value: string) => (value.trim() ? null : 'Type in a ticker to continue.');
+  const requireDate = (value: string) => (value.trim() ? null : 'Type in a date to continue.');
 
   const templates = useMemo(
     () =>
@@ -58,12 +60,12 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const tickerInput = await dialog.prompt('Create note from template', '', 'Ticker (required)');
-                if (!tickerInput) return;
-                const typeInput = await dialog.prompt('Create note from template', noteTypes[0] ?? 'Research', `Type (${noteTypes.join(', ')})`);
+                const tickerInput = await dialog.prompt('New file', '', 'Ticker', { validate: requireTicker });
+                if (tickerInput === null) return;
+                const typeInput = await dialog.prompt('New file', noteTypes[0] ?? 'Research', 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
                 if (!typeInput) return;
-                const dateInput = await dialog.prompt('Create note from template', toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
-                if (!dateInput) return;
+                const dateInput = await dialog.prompt('New file', toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
+                if (dateInput === null) return;
 
                 const ticker = tickerInput.trim().toUpperCase();
                 const type = typeInput.trim();

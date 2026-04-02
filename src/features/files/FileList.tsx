@@ -57,13 +57,16 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     return files.some((file) => file.folder_id === folderId && file.name.toLowerCase() === normalizedName && file.id !== currentFileId);
   };
 
+  const requireTicker = (value: string) => (value.trim() ? null : 'Type in a ticker to continue.');
+  const requireDate = (value: string) => (value.trim() ? null : 'Type in a date to continue.');
+
   const promptForCanonicalInputs = async () => {
-    const tickerInput = await dialog.prompt('New stock research note', '', 'Ticker (required)');
-    if (!tickerInput) return null;
-    const typeInput = await dialog.prompt('New stock research note', noteTypes[0] ?? 'Research', `Type (${noteTypes.join(', ')})`);
+    const tickerInput = await dialog.prompt('New file', '', 'Ticker', { validate: requireTicker });
+    if (tickerInput === null) return null;
+    const typeInput = await dialog.prompt('New file', noteTypes[0] ?? 'Research', 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
     if (!typeInput) return null;
-    const dateInput = await dialog.prompt('New stock research note', toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
-    if (!dateInput) return null;
+    const dateInput = await dialog.prompt('New file', toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
+    if (dateInput === null) return null;
 
     const ticker = tickerInput.trim().toUpperCase();
     const type = typeInput.trim();
@@ -143,12 +146,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
-                  const tickerInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker');
-                  if (!tickerInput) return;
+                  const tickerInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker', { validate: requireTicker });
+                  if (tickerInput === null) return;
                   const typeInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.type?.toString() ?? (noteTypes[0] ?? 'Research'), 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
                   if (!typeInput) return;
-                  const dateInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)');
-                  if (!dateInput) return;
+                  const dateInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
+                  if (dateInput === null) return;
                   const name = buildCanonicalStockFileName(dateInput.trim(), tickerInput.trim().toUpperCase(), typeInput.trim());
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
                   const path = `${folder?.path ? `${folder.path}/` : ''}${name}`;
