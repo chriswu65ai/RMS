@@ -11,8 +11,8 @@ type Props = {
 
 export function AppShell({ headerRight, topNav, main, mobileSidebarOpen, setMobileSidebarOpen }: Props) {
   return (
-    <div className="h-screen bg-slate-50">
-      <header className="flex h-14 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
+    <div className="flex h-screen flex-col bg-slate-50">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
         <div className="flex items-center gap-2">
           <button className="rounded-md p-2 hover:bg-slate-100 md:hidden" onClick={() => setMobileSidebarOpen(true)}>
             <Menu size={18} />
@@ -21,8 +21,8 @@ export function AppShell({ headerRight, topNav, main, mobileSidebarOpen, setMobi
         </div>
         <div className="min-w-0 flex-1">{headerRight}</div>
       </header>
-      {topNav && <div className="border-b border-slate-200 bg-white px-4">{topNav}</div>}
-      <div className="h-[calc(100vh-104px)]">
+      {topNav && <div className="shrink-0 border-b border-slate-200 bg-white px-4">{topNav}</div>}
+      <div className="flex-1 min-h-0">
         <main className="min-h-0 h-full">{main}</main>
       </div>
 
