@@ -39,14 +39,14 @@ export function MetadataPanel({
   canViewTask,
   viewTaskHelperText,
 }: Props) {
-  const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? frontmatter.sectors?.[0] ?? '');
+  const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? '');
   const [isBelowLg, setIsBelowLg] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)').matches : false,
   );
 
   useEffect(() => {
-    setSelectedSector(frontmatter.sector ?? frontmatter.sectors?.[0] ?? '');
-  }, [frontmatter.sector, frontmatter.sectors]);
+    setSelectedSector(frontmatter.sector ?? '');
+  }, [frontmatter.sector]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -86,7 +86,7 @@ export function MetadataPanel({
           onChange={(event) => {
             const sector = event.target.value;
             setSelectedSector(sector);
-            onChange({ ...frontmatter, sector, sectors: undefined });
+            onChange({ ...frontmatter, sector });
           }}
         >
           <option value="">—</option>

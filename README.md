@@ -6,7 +6,7 @@ Stock Research Management System is a Markdown-first app for managing stock rese
 
 - Local-first runtime using SQLite and local API routes (`/api/bootstrap`, `/api/files`, `/api/folders`).
 - Folder + file manager for stock research notes.
-- Metadata workflow with stock fields (`ticker`, `type`, `date`, `sectors`) and recommendation enum (`buy`, `hold`, `sell`, `avoid`, or blank).
+- Metadata workflow with stock fields (`ticker`, `type`, `date`, `sector`) and recommendation enum (`buy`, `hold`, `sell`, `avoid`, or blank).
 - Template-based note creation and canonical filename pattern:
   - `YYYY-MM-DD <TICKER>-<TYPE>.md`
 - Markdown editor + preview panes.
