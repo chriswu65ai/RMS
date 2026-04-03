@@ -25,10 +25,50 @@ export interface ProviderAdapter {
 
 const estimateTokens = (text: string) => Math.max(1, Math.round(text.length / 4));
 
+const MINIMAX_BASE_URLS = ['https://api.minimaxi.com', 'https://api.minimax.chat'];
+
+const extractTextFromUnknown = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          if (typeof record.text === 'string') return record.text;
+          if (typeof record.content === 'string') return record.content;
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.content === 'string') return record.content;
+  }
+  return '';
+};
+
+const fetchFromMirrors = async (path: string, init: RequestInit): Promise<Response> => {
+  let lastError: Error | null = null;
+  for (const baseUrl of MINIMAX_BASE_URLS) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, init);
+      if (response.ok) return response;
+      lastError = new Error(`Request failed (${response.status}) via ${baseUrl}.`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Network error while contacting MiniMax.');
+    }
+  }
+  throw lastError ?? new Error('Unable to reach MiniMax API.');
+};
+
 class MinimaxAdapter implements ProviderAdapter {
   async generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse> {
     const startedAt = Date.now();
-    const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
+    const response = await fetchFromMirrors('/v1/text/chatcompletion_v2', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -45,9 +85,17 @@ class MinimaxAdapter implements ProviderAdapter {
     if (!response.ok) throw new Error(`Minimax generate failed (${response.status}).`);
     const data = await response.json() as {
       choices?: Array<{ message?: { content?: string } }>;
+      reply?: string;
+      output_text?: string;
+      text?: string;
       usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     };
-    const outputText = data.choices?.[0]?.message?.content?.toString() ?? '';
+    const outputText = [
+      extractTextFromUnknown(data.choices?.[0]?.message?.content),
+      extractTextFromUnknown(data.reply),
+      extractTextFromUnknown(data.output_text),
+      extractTextFromUnknown(data.text),
+    ].find((item) => item.trim()) ?? '';
     if (!outputText.trim()) throw new Error('Minimax returned empty output.');
     return {
       outputText,
@@ -61,16 +109,29 @@ class MinimaxAdapter implements ProviderAdapter {
   }
 
   async listModels(apiKey: string, signal?: AbortSignal): Promise<ModelListEntry[]> {
-    const response = await fetch('https://api.minimax.chat/v1/text/models', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal,
-    });
-    if (!response.ok) throw new Error('Model listing unsupported or failed.');
-    const data = await response.json() as { data?: Array<{ id?: string; name?: string }> };
-    return (data.data ?? [])
-      .map((item) => ({ modelId: item.id ?? '', displayName: item.name ?? item.id ?? '' }))
-      .filter((item) => item.modelId);
+    const candidates = ['/v1/text/models', '/v1/models'];
+    let lastError: Error | null = null;
+    for (const path of candidates) {
+      try {
+        const response = await fetchFromMirrors(path, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal,
+        });
+        const data = await response.json() as {
+          data?: Array<{ id?: string; name?: string }>;
+          models?: Array<{ id?: string; name?: string }>;
+        };
+        const rawModels = data.data ?? data.models ?? [];
+        const models = rawModels
+          .map((item) => ({ modelId: item.id ?? '', displayName: item.name ?? item.id ?? '' }))
+          .filter((item) => item.modelId);
+        if (models.length > 0) return models;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('Model listing unsupported or failed.');
+      }
+    }
+    throw lastError ?? new Error('Model listing unsupported or failed.');
   }
 }
 
@@ -108,6 +169,7 @@ export const providerRegistry: Record<AgentProvider, ProviderAdapter> = {
 
 export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
   minimax: [
+    { modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5' },
     { modelId: 'MiniMax-Text-01', displayName: 'MiniMax Text 01' },
     { modelId: 'abab6.5-chat', displayName: 'ABAB 6.5 Chat' },
   ],
