@@ -2,8 +2,36 @@ import YAML from 'yaml';
 import { Recommendation, type FrontmatterModel, type Note, type ResearchNote } from '../types/models';
 
 const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+const CANONICAL_FRONTMATTER_KEYS = new Set([
+  'title',
+  'ticker',
+  'type',
+  'date',
+  'sector',
+  'recommendation',
+  'assignee',
+  'template',
+  'starred',
+]);
 
 const VALID_RECOMMENDATIONS = new Set<Recommendation>(Object.values(Recommendation));
+
+type FrontmatterNormalizeOptions = {
+  knownSectors?: string[];
+};
+
+const normalizeKey = (key: string) => {
+  const trimmed = key.trim();
+  const lowered = trimmed.toLowerCase();
+  return CANONICAL_FRONTMATTER_KEYS.has(lowered) ? lowered : trimmed;
+};
+
+const normalizeSectorValue = (value: string, knownSectors?: string[]) => {
+  const trimmed = value.trim();
+  if (!trimmed || !knownSectors || knownSectors.length === 0) return trimmed;
+  const match = knownSectors.find((sector) => sector.trim().toLowerCase() === trimmed.toLowerCase());
+  return match?.trim() ?? trimmed;
+};
 
 export function normalizeRecommendation(value: unknown): Recommendation | '' {
   if (typeof value !== 'string') return '';
@@ -11,9 +39,11 @@ export function normalizeRecommendation(value: unknown): Recommendation | '' {
   return VALID_RECOMMENDATIONS.has(normalized) ? normalized : '';
 }
 
-export function normalizeFrontmatter(input: Record<string, unknown> | null | undefined): FrontmatterModel {
+export function normalizeFrontmatter(input: Record<string, unknown> | null | undefined, options?: FrontmatterNormalizeOptions): FrontmatterModel {
   if (!input) return {};
-  const normalized = { ...input } as Record<string, unknown>;
+  const normalized = Object.fromEntries(
+    Object.entries(input).map(([key, value]) => [normalizeKey(key), value]),
+  ) as Record<string, unknown>;
 
   Object.entries(normalized).forEach(([key, value]) => {
     if (typeof value === 'string') {
@@ -23,7 +53,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
 
   delete normalized.templateType;
   if (typeof normalized.sector === 'string') {
-    normalized.sector = normalized.sector.trim();
+    normalized.sector = normalizeSectorValue(normalized.sector, options?.knownSectors);
   }
 
   if (typeof normalized.ticker === 'string') {
@@ -52,7 +82,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
   return normalized as FrontmatterModel;
 }
 
-export function splitFrontmatter(markdown: string): { frontmatter: FrontmatterModel; body: string } {
+export function splitFrontmatter(markdown: string, options?: FrontmatterNormalizeOptions): { frontmatter: FrontmatterModel; body: string } {
   const match = markdown.match(FRONTMATTER_REGEX);
   if (!match) {
     return { frontmatter: {}, body: markdown };
@@ -68,7 +98,7 @@ export function splitFrontmatter(markdown: string): { frontmatter: FrontmatterMo
       return { frontmatter: {}, body };
     }
 
-    return { frontmatter: normalizeFrontmatter(parsed as Record<string, unknown>), body };
+    return { frontmatter: normalizeFrontmatter(parsed as Record<string, unknown>, options), body };
   } catch {
     return { frontmatter: {}, body: markdown };
   }
