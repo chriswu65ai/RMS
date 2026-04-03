@@ -45,146 +45,182 @@ export function MetadataPanel({
     setSelectedSector(frontmatter.sector ?? frontmatter.sectors?.[0] ?? '');
   }, [frontmatter.sector, frontmatter.sectors]);
 
-  if (collapsed) {
-    return (
-      <aside className="hidden border-l border-slate-200 bg-white lg:block lg:w-12">
-        <div className="flex items-center justify-center py-2">
-          <button
-            className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
-            onClick={onToggleCollapsed}
-            aria-label="Expand metadata panel"
-            title="Expand metadata panel"
-          >
-            <PanelRightOpen size={16} />
-          </button>
-        </div>
-      </aside>
-    );
-  }
+  const panelContents = (
+    <div className="space-y-3 px-4 pb-4">
+      <label className="block text-xs text-slate-500">Date
+        <input
+          type="date"
+          className="input mt-1"
+          value={frontmatter.date ?? ''}
+          onChange={(e) => onChange({ ...frontmatter, date: e.target.value })}
+          onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
+        />
+      </label>
+      <label className="block text-xs text-slate-500">Title
+        <input className="input mt-1" value={frontmatter.title ?? ''} onChange={(e) => onChange({ ...frontmatter, title: e.target.value })} />
+      </label>
+      <label className="block text-xs text-slate-500">Ticker
+        <input
+          className="input mt-1"
+          value={frontmatter.ticker ?? ''}
+          onChange={(e) => onChange({ ...frontmatter, ticker: e.target.value.toUpperCase() })}
+          onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
+        />
+      </label>
+      <label className="block text-xs text-slate-500">Sector
+        <select
+          className="input mt-1"
+          value={selectedSector}
+          onChange={(event) => {
+            const sector = event.target.value;
+            setSelectedSector(sector);
+            onChange({ ...frontmatter, sector, sectors: undefined });
+          }}
+        >
+          <option value="">—</option>
+          {sectors.map((sector) => (
+            <option key={sector} value={sector}>{sector}</option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-xs text-slate-500">Recommendation
+        <select
+          className="input mt-1"
+          value={frontmatter.recommendation ?? ''}
+          onChange={(event) => {
+            const recommendation = event.target.value as FrontmatterModel['recommendation'];
+            onChange({ ...frontmatter, recommendation });
+          }}
+        >
+          {RECOMMENDATIONS.map((item) => (
+            <option key={item.label} value={item.value}>{item.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-xs text-slate-500">Note type
+        <select
+          className="input mt-1"
+          value={frontmatter.type ?? ''}
+          onChange={(e) => {
+            onChange({ ...frontmatter, type: e.target.value });
+            onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
+          }}
+        >
+          <option value="" disabled>Select note type</option>
+          {noteTypes.map((type) => (
+            <option key={type} value={type}>{type}</option>
+          ))}
+        </select>
+      </label>
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            checked={frontmatter.template === true}
+            onChange={(e) => onChange({ ...frontmatter, template: e.target.checked })}
+          />
+          Template
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            checked={frontmatter.starred === true}
+            onChange={(e) => onChange({ ...frontmatter, starred: e.target.checked })}
+          />
+          Starred
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+            checked={showMetadata}
+            onChange={(e) => onShowMetadataChange(e.target.checked)}
+          />
+          Show metadata
+        </label>
+      </div>
+      <div className="border-t border-slate-200 pt-3">
+        <button
+          className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${canViewTask ? 'bg-slate-900 text-white hover:bg-slate-800' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
+          type="button"
+          onClick={onViewTask}
+          disabled={!canViewTask}
+        >
+          View task
+        </button>
+        {viewTaskHelperText && <p className="mt-1 text-xs text-slate-500">{viewTaskHelperText}</p>}
+      </div>
+    </div>
+  );
 
   return (
-    <aside className="hidden border-l border-slate-200 bg-white lg:block">
-      <div className="flex items-center justify-between py-2 pl-3 pr-4">
-        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-          <BadgeInfo size={12} />
-          Metadata
-        </h3>
+    <>
+      <div className="fixed bottom-4 right-4 z-30 lg:hidden">
         <button
-          className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+          className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-lg"
           onClick={onToggleCollapsed}
-          aria-label="Collapse metadata panel"
-          title="Collapse metadata panel"
+          aria-label={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
+          title={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
         >
-          <PanelRightClose size={16} />
+          {collapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+          Metadata
         </button>
       </div>
-      <div className="space-y-3 px-4 pb-4">
-        <label className="block text-xs text-slate-500">Date
-          <input
-            type="date"
-            className="input mt-1"
-            value={frontmatter.date ?? ''}
-            onChange={(e) => onChange({ ...frontmatter, date: e.target.value })}
-            onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
-          />
-        </label>
-        <label className="block text-xs text-slate-500">Title
-          <input className="input mt-1" value={frontmatter.title ?? ''} onChange={(e) => onChange({ ...frontmatter, title: e.target.value })} />
-        </label>
-        <label className="block text-xs text-slate-500">Ticker
-          <input
-            className="input mt-1"
-            value={frontmatter.ticker ?? ''}
-            onChange={(e) => onChange({ ...frontmatter, ticker: e.target.value.toUpperCase() })}
-            onBlur={() => onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: frontmatter.type ?? '' })}
-          />
-        </label>
-        <label className="block text-xs text-slate-500">Sector
-          <select
-            className="input mt-1"
-            value={selectedSector}
-            onChange={(event) => {
-              const sector = event.target.value;
-              setSelectedSector(sector);
-              onChange({ ...frontmatter, sector, sectors: undefined });
-            }}
-          >
-            <option value="">—</option>
-            {sectors.map((sector) => (
-              <option key={sector} value={sector}>{sector}</option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-xs text-slate-500">Recommendation
-          <select
-            className="input mt-1"
-            value={frontmatter.recommendation ?? ''}
-            onChange={(event) => {
-              const recommendation = event.target.value as FrontmatterModel['recommendation'];
-              onChange({ ...frontmatter, recommendation });
-            }}
-          >
-            {RECOMMENDATIONS.map((item) => (
-              <option key={item.label} value={item.value}>{item.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-xs text-slate-500">Note type
-          <select
-            className="input mt-1"
-            value={frontmatter.type ?? ''}
-            onChange={(e) => {
-              onChange({ ...frontmatter, type: e.target.value });
-              onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
-            }}
-          >
-            <option value="" disabled>Select note type</option>
-            {noteTypes.map((type) => (
-              <option key={type} value={type}>{type}</option>
-            ))}
-          </select>
-        </label>
-        <div className="space-y-2">
-          <label className="flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-              checked={frontmatter.template === true}
-              onChange={(e) => onChange({ ...frontmatter, template: e.target.checked })}
-            />
-            Template
-          </label>
-          <label className="flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-              checked={frontmatter.starred === true}
-              onChange={(e) => onChange({ ...frontmatter, starred: e.target.checked })}
-            />
-            Starred
-          </label>
-          <label className="flex items-center gap-2 text-xs text-slate-600">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
-              checked={showMetadata}
-              onChange={(e) => onShowMetadataChange(e.target.checked)}
-            />
-            Show metadata
-          </label>
-        </div>
-        <div className="border-t border-slate-200 pt-3">
-          <button
-            className={`w-full rounded-md px-3 py-2 text-sm font-medium transition ${canViewTask ? 'bg-slate-900 text-white hover:bg-slate-800' : 'cursor-not-allowed bg-slate-100 text-slate-400'}`}
-            type="button"
-            onClick={onViewTask}
-            disabled={!canViewTask}
-          >
-            View task
-          </button>
-          {viewTaskHelperText && <p className="mt-1 text-xs text-slate-500">{viewTaskHelperText}</p>}
-        </div>
-      </div>
-    </aside>
+
+      {!collapsed && (
+        <aside className="fixed inset-x-0 bottom-0 z-20 max-h-[70vh] overflow-y-auto rounded-t-xl border-t border-slate-200 bg-white pb-16 shadow-2xl lg:hidden">
+          <div className="flex items-center justify-between py-2 pl-3 pr-4">
+            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <BadgeInfo size={12} />
+              Metadata
+            </h3>
+            <button
+              className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+              onClick={onToggleCollapsed}
+              aria-label="Collapse metadata panel"
+              title="Collapse metadata panel"
+            >
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+          {panelContents}
+        </aside>
+      )}
+
+      {collapsed ? (
+        <aside className="hidden border-l border-slate-200 bg-white lg:block lg:w-12">
+          <div className="flex items-center justify-center py-2">
+            <button
+              className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+              onClick={onToggleCollapsed}
+              aria-label="Expand metadata panel"
+              title="Expand metadata panel"
+            >
+              <PanelRightOpen size={16} />
+            </button>
+          </div>
+        </aside>
+      ) : (
+        <aside className="hidden border-l border-slate-200 bg-white lg:block">
+          <div className="flex items-center justify-between py-2 pl-3 pr-4">
+            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <BadgeInfo size={12} />
+              Metadata
+            </h3>
+            <button
+              className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+              onClick={onToggleCollapsed}
+              aria-label="Collapse metadata panel"
+              title="Collapse metadata panel"
+            >
+              <PanelRightClose size={16} />
+            </button>
+          </div>
+          {panelContents}
+        </aside>
+      )}
+    </>
   );
 }
