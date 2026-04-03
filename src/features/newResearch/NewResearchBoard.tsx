@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
 import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
-import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
+import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -48,7 +48,7 @@ const stripExtension = (value: string) => value.replace(/\.[^/.]+$/, '');
 export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]; noteTypes: string[] }) {
   const navigate = useNavigate();
   const dialog = useDialog();
-  const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote, selectedTaskId } = usePromptStore();
+  const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote, selectedTaskId } = useResearchStore();
   const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -242,7 +242,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
       if (createFolderError) return setError(createFolderError.message);
       await refresh();
-      targetFolder = usePromptStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
+      targetFolder = useResearchStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
       if (!targetFolder) return setError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
     }
 
@@ -274,7 +274,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     if (result.error) return setError(result.error.message);
 
     await refresh();
-    const created = usePromptStore.getState().files.find((file) => !file.is_template && file.path === `${targetFolder?.path ? `${targetFolder.path}/` : ''}${name}`);
+    const created = useResearchStore.getState().files.find((file) => !file.is_template && file.path === `${targetFolder?.path ? `${targetFolder.path}/` : ''}${name}`);
     if (!created) return setError('Note created, but it could not be selected automatically.');
 
     const updatedTask = await updateNewResearchTask(task.id, { ...task, linked_note_file_id: created.id, linked_note_path: created.path });

@@ -7,7 +7,7 @@ import { FolderTree } from './features/folders/FolderTree';
 import { FileList } from './features/files/FileList';
 import { EditorPane } from './features/editor/EditorPane';
 import { TemplateModal } from './features/templates/TemplateModal';
-import { usePromptStore } from './hooks/usePromptStore';
+import { useResearchStore } from './hooks/useResearchStore';
 import { fileToNoteModel, splitFrontmatter } from './lib/frontmatter';
 import { NewResearchBoard } from './features/newResearch/NewResearchBoard';
 import { SettingsPage } from './features/settings/SettingsPage';
@@ -73,7 +73,7 @@ function CenterLayout({ title, description, children }: { title?: string; descri
 
 function OverviewPage() {
   const navigate = useNavigate();
-  const { files, transitionFromOverviewRow } = usePromptStore();
+  const { files, transitionFromOverviewRow } = useResearchStore();
   const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [tickerFilter, setTickerFilter] = useState('');
   const [sectorFilter, setSectorFilter] = useState('');
@@ -188,7 +188,7 @@ function OverviewPage() {
 }
 
 function NewResearchPage() {
-  const { assignees, noteTypes } = usePromptStore();
+  const { assignees, noteTypes } = useResearchStore();
   return (
     <CenterLayout>
       <NewResearchBoard assignees={assignees} noteTypes={noteTypes} />
@@ -209,7 +209,7 @@ function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolder
 }
 
 export function App() {
-  const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult, stockFoldersCollapsed, setStockFoldersCollapsed } = usePromptStore();
+  const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult, stockFoldersCollapsed, setStockFoldersCollapsed } = useResearchStore();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
   const location = useLocation();

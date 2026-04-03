@@ -1,14 +1,14 @@
 import { Download, Upload } from 'lucide-react';
 import { type ChangeEvent, useEffect, useState } from 'react';
 import { useDialog } from '../../components/ui/DialogProvider';
-import { usePromptStore } from '../../hooks/usePromptStore';
+import { useResearchStore } from '../../hooks/useResearchStore';
 import { createFile, createFolder } from '../../lib/dataApi';
 import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
 import { splitFrontmatter } from '../../lib/frontmatter';
 import type { Folder } from '../../types/models';
 
 export function SettingsPage() {
-  const { workspace, files, folders, refresh, noteTypes, setNoteTypes, assignees, setAssignees, sectors, setSectors } = usePromptStore();
+  const { workspace, files, folders, refresh, noteTypes, setNoteTypes, assignees, setAssignees, sectors, setSectors } = useResearchStore();
   const dialog = useDialog();
   const [noteTypesInput, setNoteTypesInput] = useState(noteTypes.join(', '));
   const [assigneesInput, setAssigneesInput] = useState(assignees.join(', '));
@@ -35,7 +35,7 @@ export function SettingsPage() {
 
     for (const part of parts) {
       const expectedPath = parent ? `${parent.path}/${part}` : part;
-      const existing = usePromptStore.getState().folders.find((folder) => folder.path === expectedPath);
+      const existing = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
       if (existing) {
         parent = existing;
         continue;
@@ -44,7 +44,7 @@ export function SettingsPage() {
       const { error } = await createFolder(workspaceId, part, parent);
       if (error) throw new Error(error.message);
       await refresh();
-      const created = usePromptStore.getState().folders.find((folder) => folder.path === expectedPath);
+      const created = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
       if (!created) throw new Error(`Failed to create folder: ${expectedPath}`);
       parent = created;
     }
@@ -65,7 +65,7 @@ export function SettingsPage() {
         return;
       }
 
-      const currentFolders = usePromptStore.getState().folders;
+      const currentFolders = useResearchStore.getState().folders;
       const baseFolder = importTargetFolderId
         ? (currentFolders.find((folder) => folder.id === importTargetFolderId) ?? null)
         : null;
@@ -84,7 +84,7 @@ export function SettingsPage() {
 
         const fileName = fileNameWithExt.toLowerCase().endsWith('.md') ? fileNameWithExt : `${fileNameWithExt}.md`;
         const finalPath = targetFolder ? `${targetFolder.path}/${fileName}` : fileName;
-        const existingFiles = usePromptStore.getState().files;
+        const existingFiles = useResearchStore.getState().files;
         if (existingFiles.some((file) => file.path === finalPath)) {
           skippedCount += 1;
           continue;
