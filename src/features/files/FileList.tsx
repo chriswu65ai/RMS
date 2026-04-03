@@ -21,7 +21,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     const viewingTemplateFolder = selectedFolderPath.includes('template');
 
     const filtered = files.filter((file) => {
-      if (!viewingTemplateFolder && file.is_template) return false;
+      const showingAllNotes = selectedFolderId === null;
+      const canShowTemplate = showingAllNotes || viewingTemplateFolder;
+      if (!canShowTemplate && file.is_template) return false;
       const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
       if (!folderMatch) return false;
 
