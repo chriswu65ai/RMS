@@ -135,3 +135,33 @@ test('throws a clear error for malformed zip archives', async () => {
 
   await assert.rejects(readMarkdownEntriesFromImport(malformed), /malformed|central directory/i);
 });
+
+test('strips top-level zip-name folder when all markdown files are nested under it', async () => {
+  const zip = buildZip([
+    { path: 'ABC/folderinsideabc/report.md', content: 'Inside nested folder', method: 0 },
+    { path: 'ABC/summary.md', content: 'Inside zip-name folder', method: 8 },
+  ]);
+
+  const file = new File([zip], 'abc.zip', { type: 'application/zip' });
+  const entries = await readMarkdownEntriesFromImport(file);
+
+  assert.deepEqual(entries, [
+    { path: 'folderinsideabc/report.md', content: 'Inside nested folder' },
+    { path: 'summary.md', content: 'Inside zip-name folder' },
+  ]);
+});
+
+test('keeps original paths when zip-name folder is not a universal prefix', async () => {
+  const zip = buildZip([
+    { path: 'abc/a.md', content: 'Nested', method: 0 },
+    { path: 'other/b.md', content: 'Different root', method: 0 },
+  ]);
+
+  const file = new File([zip], 'abc.zip', { type: 'application/zip' });
+  const entries = await readMarkdownEntriesFromImport(file);
+
+  assert.deepEqual(entries, [
+    { path: 'abc/a.md', content: 'Nested' },
+    { path: 'other/b.md', content: 'Different root' },
+  ]);
+});
