@@ -60,6 +60,8 @@ export function FolderTree({
   const noteTypes = useMemo(() => {
     const map = new Map<string, number>();
     files.forEach((file) => {
+      // Keep All notes and note-type totals aligned by excluding templates from aggregation.
+      if (file.is_template) return;
       const parsed = splitFrontmatter(file.content);
       const type = parsed.frontmatter.type?.toString().trim();
       if (!type) return;
