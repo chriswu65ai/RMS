@@ -25,7 +25,8 @@ export interface ProviderAdapter {
 
 const estimateTokens = (text: string) => Math.max(1, Math.round(text.length / 4));
 
-const MINIMAX_BASE_URLS = ['https://api.minimaxi.com', 'https://api.minimax.chat'];
+// Must match current MiniMax official docs; review when MiniMax provider docs change.
+const MINIMAX_BASE_URLS = ['https://api.minimax.io'];
 
 const extractTextFromUnknown = (value: unknown): string => {
   if (typeof value === 'string') return value;
@@ -52,17 +53,19 @@ const extractTextFromUnknown = (value: unknown): string => {
 };
 
 const fetchFromMirrors = async (path: string, init: RequestInit): Promise<Response> => {
-  let lastError: Error | null = null;
+  const attempts: string[] = [];
   for (const baseUrl of MINIMAX_BASE_URLS) {
+    const url = `${baseUrl}${path}`;
     try {
-      const response = await fetch(`${baseUrl}${path}`, init);
+      const response = await fetch(url, init);
       if (response.ok) return response;
-      lastError = new Error(`Request failed (${response.status}) via ${baseUrl}.`);
+      attempts.push(`${url} -> HTTP ${response.status}`);
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Network error while contacting MiniMax.');
+      const message = error instanceof Error ? error.message : 'Network error while contacting MiniMax.';
+      attempts.push(`${url} -> ${message}`);
     }
   }
-  throw lastError ?? new Error('Unable to reach MiniMax API.');
+  throw new Error(`MiniMax request failed after trying: ${attempts.join('; ')}`);
 };
 
 class MinimaxAdapter implements ProviderAdapter {
@@ -109,7 +112,7 @@ class MinimaxAdapter implements ProviderAdapter {
   }
 
   async listModels(apiKey: string, signal?: AbortSignal): Promise<ModelListEntry[]> {
-    const candidates = ['/v1/text/models', '/v1/models'];
+    const candidates = ['/v1/models'];
     let lastError: Error | null = null;
     for (const path of candidates) {
       try {
