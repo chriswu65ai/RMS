@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
+import { clearActivityLog, getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
 import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
+import { formatLocalDateTime } from '../../lib/time';
 
 const modelCatalogService = new ModelCatalogService();
 
@@ -96,7 +97,7 @@ export function AgentPage() {
       duration: formatDuration(entry.duration_ms),
       tokens: entry.token_estimate ?? null,
       cost: formatUsd(entry.cost_estimate_usd),
-      timestamp: new Date(entry.timestamp).toLocaleString(),
+      timestamp: formatLocalDateTime(entry.timestamp),
       details: entry.error_message_short,
       chars: `${entry.input_chars} in / ${entry.output_chars} out`,
     };
@@ -198,11 +199,27 @@ export function AgentPage() {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Activity log</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">Activity log</h2>
+            <button
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs"
+              onClick={async () => {
+                try {
+                  await clearActivityLog();
+                  setActivity([]);
+                  setMessage('Activity log cleared.');
+                } catch (error) {
+                  setMessage(error instanceof Error ? error.message : 'Failed clearing activity log.');
+                }
+              }}
+            >
+              Clear log
+            </button>
+          </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <ul className="space-y-3 text-sm text-slate-700">
+            <ul className="flex gap-3 overflow-x-auto pb-1 text-sm text-slate-700">
               {latestSummary.map((entry) => (
-                <li key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <li key={entry.id} className="w-[calc((100%-1.5rem)/3)] min-w-[280px] shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-sm text-slate-800">{entry.lead}.</p>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600">
                     <span>Status: {entry.status}</span>

@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { getFileTitleIndicators } from './unsavedIndicators';
 import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
-import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
+import { useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 
@@ -72,23 +72,24 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     return files.some((file) => file.folder_id === folderId && file.name.toLowerCase() === normalizedName && file.id !== currentFileId);
   };
 
-  const requireTicker = (value: string) => (value.trim() ? null : 'Type in a ticker to continue.');
-  const requireDate = (value: string) => (value.trim() ? null : 'Type in a date to continue.');
+  const parseStockIdentityFromName = (fileName: string) => {
+    const normalized = fileName.trim().replace(/\.md$/i, '');
+    const match = normalized.match(/^(\d{4}-\d{2}-\d{2})\s+(.+?)-(.+)$/);
+    if (!match) return null;
+    return {
+      date: match[1],
+      ticker: match[2].trim().toUpperCase(),
+      type: match[3].trim(),
+    };
+  };
 
-  const promptForCanonicalInputs = async () => {
-    const tickerInput = await dialog.prompt('New file', '', 'Ticker', { validate: requireTicker });
-    if (tickerInput === null) return null;
-    const typeInput = await dialog.prompt('New file', noteTypes[0] ?? 'Research', 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
-    if (!typeInput) return null;
-    const dateInput = await dialog.prompt('New file', toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
-    if (dateInput === null) return null;
-
-    const ticker = tickerInput.trim().toUpperCase();
-    const type = typeInput.trim();
-    const date = dateInput.trim();
-    if (!ticker || !type || !date) return null;
-
-    return { ticker, type, date, fileName: buildCanonicalStockFileName(date, ticker, type) };
+  const promptForFileName = async (title: string) => {
+    const fileNameInput = await dialog.prompt(title, '', 'File name (free-form, .md optional)', {
+      validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
+    });
+    if (fileNameInput === null) return null;
+    const normalized = fileNameInput.trim();
+    return normalized.toLowerCase().endsWith('.md') ? normalized : `${normalized}.md`;
   };
 
   return (
@@ -99,23 +100,24 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
             onClick={async () => {
               if (!workspace) return;
-              const payload = await promptForCanonicalInputs();
-              if (!payload) return;
+              const fileName = await promptForFileName('New file');
+              if (!fileName) return;
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
-              const duplicate = hasDuplicateInFolder(folder?.id ?? null, payload.fileName);
+              const duplicate = hasDuplicateInFolder(folder?.id ?? null, fileName);
               if (duplicate) {
-                await dialog.alert('Duplicate file', 'A stock research note with this ticker/date/type already exists in this folder.');
+                await dialog.alert('Duplicate file', 'A file with this name already exists in this folder.');
                 return;
               }
+              const identity = parseStockIdentityFromName(fileName);
               const frontmatter: FrontmatterModel = {
-                title: `${payload.ticker} ${payload.type}`,
-                ticker: payload.ticker,
-                type: payload.type,
-                date: payload.date,
+                title: identity ? `${identity.ticker} ${identity.type}` : fileName.replace(/\.md$/i, ''),
+                ticker: identity?.ticker ?? '',
+                type: identity?.type ?? (noteTypes[0] ?? ''),
+                date: identity?.date ?? '',
                 recommendation: '',
               };
               const content = composeMarkdown(frontmatter, '');
-              const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: payload.fileName, content, frontmatter });
+              const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
               if (error) return dialog.alert('Create failed', error.message);
               await refresh();
             }}
@@ -164,13 +166,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   <Star size={14} fill={frontmatter.starred === true ? 'currentColor' : 'none'} />
                 </button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={async () => {
-                  const tickerInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.ticker?.toString() ?? '', 'Ticker', { validate: requireTicker });
-                  if (tickerInput === null) return;
-                  const typeInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.type?.toString() ?? (noteTypes[0] ?? 'Research'), 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
-                  if (!typeInput) return;
-                  const dateInput = await dialog.prompt('Rename file', splitFrontmatter(file.content).frontmatter.date?.toString() ?? toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
-                  if (dateInput === null) return;
-                  const name = buildCanonicalStockFileName(dateInput.trim(), tickerInput.trim().toUpperCase(), typeInput.trim());
+                  const nameInput = await dialog.prompt('Rename file', file.name, 'File name (free-form, .md optional)', {
+                    validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
+                  });
+                  if (nameInput === null) return;
+                  const name = nameInput.trim().toLowerCase().endsWith('.md') ? nameInput.trim() : `${nameInput.trim()}.md`;
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
                   const path = `${folder?.path ? `${folder.path}/` : ''}${name}`;
                   if (hasDuplicateInFolder(folder?.id ?? null, name, file.id)) return dialog.alert('Duplicate path', 'Another file already uses this path.');

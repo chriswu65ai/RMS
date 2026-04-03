@@ -453,6 +453,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'DELETE' && url === '/api/agent/activity-log') {
+      execSql('delete from agent_activity_log');
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
     if (req.method === 'POST' && url === '/api/agent/generate') {
       const payload = await readJsonBody(req);
       const provider = payload.provider;
@@ -736,6 +742,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'DELETE' && url.startsWith('/api/files/')) {
       const fileId = url.replace('/api/files/', '').trim();
+      const now = new Date().toISOString();
+      const linkedTasks = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`);
+      if (linkedTasks.length > 0) {
+        execSql(`update new_research_tasks set linked_note_file_id = '', linked_note_path = '', updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        linkedTasks.forEach((task) => {
+          recordTaskEvent(task.id, 'unlink', 'Unlinked note because the linked note was deleted.');
+        });
+      }
       execSql(`delete from research_notes where id = ${sqlEscape(fileId)}`);
       writeJson(res, 200, { error: null });
       return true;
