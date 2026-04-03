@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Folder, ResearchNote, SettingsList, Workspace } from '../types/models';
+import type { Folder, FrontmatterModel, ResearchNote, SettingsList, Workspace } from '../types/models';
 import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
@@ -61,6 +61,13 @@ const deriveMetadataFromFiles = (files: ResearchNote[], noteTypes: string[], sec
 
 export type AppView = 'home' | 'tasks' | 'research';
 export type EditorTab = 'edit' | 'preview' | 'split';
+export type DraftSource = 'manual' | 'generate';
+export type DraftEntry = {
+  body: string;
+  frontmatter: FrontmatterModel;
+  source: DraftSource;
+  updatedAt: number;
+};
 
 type Store = {
   workspace: Workspace | null;
@@ -79,6 +86,7 @@ type Store = {
   stockFoldersCollapsed: boolean;
   metadataPanelCollapsed: boolean;
   editorTab: EditorTab;
+  draftByFileId: Record<string, DraftEntry>;
   loading: boolean;
   error: string | null;
   setSearch: (search: string) => void;
@@ -88,6 +96,9 @@ type Store = {
   setStockFoldersCollapsed: (collapsed: boolean) => void;
   setMetadataPanelCollapsed: (collapsed: boolean) => void;
   setEditorTab: (tab: EditorTab) => void;
+  setDraft: (fileId: string, draftPayload: DraftEntry) => void;
+  clearDraft: (fileId: string) => void;
+  getDraft: (fileId: string) => DraftEntry | null;
   setSectors: (sectors: string[]) => void;
   selectFolder: (id: string | null) => void;
   selectFile: (id: string | null, view?: AppView) => void;
@@ -138,6 +149,7 @@ export const useResearchStore = create<Store>()(
       stockFoldersCollapsed: false,
       metadataPanelCollapsed: false,
       editorTab: 'split',
+      draftByFileId: {},
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
@@ -148,6 +160,18 @@ export const useResearchStore = create<Store>()(
       setStockFoldersCollapsed: (collapsed) => set({ stockFoldersCollapsed: collapsed }),
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
       setEditorTab: (tab) => set({ editorTab: tab }),
+      setDraft: (fileId, draftPayload) => set((state) => ({
+        draftByFileId: {
+          ...state.draftByFileId,
+          [fileId]: draftPayload,
+        },
+      })),
+      clearDraft: (fileId) => set((state) => {
+        if (!state.draftByFileId[fileId]) return state;
+        const { [fileId]: _removed, ...rest } = state.draftByFileId;
+        return { draftByFileId: rest };
+      }),
+      getDraft: (fileId) => get().draftByFileId[fileId] ?? null,
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
@@ -234,6 +258,7 @@ export const useResearchStore = create<Store>()(
           selectedTicker: null,
           selectedTag: null,
           search: '',
+          draftByFileId: {},
           loading: false,
           error: null,
         });
@@ -258,6 +283,7 @@ export const useResearchStore = create<Store>()(
         metadataPanelCollapsed: state.metadataPanelCollapsed,
         editorTab: state.editorTab,
         selectedTicker: state.selectedTicker,
+        draftByFileId: state.draftByFileId,
       }),
     },
   ),

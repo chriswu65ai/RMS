@@ -20,7 +20,21 @@ const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊',
 const generateUseCase = new GenerateUseCase();
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal, editorTab, setEditorTab } = useResearchStore();
+  const {
+    files,
+    selectedFileId,
+    refresh,
+    noteTypes,
+    sectors,
+    metadataPanelCollapsed,
+    setMetadataPanelCollapsed,
+    transitionTaskModal,
+    editorTab,
+    setEditorTab,
+    getDraft,
+    setDraft,
+    clearDraft,
+  } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
@@ -42,9 +56,30 @@ export function EditorPane() {
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
 
   useEffect(() => {
+    if (!file) {
+      setBody(parsed.body);
+      setFrontmatter(parsed.frontmatter);
+      return;
+    }
+    const cachedDraft = getDraft(file.id);
+    if (cachedDraft) {
+      setBody(cachedDraft.body);
+      setFrontmatter(cachedDraft.frontmatter);
+      return;
+    }
     setBody(parsed.body);
     setFrontmatter(parsed.frontmatter);
-  }, [file?.id, parsed.body, parsed.frontmatter]);
+  }, [file, getDraft, parsed.body, parsed.frontmatter]);
+
+  const updateDraftCache = (nextBody: string, nextFrontmatter: FrontmatterModel, source: 'manual' | 'generate') => {
+    if (!file) return;
+    setDraft(file.id, {
+      body: nextBody,
+      frontmatter: nextFrontmatter,
+      source,
+      updatedAt: Date.now(),
+    });
+  };
 
   useEffect(() => {
     if (!selectedFileId) {
@@ -438,6 +473,7 @@ ${merged}`);
       const generated = splitFrontmatter(result.outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
       setFrontmatter(generated.frontmatter);
       setBody(generated.body);
+      updateDraftCache(generated.body, generated.frontmatter, 'generate');
     } catch (error) {
       const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
       if (isCancelled) {
@@ -506,6 +542,7 @@ ${merged}`);
                     await dialog.alert('Save failed', error.message);
                     return;
                   }
+                  clearDraft(file.id);
                   await refresh();
                 }}
               >
@@ -563,9 +600,11 @@ ${merged}`);
                   const nextParsed = splitFrontmatter(v, { knownSectors: sectors, knownNoteTypes: noteTypes });
                   setFrontmatter(nextParsed.frontmatter);
                   setBody(nextParsed.body);
+                  updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'manual');
                   return;
                 }
                 setBody(v);
+                updateDraftCache(v, frontmatter, 'manual');
               }}
             />
           )}
@@ -585,7 +624,10 @@ ${merged}`);
         frontmatter={frontmatter}
         noteTypes={noteTypes}
         sectors={sectors}
-        onChange={setFrontmatter}
+        onChange={(nextFrontmatter) => {
+          setFrontmatter(nextFrontmatter);
+          updateDraftCache(body, nextFrontmatter, 'manual');
+        }}
         onIdentityBlur={async ({ date, ticker, type }) => {
           const nextDate = date.trim();
           const nextTicker = ticker.trim().toUpperCase();
