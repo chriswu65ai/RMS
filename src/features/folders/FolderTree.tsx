@@ -235,7 +235,7 @@ export function FolderTree({
         {(childrenByParent.get(null) ?? []).filter((folder) => !templatesFolder || folder.id !== templatesFolder.id).map((folder) => renderFolderNode(folder, 0))}
       </div>
 
-      <div className="border-t border-slate-200 p-2">
+      <div className="shrink-0 border-t border-slate-200 p-2">
         <div className="mb-2 flex items-center justify-between px-2">
           <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><Tag size={12} />Note types</h4>
           <button
@@ -249,7 +249,7 @@ export function FolderTree({
         </div>
 
         {!typesCollapsed && (
-          <>
+          <div className="max-h-48 overflow-y-auto">
             <button
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TYPE_FILTER_ALL ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
               onClick={() => selectTag(TYPE_FILTER_ALL)}
@@ -273,7 +273,7 @@ export function FolderTree({
                 </button>
               ))}
             </div>
-          </>
+          </div>
         )}
       </div>
 
