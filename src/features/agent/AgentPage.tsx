@@ -32,6 +32,11 @@ export function AgentPage() {
   const [statusByProvider, setStatusByProvider] = useState<Record<AgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
+  const modelOptions = models.length > 0
+    ? models
+    : (model.trim()
+      ? [{ modelId: model, displayName: model }]
+      : []);
 
   const refreshModels = async (nextProvider: AgentProvider, applySelection = true) => {
     setModelState({ loading: true, catalogStatus: null, selectionSource: null, reasonCode: null });
@@ -68,7 +73,6 @@ export function AgentPage() {
 
         const statuses = await Promise.all(AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
-        await refreshModels(settings.default_provider);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
       }
@@ -121,8 +125,8 @@ export function AgentPage() {
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Default model</span>
-                <select className="input" value={model} onChange={(event) => setModel(event.target.value)} disabled={modelState.loading || models.length === 0}>
-                  {models.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
+                <select className="input" value={model} onChange={(event) => setModel(event.target.value)} disabled={modelState.loading || modelOptions.length === 0}>
+                  {modelOptions.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
                 </select>
               </label>
             </div>
