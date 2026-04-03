@@ -25,7 +25,10 @@ export function EditorPane() {
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
-  const parsed = useMemo(() => splitFrontmatter(file?.content ?? '', { knownSectors: sectors }), [file?.content, sectors]);
+  const parsed = useMemo(
+    () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
+    [file?.content, noteTypes, sectors],
+  );
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
 
@@ -474,7 +477,7 @@ ${merged}`);
               }}
               onChange={(v) => {
                 if (showMetadata) {
-                  const nextParsed = splitFrontmatter(v, { knownSectors: sectors });
+                  const nextParsed = splitFrontmatter(v, { knownSectors: sectors, knownNoteTypes: noteTypes });
                   setFrontmatter(nextParsed.frontmatter);
                   setBody(nextParsed.body);
                   return;

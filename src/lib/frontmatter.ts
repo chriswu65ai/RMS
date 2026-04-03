@@ -18,6 +18,7 @@ const VALID_RECOMMENDATIONS = new Set<Recommendation>(Object.values(Recommendati
 
 type FrontmatterNormalizeOptions = {
   knownSectors?: string[];
+  knownNoteTypes?: string[];
 };
 
 const normalizeKey = (key: string) => {
@@ -30,6 +31,13 @@ const normalizeSectorValue = (value: string, knownSectors?: string[]) => {
   const trimmed = value.trim();
   if (!trimmed || !knownSectors || knownSectors.length === 0) return trimmed;
   const match = knownSectors.find((sector) => sector.trim().toLowerCase() === trimmed.toLowerCase());
+  return match?.trim() ?? trimmed;
+};
+
+const normalizeNoteTypeValue = (value: string, knownNoteTypes?: string[]) => {
+  const trimmed = value.trim();
+  if (!trimmed || !knownNoteTypes || knownNoteTypes.length === 0) return trimmed;
+  const match = knownNoteTypes.find((type) => type.trim().toLowerCase() === trimmed.toLowerCase());
   return match?.trim() ?? trimmed;
 };
 
@@ -75,7 +83,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
   normalized.recommendation = normalizeRecommendation(normalized.recommendation);
 
   if (typeof normalized.title === 'string') normalized.title = normalized.title.trim();
-  if (typeof normalized.type === 'string') normalized.type = normalized.type.trim();
+  if (typeof normalized.type === 'string') normalized.type = normalizeNoteTypeValue(normalized.type, options?.knownNoteTypes);
   if (typeof normalized.date === 'string') normalized.date = normalized.date.trim();
   if (typeof normalized.assignee === 'string') normalized.assignee = normalized.assignee.trim();
 
