@@ -14,6 +14,7 @@ import { SettingsPage } from './features/settings/SettingsPage';
 import { AgentPage } from './features/agent/AgentPage';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
+import { formatLocalDateTime } from './lib/time';
 
 const normalizeSector = (value: string) => value.trim().toLowerCase();
 const recommendationLabels: Record<Recommendation, string> = {
@@ -32,16 +33,7 @@ const formatCreatedDate = (value: string) => {
   return `${dd}/${mm}/${yy}`;
 };
 const formatUpdatedDate = (value: string) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString([], {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
+  return formatLocalDateTime(value);
 };
 
 function TopNavigation() {

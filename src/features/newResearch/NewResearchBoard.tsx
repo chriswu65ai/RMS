@@ -10,6 +10,7 @@ import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType, getNoteTypeSelectOptions } from './noteTypeOptions';
+import { formatLocalDateTime } from '../../lib/time';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -68,6 +69,8 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     });
     return byLinkedFile;
   }, [tasks]);
+  const linkedFileIds = useMemo(() => new Set(files.map((file) => file.id)), [files]);
+  const hasLinkedNote = (task: NewResearchTask) => Boolean(task.linked_note_file_id && linkedFileIds.has(task.linked_note_file_id));
 
   const visibleTasks = useMemo(() => tasks.filter((task) => showArchived || !task.archived), [showArchived, tasks]);
   const prioritizedTasks = useMemo(
@@ -356,9 +359,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       <p>Deadline: {task.deadline || '—'}</p>
                       <p>Completed: {task.date_completed || '—'}</p>
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
-                      <p className="col-span-2 mt-1">Linked note: {task.linked_note_path || '—'}</p>
+                      <p className="col-span-2 mt-1">Linked note: {hasLinkedNote(task) ? task.linked_note_path : '—'}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{task.linked_note_file_id ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
+                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{hasLinkedNote(task) ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
                 {prioritizedTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
@@ -450,7 +453,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       {activityItems.map((item) => (
                         <li key={item.id} className="rounded bg-slate-50 px-2 py-1">
                           <p>{item.description.endsWith('.') ? item.description.slice(0, -1) : item.description}</p>
-                          <p className="text-[11px] text-slate-500">{new Date(item.created_at).toLocaleString()}</p>
+                          <p className="text-[11px] text-slate-500">{formatLocalDateTime(item.created_at)}</p>
                         </li>
                       ))}
                     </ul>
@@ -459,7 +462,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               </div>
             )}
             <div className="mt-4 flex justify-end gap-2">
-              {modalState.mode === 'edit' && modalState.id && <button className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm" onClick={() => { const task = tasks.find((item) => item.id === modalState.id); if (task) void createNoteFromTask(task); }}>{modalState.task.linked_note_file_id ? 'Open linked note' : 'Create note from task'}</button>}
+              {modalState.mode === 'edit' && modalState.id && <button className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm" onClick={() => { const task = tasks.find((item) => item.id === modalState.id); if (task) void createNoteFromTask(task); }}>{hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}</button>}
               <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
               <button className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving} onClick={() => void saveTask()}>{saving ? 'Saving...' : 'Save'}</button>
             </div>

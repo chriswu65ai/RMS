@@ -55,6 +55,11 @@ export async function listActivityLog(limit = 10): Promise<AgentActivityLog[]> {
   return response.json() as Promise<AgentActivityLog[]>;
 }
 
+export async function clearActivityLog(): Promise<void> {
+  const response = await fetch('/api/agent/activity-log', { method: 'DELETE' });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+}
+
 export async function listModels(provider: AgentProvider): Promise<{
   models: ModelListItem[];
   selected_model: string;

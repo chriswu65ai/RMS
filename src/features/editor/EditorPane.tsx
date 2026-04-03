@@ -1,7 +1,7 @@
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Minus, Save, Search, Share2, Smile, Table, X } from 'lucide-react';
+import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Save, Share2, Smile, Table, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
@@ -454,9 +454,7 @@ export function EditorPane() {
     }
 
     const subject = encodeURIComponent(filename);
-    const bodyText = encodeURIComponent(`I've attached ${filename}.
-
-${merged}`);
+    const bodyText = encodeURIComponent(merged);
     window.location.href = `mailto:?subject=${subject}&body=${bodyText}`;
   };
 
@@ -538,7 +536,7 @@ ${merged}`);
               ) : (
                 <button className="rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
                   <span className="relative mr-1 inline-flex">
-                    <Search className="inline" size={14} />
+                    <Microchip className="inline" size={14} />
                     <span className="absolute -right-2 -top-1 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
                   </span>
                   Generate

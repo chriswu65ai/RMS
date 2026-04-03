@@ -2,7 +2,7 @@ import { FilePlus2 } from 'lucide-react';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
+import { useResearchStore } from '../../hooks/useResearchStore';
 import { createFile } from '../../lib/dataApi';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -13,8 +13,16 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
   const dialog = useDialog();
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const requireTicker = (value: string) => (value.trim() ? null : 'Type in a ticker to continue.');
-  const requireDate = (value: string) => (value.trim() ? null : 'Type in a date to continue.');
+  const parseStockIdentityFromName = (fileName: string) => {
+    const normalized = fileName.trim().replace(/\.md$/i, '');
+    const match = normalized.match(/^(\d{4}-\d{2}-\d{2})\s+(.+?)-(.+)$/);
+    if (!match) return null;
+    return {
+      date: match[1],
+      ticker: match[2].trim().toUpperCase(),
+      type: match[3].trim(),
+    };
+  };
 
   const templates = useMemo(
     () =>
@@ -62,19 +70,16 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const tickerInput = await dialog.prompt('New file', '', 'Ticker', { validate: requireTicker });
-                if (tickerInput === null) return;
-                const typeInput = await dialog.prompt('New file', noteTypes[0] ?? 'Research', 'Type', { options: noteTypes.length > 0 ? noteTypes : ['Research'] });
-                if (!typeInput) return;
-                const dateInput = await dialog.prompt('New file', toLocalDateInputValue(), 'Date (YYYY-MM-DD)', { validate: requireDate });
-                if (dateInput === null) return;
-
-                const ticker = tickerInput.trim().toUpperCase();
-                const type = typeInput.trim();
-                const date = dateInput.trim();
-                if (!ticker || !type || !date) return;
-
-                const fileName = buildCanonicalStockFileName(date, ticker, type);
+                const fileNameInput = await dialog.prompt(
+                  'New file',
+                  '',
+                  'File name (free-form, .md optional). Tip: YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+                  {
+                    validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
+                  },
+                );
+                if (fileNameInput === null) return;
+                const fileName = fileNameInput.trim().toLowerCase().endsWith('.md') ? fileNameInput.trim() : `${fileNameInput.trim()}.md`;
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
                 const parsed = splitFrontmatter(selected.content);
                 const duplicate = hasDuplicateInFolder(folder?.id ?? null, fileName);
@@ -82,13 +87,14 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                   await dialog.alert('Duplicate file', 'A file cannot be created because a file with the same name already exists in this folder.');
                   return;
                 }
+                const identity = parseStockIdentityFromName(fileName);
                 const clonedFrontmatter = {
                   ...parsed.frontmatter,
                   template: false,
-                  title: `${ticker} ${type}`,
-                  ticker,
-                  type,
-                  date,
+                  title: identity ? `${identity.ticker} ${identity.type}` : fileName.replace(/\.md$/i, ''),
+                  ticker: identity?.ticker ?? '',
+                  type: identity?.type ?? (noteTypes[0] ?? ''),
+                  date: identity?.date ?? '',
                 };
                 const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
                 const { error } = await createFile({
