@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { Folder, ResearchNote, SettingsList, Workspace } from '../types/models';
 import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
+import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
 
 const DEFAULT_SETTINGS: SettingsList = {
   noteTypes: ['Event', 'Earnings', 'Deepdive', 'Summary'],
@@ -28,18 +29,6 @@ const normalizeMetadataPanelCollapsed = (value: unknown) => {
   if (typeof value !== 'boolean') return false;
   if (typeof window !== 'undefined' && window.innerWidth < LG_BREAKPOINT_PX) return false;
   return value;
-};
-
-const normalizeList = (items: string[]) => {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  items.map((item) => item.trim()).filter(Boolean).forEach((item) => {
-    const key = item.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    normalized.push(item);
-  });
-  return normalized;
 };
 
 const mergeMetadataValues = (base: string[], incoming: string[]) => {
@@ -120,6 +109,16 @@ function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null)
   return { selectedFileId: existing?.id ?? null, selectedTicker: toSelectedTicker(existing) };
 }
 
+const mergePersistedPromptState = (persistedState: unknown, currentState: Store) => {
+  const merged = { ...currentState, ...(persistedState as Partial<Store> | undefined) };
+  const metadata = mergeMetadataListsWithDefaults(merged, DEFAULT_SETTINGS);
+  return {
+    ...merged,
+    ...metadata,
+    metadataPanelCollapsed: normalizeMetadataPanelCollapsed(merged.metadataPanelCollapsed),
+  };
+};
+
 export const usePromptStore = create<Store>()(
   persist(
     (set, get) => ({
@@ -142,9 +141,9 @@ export const usePromptStore = create<Store>()(
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
-      setNoteTypes: (types) => set({ noteTypes: normalizeList(types) }),
-      setAssignees: (assignees) => set({ assignees: normalizeList(assignees) }),
-      setSectors: (sectors) => set({ sectors: normalizeList(sectors) }),
+      setNoteTypes: (types) => set({ noteTypes: normalizeListWithFallback(types, DEFAULT_SETTINGS.noteTypes) }),
+      setAssignees: (assignees) => set({ assignees: normalizeListWithFallback(assignees, DEFAULT_SETTINGS.assignees) }),
+      setSectors: (sectors) => set({ sectors: normalizeListWithFallback(sectors, DEFAULT_SETTINGS.sectors) }),
       setLastView: (view) => set({ lastView: view }),
       setStockFoldersCollapsed: (collapsed) => set({ stockFoldersCollapsed: collapsed }),
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
@@ -242,13 +241,7 @@ export const usePromptStore = create<Store>()(
     }),
     {
       name: 'rms-app-state',
-      merge: (persistedState, currentState) => {
-        const merged = { ...currentState, ...(persistedState as Partial<Store> | undefined) };
-        return {
-          ...merged,
-          metadataPanelCollapsed: normalizeMetadataPanelCollapsed(merged.metadataPanelCollapsed),
-        };
-      },
+      merge: (persistedState, currentState) => mergePersistedPromptState(persistedState, currentState as Store),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         const normalized = normalizeMetadataPanelCollapsed(state.metadataPanelCollapsed);
