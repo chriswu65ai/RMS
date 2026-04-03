@@ -18,9 +18,24 @@ export type AgentGenerateResponse = {
 
 export type ModelListEntry = { modelId: string; displayName: string };
 
+export type CatalogStatus = 'live' | 'unavailable';
+export type ModelCatalogReasonCode =
+  | 'ok'
+  | 'missing_api_key'
+  | 'unsupported_endpoint'
+  | 'auth_failed'
+  | 'network_error'
+  | 'empty_response';
+
+export type ListModelsResult = {
+  models: ModelListEntry[];
+  catalogStatus: CatalogStatus;
+  reasonCode: ModelCatalogReasonCode;
+};
+
 export interface ProviderAdapter {
   generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse>;
-  listModels(apiKey: string, signal?: AbortSignal): Promise<ModelListEntry[]>;
+  listModels(apiKey: string, signal?: AbortSignal): Promise<ListModelsResult>;
 }
 
 const estimateTokens = (text: string) => Math.max(1, Math.round(text.length / 4));
@@ -51,6 +66,22 @@ const extractTextFromUnknown = (value: unknown): string => {
   }
   return '';
 };
+
+const mapStatusToReasonCode = (status: number): ModelCatalogReasonCode => {
+  if (status === 401 || status === 403) return 'auth_failed';
+  if (status === 404 || status === 405 || status === 501) return 'unsupported_endpoint';
+  return 'network_error';
+};
+
+const normalizeModelList = (raw: Array<{ id?: string; model?: string; name?: string }>): ModelListEntry[] => raw
+  .map((entry) => {
+    const modelId = (entry.id ?? entry.model ?? '').trim();
+    return {
+      modelId,
+      displayName: (entry.name ?? modelId).trim() || modelId,
+    };
+  })
+  .filter((entry) => entry.modelId.length > 0);
 
 const fetchFromMirrors = async (path: string, init: RequestInit): Promise<Response> => {
   const attempts: string[] = [];
@@ -111,9 +142,8 @@ class MinimaxAdapter implements ProviderAdapter {
     };
   }
 
-  async listModels(apiKey: string, signal?: AbortSignal): Promise<ModelListEntry[]> {
-    const candidates = ['/v1/models'];
-    let lastError: Error | null = null;
+  async listModels(apiKey: string, signal?: AbortSignal): Promise<ListModelsResult> {
+    const candidates = ['/v1/models', '/v1/text/models'];
     for (const path of candidates) {
       try {
         const response = await fetchFromMirrors(path, {
@@ -121,20 +151,25 @@ class MinimaxAdapter implements ProviderAdapter {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal,
         });
+        if (!response.ok) {
+          const reasonCode = mapStatusToReasonCode(response.status);
+          if (reasonCode === 'unsupported_endpoint') continue;
+          return { models: [], catalogStatus: 'unavailable', reasonCode };
+        }
         const data = await response.json() as {
-          data?: Array<{ id?: string; name?: string }>;
-          models?: Array<{ id?: string; name?: string }>;
+          data?: Array<{ id?: string; model?: string; name?: string }>;
+          models?: Array<{ id?: string; model?: string; name?: string }>;
         };
-        const rawModels = data.data ?? data.models ?? [];
-        const models = rawModels
-          .map((item) => ({ modelId: item.id ?? '', displayName: item.name ?? item.id ?? '' }))
-          .filter((item) => item.modelId);
-        if (models.length > 0) return models;
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('Model listing unsupported or failed.');
+        const models = normalizeModelList(data.data ?? data.models ?? []);
+        if (models.length === 0) {
+          return { models: [], catalogStatus: 'unavailable', reasonCode: 'empty_response' };
+        }
+        return { models, catalogStatus: 'live', reasonCode: 'ok' };
+      } catch {
+        return { models: [], catalogStatus: 'unavailable', reasonCode: 'network_error' };
       }
     }
-    throw lastError ?? new Error('Model listing unsupported or failed.');
+    return { models: [], catalogStatus: 'unavailable', reasonCode: 'unsupported_endpoint' };
   }
 }
 
@@ -143,14 +178,24 @@ class OpenAIAdapter implements ProviderAdapter {
     throw new Error('OpenAI adapter is not implemented yet.');
   }
 
-  async listModels(apiKey: string, signal?: AbortSignal): Promise<ModelListEntry[]> {
-    const response = await fetch('https://api.openai.com/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal,
-    });
-    if (!response.ok) throw new Error(`OpenAI model listing failed (${response.status}).`);
-    const data = await response.json() as { data?: Array<{ id?: string }> };
-    return (data.data ?? []).map((item) => ({ modelId: item.id ?? '', displayName: item.id ?? '' })).filter((item) => item.modelId);
+  async listModels(apiKey: string, signal?: AbortSignal): Promise<ListModelsResult> {
+    try {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+      });
+      if (!response.ok) {
+        return { models: [], catalogStatus: 'unavailable', reasonCode: mapStatusToReasonCode(response.status) };
+      }
+      const data = await response.json() as { data?: Array<{ id?: string }> };
+      const models = normalizeModelList((data.data ?? []).map((entry) => ({ id: entry.id, name: entry.id })));
+      if (models.length === 0) {
+        return { models: [], catalogStatus: 'unavailable', reasonCode: 'empty_response' };
+      }
+      return { models, catalogStatus: 'live', reasonCode: 'ok' };
+    } catch {
+      return { models: [], catalogStatus: 'unavailable', reasonCode: 'network_error' };
+    }
   }
 }
 
@@ -159,8 +204,27 @@ class AnthropicAdapter implements ProviderAdapter {
     throw new Error('Anthropic adapter is not implemented yet.');
   }
 
-  async listModels(_apiKey: string, _signal?: AbortSignal): Promise<ModelListEntry[]> {
-    throw new Error('Anthropic model listing is currently unsupported.');
+  async listModels(apiKey: string, signal?: AbortSignal): Promise<ListModelsResult> {
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/models', {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal,
+      });
+      if (!response.ok) {
+        return { models: [], catalogStatus: 'unavailable', reasonCode: mapStatusToReasonCode(response.status) };
+      }
+      const data = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
+      const models = normalizeModelList((data.data ?? []).map((entry) => ({ id: entry.id, name: entry.display_name ?? entry.id })));
+      if (models.length === 0) {
+        return { models: [], catalogStatus: 'unavailable', reasonCode: 'empty_response' };
+      }
+      return { models, catalogStatus: 'live', reasonCode: 'ok' };
+    } catch {
+      return { models: [], catalogStatus: 'unavailable', reasonCode: 'network_error' };
+    }
   }
 }
 
@@ -173,17 +237,46 @@ export const providerRegistry: Record<AgentProvider, ProviderAdapter> = {
 export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
   minimax: [
     { modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5' },
-    { modelId: 'MiniMax-Text-01', displayName: 'MiniMax Text 01' },
-    { modelId: 'abab6.5-chat', displayName: 'ABAB 6.5 Chat' },
   ],
   openai: [
     { modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini' },
-    { modelId: 'gpt-4.1', displayName: 'GPT-4.1' },
   ],
   anthropic: [
     { modelId: 'claude-3-5-sonnet-latest', displayName: 'Claude 3.5 Sonnet' },
-    { modelId: 'claude-3-7-sonnet-latest', displayName: 'Claude 3.7 Sonnet' },
   ],
+};
+
+const MODEL_PRIORITY: Record<AgentProvider, string[]> = {
+  minimax: ['MiniMax-M2.5', 'MiniMax-Text-01', 'abab6.5-chat'],
+  openai: ['gpt-4.1-mini', 'gpt-4.1'],
+  anthropic: ['claude-3-5-sonnet-latest', 'claude-3-7-sonnet-latest'],
+};
+
+export const selectBestModel = (
+  provider: AgentProvider,
+  discoveredModels: ModelListEntry[],
+  fallbackModels: ModelListEntry[],
+  preferredModel?: string,
+): string => {
+  const preferred = preferredModel?.trim() ?? '';
+  if (preferred && discoveredModels.some((entry) => entry.modelId === preferred)) {
+    return preferred;
+  }
+
+  const priority = MODEL_PRIORITY[provider];
+  for (const modelId of priority) {
+    const found = discoveredModels.find((entry) => entry.modelId === modelId);
+    if (found) return found.modelId;
+  }
+
+  if (discoveredModels[0]?.modelId) return discoveredModels[0].modelId;
+
+  for (const modelId of priority) {
+    const found = fallbackModels.find((entry) => entry.modelId === modelId);
+    if (found) return found.modelId;
+  }
+
+  return fallbackModels[0]?.modelId ?? 'model-not-configured';
 };
 
 export const estimateUsage = (inputText: string, outputText: string) => {

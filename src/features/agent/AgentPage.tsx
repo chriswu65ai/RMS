@@ -1,22 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
-import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogFallbackReason, type ModelListItem } from './types';
+import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
 
 const modelCatalogService = new ModelCatalogService();
 
 const providerLabel = (provider: AgentProvider) => provider.charAt(0).toUpperCase() + provider.slice(1);
-const fallbackBannerMessage = (provider: AgentProvider, reason: ModelCatalogFallbackReason | null, reasonMessage: string | null) => {
-  if (provider === 'minimax' && reason === 'provider_model_listing_failed') {
-    return 'Model catalog unavailable; key may still work for generation.';
-  }
-  if (reason === 'missing_api_key') {
-    return 'Add an API key to load provider models. Using fallback catalog.';
-  }
-  if (reason === 'provider_model_listing_unsupported') {
-    return 'Provider model listing is unavailable. Using fallback catalog.';
-  }
-  return reasonMessage ?? 'Using fallback catalog.';
+const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unavailable' | null) => {
+  if (catalogStatus === 'live') return 'Loaded models from provider account.';
+  if (catalogStatus === 'unavailable') return 'Live model catalog unavailable; auto-selected provider fallback model.';
+  return null;
 };
 
 export function AgentPage() {
@@ -25,38 +18,37 @@ export function AgentPage() {
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [modelState, setModelState] = useState<{
     loading: boolean;
-    source: 'provider' | 'fallback' | null;
-    reason: ModelCatalogFallbackReason | null;
-    reasonMessage: string | null;
-  }>({ loading: false, source: null, reason: null, reasonMessage: null });
+    catalogStatus: 'live' | 'unavailable' | null;
+    selectionSource: 'live_catalog' | 'provider_fallback' | null;
+    reasonCode: ModelCatalogReasonCode | null;
+  }>({ loading: false, catalogStatus: null, selectionSource: null, reasonCode: null });
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<AgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
 
-  const refreshModels = async (nextProvider: AgentProvider, preserveModel = false) => {
-    setModelState({ loading: true, source: null, reason: null, reasonMessage: null });
+  const refreshModels = async (nextProvider: AgentProvider, preserveModel = false, applySelection = true) => {
+    setModelState({ loading: true, catalogStatus: null, selectionSource: null, reasonCode: null });
     try {
       const response = await modelCatalogService.listModels(nextProvider);
       setModels(response.models);
       setModelState({
         loading: false,
-        source: response.source,
-        reason: response.reason ?? null,
-        reasonMessage: response.reasonMessage ?? null,
+        catalogStatus: response.catalogStatus,
+        selectionSource: response.selectionSource,
+        reasonCode: response.reasonCode,
       });
-      if (!preserveModel || !response.models.some((entry) => entry.modelId === model)) {
-        setModel(response.models[0]?.modelId ?? '');
+      if (applySelection && (!preserveModel || !response.models.some((entry) => entry.modelId === model))) {
+        setModel(response.selectedModel);
       }
     } catch {
       setModels([]);
       setModelState({
         loading: false,
-        source: 'fallback',
-        reason: 'provider_model_listing_failed',
-        reasonMessage: 'Model catalog unavailable. Using fallback catalog.',
+        catalogStatus: 'unavailable',
+        selectionSource: 'provider_fallback',
+        reasonCode: 'network_error',
       });
-      setModel('');
     }
   };
 
@@ -115,10 +107,9 @@ export function AgentPage() {
             </div>
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
               {modelState.loading ? <span>Refreshing models…</span> : null}
-              {!modelState.loading && modelState.source === 'fallback'
-                ? <span>{fallbackBannerMessage(provider, modelState.reason, modelState.reasonMessage)}</span>
+              {!modelState.loading && modelState.catalogStatus
+                ? <span>{catalogStatusBannerMessage(modelState.catalogStatus)}</span>
                 : null}
-              {!modelState.loading && modelState.source === 'provider' ? <span>Loaded models from provider account.</span> : null}
             </div>
             <div className="mt-3">
               <button
@@ -173,7 +164,7 @@ export function AgentPage() {
                     >
                       Save key
                     </button>
-                    <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => void refreshModels(candidate, candidate === provider)}>Refresh models</button>
+                    <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => void refreshModels(candidate, candidate === provider, candidate === provider)}>Refresh models</button>
                   </div>
                 </div>
               ))}
