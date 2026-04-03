@@ -42,6 +42,34 @@ const normalizeList = (items: string[]) => {
   return normalized;
 };
 
+const mergeMetadataValues = (base: string[], incoming: string[]) => {
+  const merged = [...normalizeList(base)];
+  const known = new Map(merged.map((value) => [value.toLowerCase(), value] as const));
+  incoming.map((value) => value.trim()).filter(Boolean).forEach((value) => {
+    const key = value.toLowerCase();
+    if (known.has(key)) return;
+    known.set(key, value);
+    merged.push(value);
+  });
+  return merged;
+};
+
+const deriveMetadataFromFiles = (files: ResearchNote[], noteTypes: string[], sectors: string[]) => {
+  const discoveredNoteTypes: string[] = [];
+  const discoveredSectors: string[] = [];
+
+  files.forEach((file) => {
+    const { frontmatter } = splitFrontmatter(file.content, { knownSectors: sectors, knownNoteTypes: noteTypes });
+    if (typeof frontmatter.type === 'string' && frontmatter.type.trim()) discoveredNoteTypes.push(frontmatter.type);
+    if (typeof frontmatter.sector === 'string' && frontmatter.sector.trim()) discoveredSectors.push(frontmatter.sector);
+  });
+
+  return {
+    noteTypes: mergeMetadataValues(noteTypes, discoveredNoteTypes),
+    sectors: mergeMetadataValues(sectors, discoveredSectors),
+  };
+};
+
 export type AppView = 'home' | 'tasks' | 'research';
 export type EditorTab = 'edit' | 'preview' | 'split';
 
@@ -168,6 +196,7 @@ export const usePromptStore = create<Store>()(
         try {
           const data = await bootstrapWorkspace();
           set((state) => ({
+            ...deriveMetadataFromFiles(data.files, state.noteTypes, state.sectors),
             workspace: data.workspace,
             folders: data.folders,
             files: data.files,
@@ -184,6 +213,7 @@ export const usePromptStore = create<Store>()(
         try {
           const data = await bootstrapWorkspace();
           set((state) => ({
+            ...deriveMetadataFromFiles(data.files, state.noteTypes, state.sectors),
             workspace: data.workspace,
             folders: data.folders,
             files: data.files,
