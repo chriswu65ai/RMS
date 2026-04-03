@@ -15,6 +15,13 @@ import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
 
 const normalizeSector = (value: string) => value.trim().toLowerCase();
+const recommendationLabels: Record<Recommendation, string> = {
+  [Recommendation.Buy]: 'Buy',
+  [Recommendation.Hold]: 'Hold',
+  [Recommendation.Sell]: 'Sell',
+  [Recommendation.Avoid]: 'Avoid',
+};
+const formatRecommendationLabel = (value: Recommendation) => recommendationLabels[value];
 const formatCreatedDate = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
@@ -111,10 +118,19 @@ function OverviewPage() {
     )), [dateSortDirection, files, taskByLinkedFile]);
 
   const sectorsForRow = (row: Note) => row.stock.sectors.map((sector) => sector.trim()).filter(Boolean);
+  const uniqueSectors = (values: string[]) => {
+    const byNormalized = new Map<string, string>();
+    values.forEach((sector) => {
+      const normalized = normalizeSector(sector);
+      if (!normalized || byNormalized.has(normalized)) return;
+      byNormalized.set(normalized, sector);
+    });
+    return Array.from(byNormalized.values());
+  };
 
   const options = useMemo(() => ({
     tickers: Array.from(new Set(rows.map((row) => row.stock.ticker).filter((value) => value !== '—'))),
-    sectors: Array.from(new Set(rows.flatMap((row) => sectorsForRow(row).map((sector) => normalizeSector(sector))))),
+    sectors: uniqueSectors(rows.flatMap((row) => sectorsForRow(row))),
     recommendations: Object.values(Recommendation).filter((value) => rows.some((row) => row.stock.recommendation === value)),
     types: Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== '—'))),
     assignees: Array.from(new Set(rows.map((row) => row.assignee).filter((value) => value !== '—'))),
@@ -137,7 +153,7 @@ function OverviewPage() {
       <div className="mt-4 grid gap-2 md:grid-cols-5">
         <select className="input" value={tickerFilter} onChange={(e) => setTickerFilter(e.target.value)}><option value="">All tickers</option>{options.tickers.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         <select className="input" value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}><option value="">All sectors</option>{options.sectors.map((value) => <option key={value} value={value}>{value}</option>)}</select>
-        <select className="input" value={recommendationFilter} onChange={(e) => setRecommendationFilter(e.target.value)}><option value="">All recommendations</option>{options.recommendations.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+        <select className="input" value={recommendationFilter} onChange={(e) => setRecommendationFilter(e.target.value)}><option value="">All recommendations</option>{options.recommendations.map((value) => <option key={value} value={value}>{formatRecommendationLabel(value)}</option>)}</select>
         <select className="input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">All types</option>{options.types.map((value) => <option key={value} value={value}>{value}</option>)}</select>
         <select className="input" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}><option value="">All assignees</option>{options.assignees.map((value) => <option key={value} value={value}>{value}</option>)}</select>
       </div>

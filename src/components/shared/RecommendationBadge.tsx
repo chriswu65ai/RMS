@@ -8,6 +8,13 @@ const recommendationStyles: Record<Recommendation | '', string> = {
   '': 'bg-slate-100 text-slate-500',
 };
 
+const recommendationLabels: Record<Recommendation, string> = {
+  [Recommendation.Buy]: 'Buy',
+  [Recommendation.Hold]: 'Hold',
+  [Recommendation.Sell]: 'Sell',
+  [Recommendation.Avoid]: 'Avoid',
+};
+
 export function RecommendationBadge({ value }: { value: Recommendation | '' }) {
-  return <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${recommendationStyles[value]}`}>{value || '—'}</span>;
+  return <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${recommendationStyles[value]}`}>{value ? recommendationLabels[value] : '—'}</span>;
 }
