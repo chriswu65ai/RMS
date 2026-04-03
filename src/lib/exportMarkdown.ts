@@ -57,6 +57,34 @@ function writeUint32(view: DataView, offset: number, value: number) {
   view.setUint32(offset, value >>> 0, true);
 }
 
+async function inflateRaw(bytes: Uint8Array) {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Compressed ZIP entries are not supported in this environment.');
+  }
+
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const decompressed = await new Response(stream).arrayBuffer();
+  return new Uint8Array(decompressed);
+}
+
+function findEndOfCentralDirectoryOffset(bytes: Uint8Array, view: DataView) {
+  const minEocdSize = 22;
+  if (bytes.length < minEocdSize) {
+    throw new Error('ZIP file is malformed or truncated.');
+  }
+
+  const maxCommentLength = 0xffff;
+  const minOffset = Math.max(0, bytes.length - (minEocdSize + maxCommentLength));
+
+  for (let offset = bytes.length - minEocdSize; offset >= minOffset; offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      return offset;
+    }
+  }
+
+  throw new Error('ZIP central directory not found.');
+}
+
 function buildZip(files: Array<{ path: string; content: string }>) {
   const encoder = new TextEncoder();
   const entries: ZipEntry[] = [];
@@ -177,36 +205,74 @@ export async function readMarkdownEntriesFromImport(file: File) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const decoder = new TextDecoder();
   const entries: Array<{ path: string; content: string }> = [];
-  let offset = 0;
 
-  while (offset + 4 <= bytes.length) {
-    const signature = view.getUint32(offset, true);
-    if (signature !== 0x04034b50) break;
+  const eocdOffset = findEndOfCentralDirectoryOffset(bytes, view);
+  const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const centralDirectorySize = view.getUint32(eocdOffset + 12, true);
+  const centralDirectoryOffset = view.getUint32(eocdOffset + 16, true);
 
-    const compressionMethod = view.getUint16(offset + 8, true);
-    const compressedSize = view.getUint32(offset + 18, true);
-    const fileNameLength = view.getUint16(offset + 26, true);
-    const extraLength = view.getUint16(offset + 28, true);
-    const fileNameStart = offset + 30;
+  if (centralDirectoryOffset + centralDirectorySize > bytes.length) {
+    throw new Error('ZIP file is malformed or truncated.');
+  }
+
+  let offset = centralDirectoryOffset;
+
+  for (let i = 0; i < totalEntries; i += 1) {
+    if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error('ZIP central directory entry is malformed.');
+    }
+
+    const generalPurposeBitFlag = view.getUint16(offset + 8, true);
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+
+    const fileNameStart = offset + 46;
     const fileNameEnd = fileNameStart + fileNameLength;
-    const contentStart = fileNameEnd + extraLength;
-    const contentEnd = contentStart + compressedSize;
 
-    if (contentEnd > bytes.length) {
-      throw new Error('ZIP file is malformed or truncated.');
+    if (fileNameEnd > bytes.length) {
+      throw new Error('ZIP central directory entry is malformed.');
     }
 
     const entryName = decoder.decode(bytes.slice(fileNameStart, fileNameEnd));
-    if (compressionMethod !== 0) {
-      throw new Error('Only uncompressed ZIP files are currently supported.');
+    const isMarkdown = entryName.toLowerCase().endsWith('.md') && !entryName.endsWith('/');
+
+    if (isMarkdown) {
+      if ((generalPurposeBitFlag & 0x1) !== 0) {
+        throw new Error(`ZIP entry is encrypted and cannot be imported: ${entryName}`);
+      }
+
+      if (localHeaderOffset + 30 > bytes.length || view.getUint32(localHeaderOffset, true) !== 0x04034b50) {
+        throw new Error(`ZIP local header is malformed for entry: ${entryName}`);
+      }
+
+      const localFileNameLength = view.getUint16(localHeaderOffset + 26, true);
+      const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+      const contentStart = localHeaderOffset + 30 + localFileNameLength + localExtraLength;
+      const contentEnd = contentStart + compressedSize;
+
+      if (contentEnd > bytes.length) {
+        throw new Error('ZIP file is malformed or truncated.');
+      }
+
+      const rawContent = bytes.slice(contentStart, contentEnd);
+      let decodedContent: string;
+
+      if (compressionMethod === 0) {
+        decodedContent = decoder.decode(rawContent);
+      } else if (compressionMethod === 8) {
+        decodedContent = decoder.decode(await inflateRaw(rawContent));
+      } else {
+        throw new Error(`ZIP entry uses unsupported compression method (${compressionMethod}): ${entryName}`);
+      }
+
+      entries.push({ path: entryName, content: decodedContent });
     }
 
-    if (entryName.toLowerCase().endsWith('.md') && !entryName.endsWith('/')) {
-      const content = decoder.decode(bytes.slice(contentStart, contentEnd));
-      entries.push({ path: entryName, content });
-    }
-
-    offset = contentEnd;
+    offset = fileNameEnd + extraLength + commentLength;
   }
 
   return entries;
