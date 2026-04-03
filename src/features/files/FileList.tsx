@@ -1,6 +1,7 @@
 import { FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
+import { getFileTitleIndicators } from './unsavedIndicators';
 import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -10,7 +11,7 @@ const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
-  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes } = useResearchStore();
+  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes, unsavedFileIds } = useResearchStore();
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
@@ -138,7 +139,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               >
                 <p className="flex items-center gap-1 text-sm font-medium">
                   <span>{frontmatter.title || file.name}</span>
-                  {frontmatter.starred === true && <Star size={12} className="text-amber-500" fill="currentColor" />}
+                  {getFileTitleIndicators({ isStarred: frontmatter.starred === true, isUnsaved: unsavedFileIds.includes(file.id) }).map((indicator) => (
+                    indicator === 'starred'
+                      ? <span key={`${file.id}-starred`} title="Starred note" aria-label="Starred note"><Star size={12} className="text-amber-500" fill="currentColor" /></span>
+                      : <span key={`${file.id}-unsaved`} className="text-xs font-bold leading-none text-red-500" aria-label="Unsaved changes" title="Unsaved note(s)">!</span>
+                  ))}
                 </p>
                 <p className="line-clamp-1 text-xs text-slate-500">{file.path.split('/').filter(Boolean).join('/') || file.name}</p>
               </button>

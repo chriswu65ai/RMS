@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { Folder, FrontmatterModel, ResearchNote, SettingsList, Workspace } from '../types/models';
 import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
+import { deriveUnsavedFileIds } from '../features/files/unsavedIndicators';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
 
 const DEFAULT_SETTINGS: SettingsList = {
@@ -94,6 +95,7 @@ type Store = {
   editorTab: EditorTab;
   draftByFileId: Record<string, DraftEntry>;
   generateJobsByFileId: Record<string, GenerateJob>;
+  unsavedFileIds: string[];
   loading: boolean;
   error: string | null;
   setSearch: (search: string) => void;
@@ -166,6 +168,7 @@ export const useResearchStore = create<Store>()(
       generateJobsByFileId: {},
       loading: false,
       error: null,
+      unsavedFileIds: [],
       setSearch: (search) => set({ search }),
       setNoteTypes: (types) => set({ noteTypes: normalizeListWithFallback(types, DEFAULT_SETTINGS.noteTypes) }),
       setAssignees: (assignees) => set({ assignees: normalizeListWithFallback(assignees, DEFAULT_SETTINGS.assignees) }),
@@ -174,16 +177,23 @@ export const useResearchStore = create<Store>()(
       setStockFoldersCollapsed: (collapsed) => set({ stockFoldersCollapsed: collapsed }),
       setMetadataPanelCollapsed: (collapsed) => set({ metadataPanelCollapsed: collapsed }),
       setEditorTab: (tab) => set({ editorTab: tab }),
-      setDraft: (fileId, draftPayload) => set((state) => ({
-        draftByFileId: {
+      setDraft: (fileId, draftPayload) => set((state) => {
+        const nextDraftByFileId = {
           ...state.draftByFileId,
           [fileId]: draftPayload,
-        },
-      })),
+        };
+        return {
+          draftByFileId: nextDraftByFileId,
+          unsavedFileIds: deriveUnsavedFileIds(state.files, nextDraftByFileId),
+        };
+      }),
       clearDraft: (fileId) => set((state) => {
         if (!state.draftByFileId[fileId]) return state;
         const { [fileId]: _removed, ...rest } = state.draftByFileId;
-        return { draftByFileId: rest };
+        return {
+          draftByFileId: rest,
+          unsavedFileIds: deriveUnsavedFileIds(state.files, rest),
+        };
       }),
       getDraft: (fileId) => get().draftByFileId[fileId] ?? null,
       markGenerateRunning: (fileId) => set((state) => ({
@@ -201,16 +211,20 @@ export const useResearchStore = create<Store>()(
           source: 'generate',
           updatedAt: Date.now(),
         };
-        set((state) => ({
-          draftByFileId: {
+        set((state) => {
+          const nextDraftByFileId = {
             ...state.draftByFileId,
             [fileId]: draftPayload,
-          },
-          generateJobsByFileId: {
-            ...state.generateJobsByFileId,
-            [fileId]: { status: 'completed', completedAt: Date.now() },
-          },
-        }));
+          };
+          return {
+            draftByFileId: nextDraftByFileId,
+            unsavedFileIds: deriveUnsavedFileIds(state.files, nextDraftByFileId),
+            generateJobsByFileId: {
+              ...state.generateJobsByFileId,
+              [fileId]: { status: 'completed', completedAt: Date.now() },
+            },
+          };
+        });
         return draftPayload;
       },
       markGenerateFailed: (fileId, errorMessage) => set((state) => ({
@@ -276,6 +290,7 @@ export const useResearchStore = create<Store>()(
             workspace: data.workspace,
             folders: data.folders,
             files: data.files,
+            unsavedFileIds: deriveUnsavedFileIds(data.files, state.draftByFileId),
             ...sanitizeSelection(data.files, state.selectedFileId),
             loading: false,
           }));
@@ -293,6 +308,7 @@ export const useResearchStore = create<Store>()(
             workspace: data.workspace,
             folders: data.folders,
             files: data.files,
+            unsavedFileIds: deriveUnsavedFileIds(data.files, state.draftByFileId),
             ...sanitizeSelection(data.files, state.selectedFileId),
             loading: false,
           }));
@@ -313,6 +329,7 @@ export const useResearchStore = create<Store>()(
           search: '',
           draftByFileId: {},
           generateJobsByFileId: {},
+          unsavedFileIds: [],
           loading: false,
           error: null,
         });
