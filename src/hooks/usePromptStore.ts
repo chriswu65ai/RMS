@@ -22,6 +22,14 @@ const DEFAULT_SETTINGS: SettingsList = {
   ],
 };
 
+const LG_BREAKPOINT_PX = 1024;
+
+const normalizeMetadataPanelCollapsed = (value: unknown) => {
+  if (typeof value !== 'boolean') return false;
+  if (typeof window !== 'undefined' && window.innerWidth < LG_BREAKPOINT_PX) return false;
+  return value;
+};
+
 const normalizeList = (items: string[]) => {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -101,7 +109,7 @@ export const usePromptStore = create<Store>()(
       sectors: DEFAULT_SETTINGS.sectors,
       lastView: 'research',
       stockFoldersCollapsed: false,
-      metadataPanelCollapsed: true,
+      metadataPanelCollapsed: false,
       editorTab: 'split',
       loading: false,
       error: null,
@@ -197,6 +205,20 @@ export const usePromptStore = create<Store>()(
     }),
     {
       name: 'rms-app-state',
+      merge: (persistedState, currentState) => {
+        const merged = { ...currentState, ...(persistedState as Partial<Store> | undefined) };
+        return {
+          ...merged,
+          metadataPanelCollapsed: normalizeMetadataPanelCollapsed(merged.metadataPanelCollapsed),
+        };
+      },
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const normalized = normalizeMetadataPanelCollapsed(state.metadataPanelCollapsed);
+        if (normalized !== state.metadataPanelCollapsed) {
+          state.setMetadataPanelCollapsed(normalized);
+        }
+      },
       partialize: (state) => ({
         noteTypes: state.noteTypes,
         assignees: state.assignees,
