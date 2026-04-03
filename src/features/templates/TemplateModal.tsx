@@ -70,9 +70,14 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
               disabled={!selected}
               onClick={async () => {
                 if (!selected || !workspace) return;
-                const fileNameInput = await dialog.prompt('New file', '', 'File name (free-form, .md optional)', {
-                  validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
-                });
+                const fileNameInput = await dialog.prompt(
+                  'New file',
+                  '',
+                  'File name (free-form, .md optional). Tip: YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+                  {
+                    validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
+                  },
+                );
                 if (fileNameInput === null) return;
                 const fileName = fileNameInput.trim().toLowerCase().endsWith('.md') ? fileNameInput.trim() : `${fileNameInput.trim()}.md`;
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;

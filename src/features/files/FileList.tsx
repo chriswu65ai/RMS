@@ -84,9 +84,14 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   };
 
   const promptForFileName = async (title: string) => {
-    const fileNameInput = await dialog.prompt(title, '', 'File name (free-form, .md optional)', {
+    const fileNameInput = await dialog.prompt(
+      title,
+      '',
+      'File name (free-form, .md optional). Tip: YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+      {
       validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
-    });
+      },
+    );
     if (fileNameInput === null) return null;
     const normalized = fileNameInput.trim();
     return normalized.toLowerCase().endsWith('.md') ? normalized : `${normalized}.md`;
