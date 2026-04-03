@@ -9,6 +9,7 @@ import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } fr
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
+import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType, getNoteTypeSelectOptions } from './noteTypeOptions';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -37,7 +38,7 @@ const PRIORITY_RANK: Record<Priority | '', number> = {
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
 
 const blankTask = (): NewResearchTaskInput => ({
-  title: '', details: '', ticker: '', note_type: 'Research', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
+  title: '', details: '', ticker: '', note_type: '', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
   date_completed: '', archived: false, linked_note_file_id: '', linked_note_path: '', research_location_folder_id: '', research_location_path: '',
 });
 
@@ -135,7 +136,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   useEffect(() => {
     if (!selectedTaskId) return;
     if (selectedTaskId === 'new') {
-      setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } });
+      setModalState({ mode: 'create', task: { ...blankTask(), note_type: getInitialTaskNoteType(noteTypes) } });
       setActivityExpanded(false);
       return;
     }
@@ -228,7 +229,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const ticker = preview.ticker;
     if (!ticker) return setError('Ticker is required before creating a note.');
 
-    const type = (task.note_type || noteTypes[0] || 'Research').trim();
+    const type = getCreateNoteType(task.note_type, noteTypes);
     const date = toLocalDateInputValue();
     const name = buildCanonicalStockFileName(date, ticker, type);
     let targetFolder = preview.selectedFolder ?? preview.tickerFolder;
@@ -314,7 +315,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   return (
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <button className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-2 py-1 text-xs text-white" onClick={() => { setModalState({ mode: 'create', task: { ...blankTask(), note_type: noteTypes[0] ?? 'Research' } }); setActivityExpanded(false); transitionTaskModal('new'); }}><Plus size={14} />Add task</button>
+        <button className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-2 py-1 text-xs text-white" onClick={() => { setModalState({ mode: 'create', task: { ...blankTask(), note_type: getInitialTaskNoteType(noteTypes) } }); setActivityExpanded(false); transitionTaskModal('new'); }}><Plus size={14} />Add task</button>
         <label className="inline-flex items-center gap-2 text-xs text-slate-600">
           <input
             checked={showArchived}
@@ -399,7 +400,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 )}
               </label>
               <label className="text-sm">Assignee<select className="input mt-1" value={modalState.task.assignee} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, assignee: e.target.value } } : prev)}><option value="">—</option>{assignees.map((assignee) => <option key={assignee} value={assignee}>{assignee}</option>)}</select></label>
-              <label className="text-sm">Note type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{noteTypes.length === 0 ? <option value="Research">Research</option> : noteTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+              <label className="text-sm">Note type<select className="input mt-1" value={modalState.task.note_type} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, note_type: e.target.value } } : prev)}>{getNoteTypeSelectOptions(noteTypes).map((type) => <option key={type || '__empty'} value={type}>{type || EMPTY_NOTE_TYPE_PLACEHOLDER}</option>)}</select>
                 {matchingTemplateForType(modalState.task.note_type)
                   ? <p className="mt-1 text-xs text-emerald-700">Template found and will be used.</p>
                   : null}
