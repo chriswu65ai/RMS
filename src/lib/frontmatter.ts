@@ -22,26 +22,9 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
   });
 
   delete normalized.templateType;
-
-  if (typeof normalized.tags === 'string' && typeof normalized.sector !== 'string' && !Array.isArray(normalized.sectors)) {
-    normalized.sector = normalized.tags.split(',').map((tag) => tag.trim()).filter(Boolean)[0] ?? '';
-  }
-  delete normalized.tags;
-
-  if (typeof normalized.sector !== 'string' && Array.isArray(normalized.sectors)) {
-    normalized.sector = normalized.sectors.map((item) => String(item).trim()).filter(Boolean)[0] ?? '';
-  }
   if (typeof normalized.sector === 'string') {
     normalized.sector = normalized.sector.trim();
   }
-
-  if (typeof normalized.sectors === 'string') {
-    normalized.sectors = normalized.sectors.split(',').map((item) => item.trim()).filter(Boolean);
-  }
-  if (Array.isArray(normalized.sectors)) {
-    normalized.sectors = normalized.sectors.map((item) => String(item).trim()).filter(Boolean);
-  }
-  delete normalized.sectors;
 
   if (typeof normalized.ticker === 'string') {
     normalized.ticker = normalized.ticker.trim().toUpperCase();
@@ -59,11 +42,7 @@ export function normalizeFrontmatter(input: Record<string, unknown> | null | und
     if (value === 'false') normalized.starred = false;
   }
 
-  const recommendation = normalizeRecommendation(normalized.recommendation);
-  const stockRecommendation = normalizeRecommendation(normalized.stock_recommendation);
-  const finalRecommendation = recommendation || stockRecommendation;
-  normalized.recommendation = finalRecommendation;
-  delete normalized.stock_recommendation;
+  normalized.recommendation = normalizeRecommendation(normalized.recommendation);
 
   if (typeof normalized.title === 'string') normalized.title = normalized.title.trim();
   if (typeof normalized.type === 'string') normalized.type = normalized.type.trim();

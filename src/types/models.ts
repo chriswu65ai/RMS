@@ -62,7 +62,6 @@ export type FrontmatterModel = {
   type?: string;
   date?: string;
   sector?: string;
-  sectors?: string[];
   recommendation?: Recommendation | '';
   assignee?: string;
   template?: boolean;
