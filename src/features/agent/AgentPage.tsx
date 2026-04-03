@@ -1,34 +1,61 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
-import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelListItem } from './types';
+import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogFallbackReason, type ModelListItem } from './types';
 
 const modelCatalogService = new ModelCatalogService();
 
 const providerLabel = (provider: AgentProvider) => provider.charAt(0).toUpperCase() + provider.slice(1);
+const fallbackBannerMessage = (provider: AgentProvider, reason: ModelCatalogFallbackReason | null, reasonMessage: string | null) => {
+  if (provider === 'minimax' && reason === 'provider_model_listing_failed') {
+    return 'Model catalog unavailable; key may still work for generation.';
+  }
+  if (reason === 'missing_api_key') {
+    return 'Add an API key to load provider models. Using fallback catalog.';
+  }
+  if (reason === 'provider_model_listing_unsupported') {
+    return 'Provider model listing is unavailable. Using fallback catalog.';
+  }
+  return reasonMessage ?? 'Using fallback catalog.';
+};
 
 export function AgentPage() {
   const [provider, setProvider] = useState<AgentProvider>('minimax');
   const [model, setModel] = useState('');
   const [models, setModels] = useState<ModelListItem[]>([]);
-  const [modelState, setModelState] = useState<{ loading: boolean; source: 'provider' | 'fallback' | null; reason: string | null }>({ loading: false, source: null, reason: null });
+  const [modelState, setModelState] = useState<{
+    loading: boolean;
+    source: 'provider' | 'fallback' | null;
+    reason: ModelCatalogFallbackReason | null;
+    reasonMessage: string | null;
+  }>({ loading: false, source: null, reason: null, reasonMessage: null });
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<AgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
 
   const refreshModels = async (nextProvider: AgentProvider, preserveModel = false) => {
-    setModelState({ loading: true, source: null, reason: null });
+    setModelState({ loading: true, source: null, reason: null, reasonMessage: null });
     try {
       const response = await modelCatalogService.listModels(nextProvider);
       setModels(response.models);
-      setModelState({ loading: false, source: response.source, reason: response.reason ?? null });
+      setModelState({
+        loading: false,
+        source: response.source,
+        reason: response.reason ?? null,
+        reasonMessage: response.reasonMessage ?? null,
+      });
       if (!preserveModel || !response.models.some((entry) => entry.modelId === model)) {
         setModel(response.models[0]?.modelId ?? '');
       }
-    } catch (error) {
+    } catch {
       setModels([]);
-      setModelState({ loading: false, source: 'fallback', reason: error instanceof Error ? error.message : 'Failed listing models.' });
+      setModelState({
+        loading: false,
+        source: 'fallback',
+        reason: 'provider_model_listing_failed',
+        reasonMessage: 'Model catalog unavailable. Using fallback catalog.',
+      });
       setModel('');
     }
   };
@@ -88,7 +115,9 @@ export function AgentPage() {
             </div>
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
               {modelState.loading ? <span>Refreshing models…</span> : null}
-              {!modelState.loading && modelState.source === 'fallback' ? <span>Using fallback catalog. {modelState.reason ? `(${modelState.reason})` : ''}</span> : null}
+              {!modelState.loading && modelState.source === 'fallback'
+                ? <span>{fallbackBannerMessage(provider, modelState.reason, modelState.reasonMessage)}</span>
+                : null}
               {!modelState.loading && modelState.source === 'provider' ? <span>Loaded models from provider account.</span> : null}
             </div>
             <div className="mt-3">
