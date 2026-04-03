@@ -164,7 +164,7 @@ export const useResearchStore = create<Store>()(
       },
       selectTag: (tag) => set({ selectedTag: tag, selectedFolderId: null, selectedFileId: null, selectedTicker: null }),
       transitionFromOverviewRow: (fileId) => {
-        get().selectFile(fileId, 'research');
+        get().transitionFromSearchResult(fileId);
       },
       transitionFromSearchResult: (fileId) => {
         const file = get().files.find((item) => item.id === fileId) ?? null;
@@ -186,8 +186,8 @@ export const useResearchStore = create<Store>()(
           set({ selectedTaskId: task.id, selectedTicker: task.ticker.trim().toUpperCase() || null, lastView: 'tasks' });
           return { ok: false, reason: 'Linked note is missing, renamed, or deleted.' };
         }
-        get().selectFile(file.id, 'research');
-        set({ selectedTaskId: null });
+        get().transitionFromSearchResult(file.id);
+        set({ selectedTaskId: null, search: '' });
         return { ok: true };
       },
       bootstrap: async () => {
