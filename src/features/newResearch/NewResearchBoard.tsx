@@ -355,7 +355,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       <p>Deadline: {task.deadline || '—'}</p>
                       <p>Completed: {task.date_completed || '—'}</p>
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
-                      <p className="col-span-2">Linked note: {task.linked_note_path || '—'}</p>
+                      <p className="col-span-2 mt-1">Linked note: {task.linked_note_path || '—'}</p>
                     </div>
                     <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{task.linked_note_file_id ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
