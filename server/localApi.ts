@@ -9,7 +9,7 @@ type FolderRow = { id: string; workspace_id: string; parent_id: string | null; n
 
 type NewResearchTaskRow = {
   id: string;
-  topic: string;
+  title: string;
   details: string;
   ticker: string;
   note_type: string;
@@ -36,7 +36,7 @@ type TaskActivityRow = {
   created_at: string;
 };
 
-type PromptFileRow = {
+type ResearchNoteRow = {
   id: string;
   workspace_id: string;
   folder_id: string | null;
@@ -94,7 +94,7 @@ const ensureInitialized = () => {
     updated_at text not null,
     unique(workspace_id, path)
   );
-  create table if not exists prompt_files (
+  create table if not exists research_notes (
     id text primary key,
     workspace_id text not null,
     folder_id text,
@@ -109,7 +109,7 @@ const ensureInitialized = () => {
   );
   create table if not exists new_research_tasks (
     id text primary key,
-    topic text not null default '',
+    title text not null default '',
     details text not null default '',
     ticker text not null,
     note_type text not null default 'Research',
@@ -204,7 +204,7 @@ commit;
 function listWorkspaceData(workspaceId: string) {
   const workspace = queryJson<{ id: string; name: string }>(`select id, name from workspaces where id = ${sqlEscape(workspaceId)} limit 1`)[0];
   const folders = queryJson<FolderRow>(`select * from folders where workspace_id = ${sqlEscape(workspaceId)} order by path`);
-  const files = queryJson<PromptFileRow>(`select * from prompt_files where workspace_id = ${sqlEscape(workspaceId)} order by path`).map((file) => ({
+  const files = queryJson<ResearchNoteRow>(`select * from research_notes where workspace_id = ${sqlEscape(workspaceId)} order by path`).map((file) => ({
     ...file,
     is_template: Boolean(file.is_template),
     frontmatter_json: file.frontmatter_json ? JSON.parse(file.frontmatter_json) : null,
@@ -256,7 +256,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
       const now = new Date().toISOString();
       const id = randomUUID();
-      execSql(`insert into new_research_tasks (id, topic, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.topic ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
@@ -287,7 +287,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
       execSql(`update new_research_tasks set
-        topic = ${sqlEscape(payload.topic ?? existing.topic)},
+        title = ${sqlEscape(payload.title ?? existing.title)},
         details = ${sqlEscape(payload.details ?? existing.details)},
         ticker = ${sqlEscape(ticker)},
         note_type = ${sqlEscape(payload.note_type ?? existing.note_type)},
@@ -304,7 +304,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         updated_at = ${sqlEscape(new Date().toISOString())}
         where id = ${sqlEscape(taskId)}`);
       const changedFields: string[] = [];
-      if (String(payload.topic ?? existing.topic) !== existing.topic) changedFields.push('topic');
+      if (String(payload.title ?? existing.title) !== existing.title) changedFields.push('title');
       if (String(payload.details ?? existing.details) !== existing.details) changedFields.push('details');
       if (ticker !== existing.ticker) changedFields.push('ticker');
       if (String(payload.note_type ?? existing.note_type) !== existing.note_type) changedFields.push('note type');
@@ -367,7 +367,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'POST' && url === '/api/files') {
       const payload = await readJsonBody(req);
       const now = new Date().toISOString();
-      execSql(`insert into prompt_files (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      execSql(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -375,7 +375,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'PATCH' && url.startsWith('/api/files/')) {
       const fileId = url.replace('/api/files/', '').trim();
       const payload = await readJsonBody(req);
-      const existing = queryJson<PromptFileRow>(`select * from prompt_files where id = ${sqlEscape(fileId)} limit 1`)[0];
+      const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(fileId)} limit 1`)[0];
       if (!existing) {
         writeJson(res, 404, { error: { message: 'File not found.' } });
         return true;
@@ -387,7 +387,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         ? queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`)
         : [];
 
-      execSql(`update prompt_files set
+      execSql(`update research_notes set
         name = ${sqlEscape(payload.name ?? existing.name)},
         path = ${sqlEscape(nextPath)},
         folder_id = ${payload.folder_id === undefined ? sqlEscape(existing.folder_id) : sqlEscape(payload.folder_id)},
@@ -409,7 +409,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'DELETE' && url.startsWith('/api/files/')) {
       const fileId = url.replace('/api/files/', '').trim();
-      execSql(`delete from prompt_files where id = ${sqlEscape(fileId)}`);
+      execSql(`delete from research_notes where id = ${sqlEscape(fileId)}`);
       writeJson(res, 200, { error: null });
       return true;
     }

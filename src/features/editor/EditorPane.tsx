@@ -524,7 +524,7 @@ ${merged}`);
           transitionTaskModal(linkedTask.id);
           navigate('/tasks.html');
         }}
-        viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.topic || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
+        viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.title || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
       />
 
       {emojiOpen && (

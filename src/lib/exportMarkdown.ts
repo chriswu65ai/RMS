@@ -1,4 +1,4 @@
-import type { PromptFile, Workspace } from '../types/models';
+import type { ResearchNote, Workspace } from '../types/models';
 
 type ZipEntry = {
   nameBytes: Uint8Array;
@@ -169,7 +169,7 @@ function buildZip(files: Array<{ path: string; content: string }>) {
   return new Blob([...localParts, ...centralParts, eocd], { type: 'application/zip' });
 }
 
-export async function exportWorkspaceMarkdownZip(workspace: Workspace, files: PromptFile[]) {
+export async function exportWorkspaceMarkdownZip(workspace: Workspace, files: ResearchNote[]) {
   const blob = buildZip(
     files.map((file) => ({
       path: ensureMdPath(file.path),

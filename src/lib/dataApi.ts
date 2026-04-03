@@ -1,5 +1,5 @@
 import { normalizeFrontmatter } from './frontmatter';
-import { Priority, TaskStatus, type Folder, type NewResearchTask, type NewResearchTaskInput, type PromptFile, type TaskActivityEvent, type Workspace } from '../types/models';
+import { Priority, TaskStatus, type Folder, type NewResearchTask, type NewResearchTaskInput, type ResearchNote, type TaskActivityEvent, type Workspace } from '../types/models';
 
 type ApiError = { message: string };
 type ApiResult = { error: ApiError | null };
@@ -25,7 +25,7 @@ export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTas
 
   return {
     ...values,
-    topic: values.topic.trim(),
+    title: values.title.trim(),
     details: values.details.trim(),
     ticker: values.ticker.trim().toUpperCase(),
     note_type: values.note_type.trim() || 'Research',
@@ -64,7 +64,7 @@ export function mapTaskRowToModel(row: TaskApiRow): NewResearchTask {
 export async function bootstrapWorkspace() {
   const response = await fetch('/api/bootstrap');
   if (!response.ok) throw new Error(await response.text());
-  return readJson<{ workspace: Workspace; folders: Folder[]; files: PromptFile[] }>(response);
+  return readJson<{ workspace: Workspace; folders: Folder[]; files: ResearchNote[] }>(response);
 }
 
 export async function createFolder(workspaceId: string, name: string, parent: Folder | null): Promise<ApiResult> {
@@ -115,10 +115,10 @@ export async function createFile(params: {
   return readJson<ApiResult>(response);
 }
 
-export async function updateFile(fileId: string, values: Partial<PromptFile>): Promise<ApiResult> {
-  const payload: Partial<PromptFile> = { ...values };
+export async function updateFile(fileId: string, values: Partial<ResearchNote>): Promise<ApiResult> {
+  const payload: Partial<ResearchNote> = { ...values };
   if (values.frontmatter_json !== undefined) {
-    payload.frontmatter_json = normalizeFrontmatterForApi(values.frontmatter_json as Record<string, unknown> | null) as PromptFile['frontmatter_json'];
+    payload.frontmatter_json = normalizeFrontmatterForApi(values.frontmatter_json as Record<string, unknown> | null) as ResearchNote['frontmatter_json'];
   }
   const response = await fetch(`/api/files/${fileId}`, {
     method: 'PATCH',

@@ -68,7 +68,7 @@ export type FrontmatterModel = {
   starred?: boolean;
 };
 
-export type PromptFile = {
+export type ResearchNote = {
   id: string;
   workspace_id: string;
   folder_id: string | null;
@@ -83,7 +83,7 @@ export type PromptFile = {
 
 export type Task = {
   id: string;
-  topic: string;
+  title: string;
   details: string;
   ticker: string;
   note_type: string;
@@ -102,7 +102,7 @@ export type Task = {
 };
 
 export type TaskInput = {
-  topic: string;
+  title: string;
   details: string;
   ticker: string;
   note_type: string;
