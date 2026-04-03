@@ -3,6 +3,8 @@ import { mkdirSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { FALLBACK_MODELS, providerRegistry, type AgentProvider } from './agentProviders';
+import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
 type FolderRow = { id: string; workspace_id: string; parent_id: string | null; name: string; path: string; created_at: string; updated_at: string };
@@ -47,6 +49,30 @@ type ResearchNoteRow = {
   is_template: number;
   created_at: string;
   updated_at: string;
+};
+
+type AgentSettingsRow = {
+  default_provider: AgentProvider;
+  default_model: string;
+  generation_params_json: string | null;
+};
+
+type AgentActivityLogRow = {
+  id: string;
+  timestamp: string;
+  note_id: string;
+  action: string;
+  trigger_source: string;
+  initiated_by: string;
+  provider: string;
+  model: string;
+  status: string;
+  duration_ms: number | null;
+  input_chars: number;
+  output_chars: number;
+  token_estimate: number | null;
+  cost_estimate_usd: number | null;
+  error_message_short: string | null;
 };
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
@@ -133,7 +159,31 @@ const ensureInitialized = () => {
     description text not null,
     created_at text not null
   );
+  create table if not exists agent_settings (
+    id integer primary key check (id = 1),
+    default_provider text not null default 'minimax',
+    default_model text not null default '',
+    generation_params_json text
+  );
+  create table if not exists agent_activity_log (
+    id text primary key,
+    timestamp text not null,
+    note_id text not null default '',
+    action text not null,
+    trigger_source text not null,
+    initiated_by text not null default 'user',
+    provider text not null,
+    model text not null,
+    status text not null,
+    duration_ms integer,
+    input_chars integer not null default 0,
+    output_chars integer not null default 0,
+    token_estimate integer,
+    cost_estimate_usd real,
+    error_message_short text
+  );
   `);
+  execSql(`insert or ignore into agent_settings (id, default_provider, default_model, generation_params_json) values (1, 'minimax', '', null);`);
   try {
     execSql(`alter table new_research_tasks add column note_type text not null default '';`);
   } catch {
@@ -256,6 +306,41 @@ function normalizeTaskRow(row: NewResearchTaskRow) {
   };
 }
 
+const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic'];
+const isAgentProvider = (value: unknown): value is AgentProvider => typeof value === 'string' && VALID_PROVIDERS.includes(value as AgentProvider);
+
+const getAgentSettings = () => {
+  const settings = queryJson<AgentSettingsRow>('select default_provider, default_model, generation_params_json from agent_settings where id = 1 limit 1')[0];
+  const provider = isAgentProvider(settings?.default_provider) ? settings.default_provider : 'minimax';
+  return {
+    default_provider: provider,
+    default_model: settings?.default_model ?? '',
+    generation_params: settings?.generation_params_json ? JSON.parse(settings.generation_params_json) : null,
+  };
+};
+
+const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
+  execSql(`insert into agent_activity_log (
+    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short
+  ) values (
+    ${sqlEscape(randomUUID())},
+    ${sqlEscape(entry.timestamp)},
+    ${sqlEscape(entry.note_id)},
+    ${sqlEscape(entry.action)},
+    ${sqlEscape(entry.trigger_source)},
+    ${sqlEscape(entry.initiated_by)},
+    ${sqlEscape(entry.provider)},
+    ${sqlEscape(entry.model)},
+    ${sqlEscape(entry.status)},
+    ${sqlEscape(entry.duration_ms)},
+    ${sqlEscape(entry.input_chars)},
+    ${sqlEscape(entry.output_chars)},
+    ${sqlEscape(entry.token_estimate)},
+    ${sqlEscape(entry.cost_estimate_usd)},
+    ${sqlEscape(entry.error_message_short)}
+  )`);
+};
+
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
   ensureInitialized();
@@ -267,6 +352,202 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   }
 
   try {
+    if (req.method === 'GET' && url === '/api/agent/settings') {
+      writeJson(res, 200, getAgentSettings());
+      return true;
+    }
+
+    if (req.method === 'PUT' && url === '/api/agent/settings') {
+      const payload = await readJsonBody(req);
+      const provider = payload.default_provider;
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const defaultModel = String(payload.default_model ?? '').trim();
+      const generationParams = payload.generation_params && typeof payload.generation_params === 'object' ? payload.generation_params : null;
+      execSql(`update agent_settings set
+        default_provider = ${sqlEscape(provider)},
+        default_model = ${sqlEscape(defaultModel)},
+        generation_params_json = ${sqlEscape(generationParams ? JSON.stringify(generationParams) : null)}
+        where id = 1`);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'GET' && /^\/api\/agent\/credentials\/[^/]+$/.test(url)) {
+      const provider = url.replace('/api/agent/credentials/', '').trim();
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const apiKey = secretStore.get(provider);
+      writeJson(res, 200, { has_key: Boolean(apiKey) });
+      return true;
+    }
+
+    if (req.method === 'PUT' && /^\/api\/agent\/credentials\/[^/]+$/.test(url)) {
+      const provider = url.replace('/api/agent/credentials/', '').trim();
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const payload = await readJsonBody(req);
+      const apiKey = String(payload.api_key ?? '').trim();
+      if (!apiKey) {
+        writeJson(res, 400, { error: { message: 'API key is required.' } });
+        return true;
+      }
+      secretStore.set(provider, apiKey);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'DELETE' && /^\/api\/agent\/credentials\/[^/]+$/.test(url)) {
+      const provider = url.replace('/api/agent/credentials/', '').trim();
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      secretStore.delete(provider);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'GET' && url.startsWith('/api/agent/models')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const provider = parsedUrl.searchParams.get('provider');
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const apiKey = secretStore.get(provider);
+      if (!apiKey) {
+        writeJson(res, 200, { models: FALLBACK_MODELS[provider], source: 'fallback', reason: 'missing_api_key' });
+        return true;
+      }
+      try {
+        const models = await providerRegistry[provider].listModels(apiKey);
+        const normalized = models.length > 0 ? models : FALLBACK_MODELS[provider];
+        writeJson(res, 200, { models: normalized, source: models.length > 0 ? 'provider' : 'fallback', reason: models.length > 0 ? null : 'empty_provider_response' });
+      } catch (error) {
+        writeJson(res, 200, { models: FALLBACK_MODELS[provider], source: 'fallback', reason: error instanceof Error ? error.message : 'failed_to_list_models' });
+      }
+      return true;
+    }
+
+    if (req.method === 'GET' && url.startsWith('/api/agent/activity-log')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const limit = Math.min(50, Math.max(1, Number.parseInt(parsedUrl.searchParams.get('limit') ?? '10', 10) || 10));
+      const rows = queryJson<AgentActivityLogRow>(`select * from agent_activity_log order by timestamp desc limit ${limit}`);
+      writeJson(res, 200, rows);
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/agent/generate') {
+      const payload = await readJsonBody(req);
+      const provider = payload.provider;
+      if (!isAgentProvider(provider)) {
+        writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const model = String(payload.model ?? '').trim();
+      const inputText = String(payload.input_text ?? '');
+      if (!model) {
+        writeJson(res, 400, { error: { message: 'Model is required.' } });
+        return true;
+      }
+      if (!inputText.trim()) {
+        writeJson(res, 400, { error: { message: 'Input text is required.' } });
+        return true;
+      }
+      const now = new Date().toISOString();
+      const startedAt = Date.now();
+      appendAgentActivityLog({
+        timestamp: now,
+        note_id: String(payload.note_id ?? ''),
+        action: 'generate',
+        trigger_source: String(payload.trigger_source ?? 'manual'),
+        initiated_by: String(payload.initiated_by ?? 'user'),
+        provider,
+        model,
+        status: 'started',
+        duration_ms: null,
+        input_chars: inputText.length,
+        output_chars: 0,
+        token_estimate: null,
+        cost_estimate_usd: null,
+        error_message_short: null,
+      });
+      const apiKey = secretStore.get(provider);
+      if (!apiKey) {
+        appendAgentActivityLog({
+          timestamp: new Date().toISOString(),
+          note_id: String(payload.note_id ?? ''),
+          action: 'generate',
+          trigger_source: String(payload.trigger_source ?? 'manual'),
+          initiated_by: String(payload.initiated_by ?? 'user'),
+          provider,
+          model,
+          status: 'failed',
+          duration_ms: Date.now() - startedAt,
+          input_chars: inputText.length,
+          output_chars: 0,
+          token_estimate: null,
+          cost_estimate_usd: null,
+          error_message_short: 'Missing API key.',
+        });
+        writeJson(res, 400, { error: { message: 'Missing API key for selected provider.' } });
+        return true;
+      }
+      const controller = new AbortController();
+      req.on('aborted', () => controller.abort());
+      try {
+        const result = await providerRegistry[provider].generate({
+          model,
+          inputText,
+          generationParams: payload.generation_params as { temperature?: number; maxTokens?: number } | undefined,
+        }, apiKey, controller.signal);
+        appendAgentActivityLog({
+          timestamp: new Date().toISOString(),
+          note_id: String(payload.note_id ?? ''),
+          action: 'generate',
+          trigger_source: String(payload.trigger_source ?? 'manual'),
+          initiated_by: String(payload.initiated_by ?? 'user'),
+          provider,
+          model,
+          status: 'success',
+          duration_ms: Date.now() - startedAt,
+          input_chars: inputText.length,
+          output_chars: result.outputText.length,
+          token_estimate: result.usage?.totalTokens ?? null,
+          cost_estimate_usd: result.costEstimate ?? null,
+          error_message_short: null,
+        });
+        writeJson(res, 200, result);
+      } catch (error) {
+        const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+        appendAgentActivityLog({
+          timestamp: new Date().toISOString(),
+          note_id: String(payload.note_id ?? ''),
+          action: 'generate',
+          trigger_source: String(payload.trigger_source ?? 'manual'),
+          initiated_by: String(payload.initiated_by ?? 'user'),
+          provider,
+          model,
+          status: aborted ? 'cancelled' : 'failed',
+          duration_ms: Date.now() - startedAt,
+          input_chars: inputText.length,
+          output_chars: 0,
+          token_estimate: null,
+          cost_estimate_usd: null,
+          error_message_short: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
+        });
+        writeJson(res, aborted ? 499 : 400, { error: { message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.') } });
+      }
+      return true;
+    }
+
     if (req.method === 'GET' && url === '/api/research-tasks') {
       const tasks = queryJson<NewResearchTaskRow>('select * from new_research_tasks order by created_at desc').map(normalizeTaskRow);
       writeJson(res, 200, tasks);

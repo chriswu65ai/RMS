@@ -1,7 +1,7 @@
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile, Table } from 'lucide-react';
+import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Minus, Save, Share2, Smile, Table, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
@@ -12,8 +12,12 @@ import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel, NewResearchTask } from '../../types/models';
 import { MetadataPanel } from '../metadata/MetadataPanel';
 import { useDialog } from '../../components/ui/DialogProvider';
+import { GenerateUseCase } from '../agent/GenerateUseCase';
+import { getAgentSettings } from '../../lib/agentApi';
+import type { AgentProvider } from '../agent/types';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
+const generateUseCase = new GenerateUseCase();
 
 export function EditorPane() {
   const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal, editorTab, setEditorTab } = useResearchStore();
@@ -25,6 +29,11 @@ export function EditorPane() {
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
+  const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
+  const [defaultModel, setDefaultModel] = useState('');
+  const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const originalTextRef = useRef<string | null>(null);
   const parsed = useMemo(
     () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
     [file?.content, noteTypes, sectors],
@@ -54,6 +63,29 @@ export function EditorPane() {
     })();
     return () => { cancelled = true; };
   }, [selectedFileId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const settings = await getAgentSettings();
+        if (cancelled) return;
+        setDefaultProvider(settings.default_provider);
+        setDefaultModel(settings.default_model);
+      } catch {
+        if (!cancelled) {
+          setDefaultProvider('minimax');
+          setDefaultModel('');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      setGenerateState('idle');
+    };
+  }, []);
 
   const metadataSyntax = useMemo(() => {
     const withFrontmatterOnly = composeMarkdown(frontmatter, '');
@@ -386,6 +418,46 @@ ${merged}`);
     window.location.href = `mailto:?subject=${subject}&body=${bodyText}`;
   };
 
+  const runGenerate = async () => {
+    if (generateState === 'running') return;
+    if (!defaultModel.trim()) {
+      await dialog.alert('Generate unavailable', 'Set a default provider/model in Agent settings first.');
+      return;
+    }
+
+    const originalText = merged;
+    originalTextRef.current = originalText;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setGenerateState('running');
+    try {
+      const result = await generateUseCase.run({
+        noteId: file.id,
+        inputText: originalText,
+        provider: defaultProvider,
+        model: defaultModel,
+        signal: controller.signal,
+      });
+      const generated = splitFrontmatter(result.outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+      setFrontmatter(generated.frontmatter);
+      setBody(generated.body);
+    } catch (error) {
+      const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+      if (isCancelled) {
+        await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
+      } else {
+        await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
+      }
+    } finally {
+      abortControllerRef.current = null;
+      setGenerateState('idle');
+    }
+  };
+
+  const cancelGenerate = () => {
+    abortControllerRef.current?.abort();
+  };
+
   return (
     <div className={`grid h-full grid-cols-1 ${metadataPanelCollapsed ? 'lg:grid-cols-[1fr_48px]' : 'lg:grid-cols-[1fr_300px]'}`}>
       <section className="flex min-h-0 flex-col">
@@ -410,9 +482,19 @@ ${merged}`);
               <button className="rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="mr-1 inline" size={14} />Download</button>
               <button className="rounded-md border px-2 py-1 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="mr-1 inline" size={14} />Share</button>
               <button className="rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1 inline" size={14} />Copy</button>
+              {generateState === 'running' ? (
+                <button className="rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-700" onClick={cancelGenerate}>
+                  <LoaderCircle className="mr-1 inline animate-spin" size={14} />
+                  <X className="mr-1 inline" size={14} />Cancel
+                </button>
+              ) : (
+                <button className="rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
+                  Generate
+                </button>
+              )}
               <button
                 className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
-                disabled={!dirty}
+                disabled={!dirty || generateState === 'running'}
                 onClick={async () => {
                   const { error } = await updateFile(file.id, {
                     content: merged,
