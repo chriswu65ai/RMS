@@ -18,3 +18,4 @@
 - [ ] Editor pane metadata + rename-on-identity-blur still functional.
 - [ ] Templates and file list behavior unchanged in Stock Research route.
 - [ ] Renaming/moving a file from File List updates `linked_note_path` on linked New Research task cards after refresh.
+- [ ] Metadata panel behavior is responsive: `<lg` shows a visible Metadata toggle, opening it exposes the Sector selector, and `>=lg` still supports collapse/expand without losing access to Sector.
