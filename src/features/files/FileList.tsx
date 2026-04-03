@@ -21,14 +21,16 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     const viewingTemplateFolder = selectedFolderPath.includes('template');
 
     const filtered = files.filter((file) => {
+      const parsed = splitFrontmatter(file.content);
+      const isTemplateNote = file.is_template || parsed.frontmatter.template === true;
       const showingAllNotes = selectedFolderId === null;
       const canShowTemplate = showingAllNotes || viewingTemplateFolder;
-      if (!canShowTemplate && file.is_template) return false;
+      if (!canShowTemplate && isTemplateNote) return false;
       const folderMatch = !selectedFolderId || file.folder_id === selectedFolderId;
       if (!folderMatch) return false;
 
       if (selectedTag) {
-        const parsed = splitFrontmatter(file.content);
+        if (isTemplateNote) return false;
         const noteType = parsed.frontmatter.type?.toString().trim() ?? '';
 
         if (selectedTag === TYPE_FILTER_ALL && !noteType) return false;
