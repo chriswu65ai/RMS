@@ -5,7 +5,7 @@ export class ModelCatalogService {
   async listModels(provider: AgentProvider): Promise<{
     models: ModelListItem[];
     selectedModel: string;
-    catalogStatus: 'live' | 'unavailable';
+    catalogStatus: 'live' | 'unsupported' | 'failed';
     selectionSource: 'live_catalog' | 'provider_fallback';
     reasonCode: ModelCatalogReasonCode;
   }> {

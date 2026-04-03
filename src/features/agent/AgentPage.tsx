@@ -6,9 +6,10 @@ import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelC
 const modelCatalogService = new ModelCatalogService();
 
 const providerLabel = (provider: AgentProvider) => provider.charAt(0).toUpperCase() + provider.slice(1);
-const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unavailable' | null) => {
-  if (catalogStatus === 'live') return 'Loaded models from provider account.';
-  if (catalogStatus === 'unavailable') return 'Live model catalog unavailable; auto-selected provider fallback model.';
+const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'failed' | null) => {
+  if (catalogStatus === 'live') return 'Live catalog loaded.';
+  if (catalogStatus === 'unsupported') return 'Catalog unsupported; fallback auto-selected.';
+  if (catalogStatus === 'failed') return 'Catalog failed; fallback auto-selected.';
   return null;
 };
 
@@ -18,7 +19,7 @@ export function AgentPage() {
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [modelState, setModelState] = useState<{
     loading: boolean;
-    catalogStatus: 'live' | 'unavailable' | null;
+    catalogStatus: 'live' | 'unsupported' | 'failed' | null;
     selectionSource: 'live_catalog' | 'provider_fallback' | null;
     reasonCode: ModelCatalogReasonCode | null;
   }>({ loading: false, catalogStatus: null, selectionSource: null, reasonCode: null });
@@ -27,7 +28,7 @@ export function AgentPage() {
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
 
-  const refreshModels = async (nextProvider: AgentProvider, preserveModel = false, applySelection = true) => {
+  const refreshModels = async (nextProvider: AgentProvider, applySelection = true) => {
     setModelState({ loading: true, catalogStatus: null, selectionSource: null, reasonCode: null });
     try {
       const response = await modelCatalogService.listModels(nextProvider);
@@ -38,14 +39,14 @@ export function AgentPage() {
         selectionSource: response.selectionSource,
         reasonCode: response.reasonCode,
       });
-      if (applySelection && (!preserveModel || !response.models.some((entry) => entry.modelId === model))) {
+      if (applySelection) {
         setModel(response.selectedModel);
       }
     } catch {
       setModels([]);
       setModelState({
         loading: false,
-        catalogStatus: 'unavailable',
+        catalogStatus: 'failed',
         selectionSource: 'provider_fallback',
         reasonCode: 'network_error',
       });
@@ -62,7 +63,7 @@ export function AgentPage() {
 
         const statuses = await Promise.all(AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
-        await refreshModels(settings.default_provider, true);
+        await refreshModels(settings.default_provider);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
       }
@@ -92,7 +93,7 @@ export function AgentPage() {
                   onChange={(event) => {
                     const nextProvider = event.target.value as AgentProvider;
                     setProvider(nextProvider);
-                    void refreshModels(nextProvider, false);
+                    void refreshModels(nextProvider);
                   }}
                 >
                   {AGENT_PROVIDERS.map((candidate) => <option key={candidate} value={candidate}>{providerLabel(candidate)}</option>)}
@@ -155,7 +156,7 @@ export function AgentPage() {
                           await saveCredential(candidate, draftKeyByProvider[candidate]);
                           setStatusByProvider((prev) => ({ ...prev, [candidate]: true }));
                           setDraftKeyByProvider((prev) => ({ ...prev, [candidate]: '' }));
-                          if (candidate === provider) await refreshModels(provider, false);
+                          if (candidate === provider) await refreshModels(provider);
                           setMessage(`${providerLabel(candidate)} credential saved securely.`);
                         } catch (error) {
                           setMessage(error instanceof Error ? error.message : 'Failed saving credential.');
@@ -164,7 +165,7 @@ export function AgentPage() {
                     >
                       Save key
                     </button>
-                    <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => void refreshModels(candidate, candidate === provider, candidate === provider)}>Refresh models</button>
+                    <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => void refreshModels(candidate, candidate === provider)}>Refresh models</button>
                   </div>
                 </div>
               ))}

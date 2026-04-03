@@ -23,8 +23,9 @@ export type ModelListItem = {
 export type ModelCatalogReasonCode =
   | 'ok'
   | 'missing_api_key'
-  | 'unsupported_endpoint'
   | 'auth_failed'
+  | 'rate_limited'
+  | 'unsupported_endpoint'
   | 'network_error'
   | 'empty_response';
 

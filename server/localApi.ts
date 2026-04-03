@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider, type ModelCatalogReasonCode } from './agentProviders';
+import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider } from './agentProviders';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -97,32 +97,6 @@ const queryJson = <T>(sql: string): T[] => {
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
 };
 
-const getModelsResponse = ({
-  provider,
-  discoveredModels,
-  fallbackModels,
-  catalogStatus,
-  reasonCode,
-  preferredModel,
-}: {
-  provider: AgentProvider;
-  discoveredModels: { modelId: string; displayName: string }[];
-  fallbackModels: { modelId: string; displayName: string }[];
-  catalogStatus: 'live' | 'unavailable';
-  reasonCode: ModelCatalogReasonCode;
-  preferredModel?: string;
-}) => {
-  const selectionSource = catalogStatus === 'live' && discoveredModels.length > 0 ? 'live_catalog' : 'provider_fallback';
-  const models = selectionSource === 'live_catalog' ? discoveredModels : fallbackModels;
-  const selectedModel = selectBestModel(provider, discoveredModels, fallbackModels, preferredModel);
-  return {
-    models,
-    selected_model: selectedModel,
-    catalog_status: catalogStatus,
-    selection_source: selectionSource,
-    reason_code: reasonCode,
-  };
-};
 const recordTaskEvent = (taskId: string, eventType: string, description: string) => {
   const now = new Date().toISOString();
   execSql(`insert into task_activity_events (id, task_id, event_type, description, created_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(taskId)}, ${sqlEscape(eventType)}, ${sqlEscape(description)}, ${sqlEscape(now)})`);
@@ -453,26 +427,21 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const fallbackModels = FALLBACK_MODELS[provider];
       const apiKey = secretStore.get(provider);
       if (!apiKey) {
-        writeJson(res, 200, getModelsResponse({
-          provider,
-          discoveredModels: [],
-          fallbackModels,
-          catalogStatus: 'unavailable',
-          reasonCode: 'missing_api_key',
-          preferredModel,
-        }));
+        writeJson(res, 200, {
+          models: fallbackModels,
+          selected_model: selectBestModel(provider, [], fallbackModels, preferredModel).selected_model,
+          catalog_status: 'failed',
+          selection_source: 'provider_fallback',
+          reason_code: 'missing_api_key',
+        });
         return true;
       }
 
-      const result = await providerRegistry[provider].listModels(apiKey);
-      writeJson(res, 200, getModelsResponse({
-        provider,
-        discoveredModels: result.models,
-        fallbackModels,
-        catalogStatus: result.catalogStatus,
-        reasonCode: result.reasonCode,
-        preferredModel,
-      }));
+      const result = await providerRegistry[provider].listModels(apiKey, { fallbackModels, preferredModel });
+      if (result.catalog_status !== 'live') {
+        console.warn('[agent-models] catalog fallback', { provider, catalog_status: result.catalog_status, reason_code: result.reason_code });
+      }
+      writeJson(res, 200, result);
       return true;
     }
 

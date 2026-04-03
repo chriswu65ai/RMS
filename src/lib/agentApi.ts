@@ -58,7 +58,7 @@ export async function listActivityLog(limit = 10): Promise<AgentActivityLog[]> {
 export async function listModels(provider: AgentProvider): Promise<{
   models: ModelListItem[];
   selected_model: string;
-  catalog_status: 'live' | 'unavailable';
+  catalog_status: 'live' | 'unsupported' | 'failed';
   selection_source: 'live_catalog' | 'provider_fallback';
   reason_code: ModelCatalogReasonCode;
 }> {
@@ -67,7 +67,7 @@ export async function listModels(provider: AgentProvider): Promise<{
   return response.json() as Promise<{
     models: ModelListItem[];
     selected_model: string;
-    catalog_status: 'live' | 'unavailable';
+    catalog_status: 'live' | 'unsupported' | 'failed';
     selection_source: 'live_catalog' | 'provider_fallback';
     reason_code: ModelCatalogReasonCode;
   }>;
