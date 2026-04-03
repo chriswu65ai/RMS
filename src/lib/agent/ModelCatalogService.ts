@@ -1,19 +1,21 @@
 import { listModels } from '../agentApi';
-import type { AgentProvider, ModelCatalogFallbackReason, ModelListItem } from '../../features/agent/types';
+import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../../features/agent/types';
 
 export class ModelCatalogService {
   async listModels(provider: AgentProvider): Promise<{
     models: ModelListItem[];
-    source: 'provider' | 'fallback';
-    reason?: ModelCatalogFallbackReason | null;
-    reasonMessage?: string | null;
+    selectedModel: string;
+    catalogStatus: 'live' | 'unavailable';
+    selectionSource: 'live_catalog' | 'provider_fallback';
+    reasonCode: ModelCatalogReasonCode;
   }> {
     const result = await listModels(provider);
     return {
       models: result.models,
-      source: result.source,
-      reason: result.reason,
-      reasonMessage: result.reason_message,
+      selectedModel: result.selected_model,
+      catalogStatus: result.catalog_status,
+      selectionSource: result.selection_source,
+      reasonCode: result.reason_code,
     };
   }
 }

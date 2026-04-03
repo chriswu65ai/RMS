@@ -2,7 +2,7 @@ import type {
   AgentActivityLog,
   AgentProvider,
   AgentSettings,
-  ModelCatalogFallbackReason,
+  ModelCatalogReasonCode,
   ModelListItem,
   SaveMode,
   TriggerSource,
@@ -57,17 +57,19 @@ export async function listActivityLog(limit = 10): Promise<AgentActivityLog[]> {
 
 export async function listModels(provider: AgentProvider): Promise<{
   models: ModelListItem[];
-  source: 'provider' | 'fallback';
-  reason?: ModelCatalogFallbackReason | null;
-  reason_message?: string | null;
+  selected_model: string;
+  catalog_status: 'live' | 'unavailable';
+  selection_source: 'live_catalog' | 'provider_fallback';
+  reason_code: ModelCatalogReasonCode;
 }> {
   const response = await fetch(`/api/agent/models?provider=${provider}`);
   if (!response.ok) throw new Error(await asErrorMessage(response));
   return response.json() as Promise<{
     models: ModelListItem[];
-    source: 'provider' | 'fallback';
-    reason?: ModelCatalogFallbackReason | null;
-    reason_message?: string | null;
+    selected_model: string;
+    catalog_status: 'live' | 'unavailable';
+    selection_source: 'live_catalog' | 'provider_fallback';
+    reason_code: ModelCatalogReasonCode;
   }>;
 }
 

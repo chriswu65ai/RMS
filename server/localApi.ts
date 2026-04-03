@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { FALLBACK_MODELS, providerRegistry, type AgentProvider } from './agentProviders';
+import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider, type ModelCatalogReasonCode } from './agentProviders';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -75,10 +75,6 @@ type AgentActivityLogRow = {
   error_message_short: string | null;
 };
 
-type ModelCatalogFallbackReason =
-  | 'missing_api_key'
-  | 'provider_model_listing_unsupported'
-  | 'provider_model_listing_failed';
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -101,24 +97,32 @@ const queryJson = <T>(sql: string): T[] => {
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
 };
 
-const getSafeModelListingReasonMessage = (reason: ModelCatalogFallbackReason) => {
-  switch (reason) {
-    case 'missing_api_key':
-      return 'Add an API key to load provider models. Using fallback catalog.';
-    case 'provider_model_listing_unsupported':
-      return 'This provider does not currently expose model listing. Using fallback catalog.';
-    case 'provider_model_listing_failed':
-    default:
-      return 'Model catalog unavailable. Using fallback catalog.';
-  }
+const getModelsResponse = ({
+  provider,
+  discoveredModels,
+  fallbackModels,
+  catalogStatus,
+  reasonCode,
+  preferredModel,
+}: {
+  provider: AgentProvider;
+  discoveredModels: { modelId: string; displayName: string }[];
+  fallbackModels: { modelId: string; displayName: string }[];
+  catalogStatus: 'live' | 'unavailable';
+  reasonCode: ModelCatalogReasonCode;
+  preferredModel?: string;
+}) => {
+  const selectionSource = catalogStatus === 'live' && discoveredModels.length > 0 ? 'live_catalog' : 'provider_fallback';
+  const models = selectionSource === 'live_catalog' ? discoveredModels : fallbackModels;
+  const selectedModel = selectBestModel(provider, discoveredModels, fallbackModels, preferredModel);
+  return {
+    models,
+    selected_model: selectedModel,
+    catalog_status: catalogStatus,
+    selection_source: selectionSource,
+    reason_code: reasonCode,
+  };
 };
-
-const mapModelListingErrorReason = (error: unknown): ModelCatalogFallbackReason => {
-  const errorText = error instanceof Error ? error.message.toLowerCase() : '';
-  if (errorText.includes('unsupported')) return 'provider_model_listing_unsupported';
-  return 'provider_model_listing_failed';
-};
-
 const recordTaskEvent = (taskId: string, eventType: string, description: string) => {
   const now = new Date().toISOString();
   execSql(`insert into task_activity_events (id, task_id, event_type, description, created_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(taskId)}, ${sqlEscape(eventType)}, ${sqlEscape(description)}, ${sqlEscape(now)})`);
@@ -444,45 +448,31 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
         return true;
       }
+      const settings = getAgentSettings();
+      const preferredModel = settings.default_provider === provider ? settings.default_model : undefined;
+      const fallbackModels = FALLBACK_MODELS[provider];
       const apiKey = secretStore.get(provider);
       if (!apiKey) {
-        const reason: ModelCatalogFallbackReason = 'missing_api_key';
-        writeJson(res, 200, {
-          models: FALLBACK_MODELS[provider],
-          source: 'fallback',
-          reason,
-          reason_message: getSafeModelListingReasonMessage(reason),
-        });
+        writeJson(res, 200, getModelsResponse({
+          provider,
+          discoveredModels: [],
+          fallbackModels,
+          catalogStatus: 'unavailable',
+          reasonCode: 'missing_api_key',
+          preferredModel,
+        }));
         return true;
       }
-      try {
-        const models = await providerRegistry[provider].listModels(apiKey);
-        if (models.length > 0) {
-          writeJson(res, 200, { models, source: 'provider', reason: null, reason_message: null });
-          return true;
-        }
-        const reason: ModelCatalogFallbackReason = 'provider_model_listing_failed';
-        console.warn('[agent/models] Provider returned empty model list; falling back.', { provider });
-        writeJson(res, 200, {
-          models: FALLBACK_MODELS[provider],
-          source: 'fallback',
-          reason,
-          reason_message: getSafeModelListingReasonMessage(reason),
-        });
-      } catch (error) {
-        const reason = mapModelListingErrorReason(error);
-        console.warn('[agent/models] Provider model listing failed; falling back.', {
-          provider,
-          reason,
-          diagnostic: error instanceof Error ? error.message : String(error),
-        });
-        writeJson(res, 200, {
-          models: FALLBACK_MODELS[provider],
-          source: 'fallback',
-          reason,
-          reason_message: getSafeModelListingReasonMessage(reason),
-        });
-      }
+
+      const result = await providerRegistry[provider].listModels(apiKey);
+      writeJson(res, 200, getModelsResponse({
+        provider,
+        discoveredModels: result.models,
+        fallbackModels,
+        catalogStatus: result.catalogStatus,
+        reasonCode: result.reasonCode,
+        preferredModel,
+      }));
       return true;
     }
 
