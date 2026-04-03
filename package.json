@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "check:frontmatter": "node scripts/frontmatter-regression-check.mjs",
-    "test": "python -c \"import shutil;shutil.rmtree('.tmp-test', ignore_errors=True)\" && tsc --module ESNext --target ES2020 --lib ES2020,DOM --moduleResolution bundler --outDir .tmp-test src/lib/exportMarkdown.ts src/lib/exportMarkdown.test.ts src/lib/dataApi.regression.test.ts src/features/newResearch/noteTypeOptions.ts src/features/newResearch/noteTypeOptions.test.ts && node --test .tmp-test/lib/exportMarkdown.test.js .tmp-test/lib/dataApi.regression.test.js .tmp-test/features/newResearch/noteTypeOptions.test.js"
+    "test": "python -c \"import shutil;shutil.rmtree('.tmp-test', ignore_errors=True)\" && tsc --module ESNext --target ES2020 --lib ES2020,DOM --moduleResolution bundler --outDir .tmp-test src/lib/exportMarkdown.ts src/lib/exportMarkdown.test.ts src/lib/dataApi.regression.test.ts src/features/newResearch/noteTypeOptions.ts src/features/newResearch/noteTypeOptions.test.ts src/hooks/metadataLists.ts src/hooks/metadataLists.test.ts src/types/models.ts && node --test .tmp-test/lib/exportMarkdown.test.js .tmp-test/lib/dataApi.regression.test.js .tmp-test/features/newResearch/noteTypeOptions.test.js .tmp-test/hooks/metadataLists.test.js"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.3.3",
