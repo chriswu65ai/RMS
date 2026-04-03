@@ -28,7 +28,7 @@ export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTas
     title: values.title.trim(),
     details: values.details.trim(),
     ticker: values.ticker.trim().toUpperCase(),
-    note_type: values.note_type.trim() || 'Research',
+    note_type: values.note_type.trim(),
     assignee: values.assignee.trim(),
     priority,
     deadline: values.deadline.trim(),
@@ -49,7 +49,7 @@ export function mapTaskRowToModel(row: TaskApiRow): NewResearchTask {
   return {
     ...row,
     ticker: row.ticker.trim().toUpperCase(),
-    note_type: row.note_type.trim() || 'Research',
+    note_type: row.note_type.trim(),
     status: normalizedStatus,
     priority: normalizedPriority,
     date_completed: normalizedStatus === TaskStatus.Completed ? row.date_completed : '',

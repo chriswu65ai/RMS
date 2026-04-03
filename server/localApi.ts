@@ -112,7 +112,7 @@ const ensureInitialized = () => {
     title text not null default '',
     details text not null default '',
     ticker text not null,
-    note_type text not null default 'Research',
+    note_type text not null default '',
     assignee text not null default '',
     priority text not null default '',
     deadline text not null default '',
@@ -135,7 +135,7 @@ const ensureInitialized = () => {
   );
   `);
   try {
-    execSql(`alter table new_research_tasks add column note_type text not null default 'Research';`);
+    execSql(`alter table new_research_tasks add column note_type text not null default '';`);
   } catch {
     // existing DBs may already include this column
   }
@@ -163,6 +163,41 @@ const ensureInitialized = () => {
     execSql(`alter table new_research_tasks add column research_location_path text not null default '';`);
   } catch {
     // existing DBs may already include this column
+  }
+  const noteTypeColumnInfo = queryJson<{ name: string; dflt_value: string | null }>(`pragma table_info('new_research_tasks')`)
+    .find((column) => column.name === 'note_type' && column.dflt_value !== null && String(column.dflt_value).includes('Research'));
+  if (noteTypeColumnInfo) {
+    execSql(`
+begin;
+create table if not exists new_research_tasks_migrated (
+  id text primary key,
+  title text not null default '',
+  details text not null default '',
+  ticker text not null,
+  note_type text not null default '',
+  assignee text not null default '',
+  priority text not null default '',
+  deadline text not null default '',
+  status text not null default 'ideas',
+  date_completed text not null default '',
+  archived integer not null default 0,
+  linked_note_file_id text not null default '',
+  linked_note_path text not null default '',
+  research_location_folder_id text not null default '',
+  research_location_path text not null default '',
+  created_at text not null,
+  updated_at text not null
+);
+insert into new_research_tasks_migrated (
+  id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at
+)
+select
+  id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at
+from new_research_tasks;
+drop table new_research_tasks;
+alter table new_research_tasks_migrated rename to new_research_tasks;
+commit;
+`);
   }
   initialized = true;
 };
@@ -256,7 +291,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
       const now = new Date().toISOString();
       const id = randomUUID();
-      execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(payload.note_type ?? 'Research')}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      const noteType = String(payload.note_type ?? '').trim();
+      execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
       writeJson(res, 200, normalizeTaskRow(created));
@@ -286,11 +322,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
+      const noteType = String(payload.note_type ?? existing.note_type).trim();
       execSql(`update new_research_tasks set
         title = ${sqlEscape(payload.title ?? existing.title)},
         details = ${sqlEscape(payload.details ?? existing.details)},
         ticker = ${sqlEscape(ticker)},
-        note_type = ${sqlEscape(payload.note_type ?? existing.note_type)},
+        note_type = ${sqlEscape(noteType)},
         assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
         priority = ${sqlEscape(normalizedPriority)},
         deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
@@ -307,7 +344,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (String(payload.title ?? existing.title) !== existing.title) changedFields.push('title');
       if (String(payload.details ?? existing.details) !== existing.details) changedFields.push('details');
       if (ticker !== existing.ticker) changedFields.push('ticker');
-      if (String(payload.note_type ?? existing.note_type) !== existing.note_type) changedFields.push('note type');
+      if (noteType !== existing.note_type) changedFields.push('note type');
       if (normalizedPriority !== existing.priority) changedFields.push('priority');
       if (String(payload.deadline ?? existing.deadline) !== existing.deadline) changedFields.push('deadline');
       if (String(payload.date_completed ?? existing.date_completed) !== existing.date_completed) changedFields.push('completion date');
