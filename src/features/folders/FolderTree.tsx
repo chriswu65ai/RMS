@@ -4,6 +4,7 @@ import { createFolder, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { splitFrontmatter } from '../../lib/frontmatter';
+import { deriveFoldersWithUnsavedFiles } from './unsavedFolders';
 
 const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
@@ -15,7 +16,7 @@ export function FolderTree({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = useResearchStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag, unsavedFileIds } = useResearchStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [typesCollapsed, setTypesCollapsed] = useState(false);
@@ -56,6 +57,12 @@ export function FolderTree({
     }
     return true;
   }, [collapsedIds, expandableFolderIds]);
+
+
+
+  const foldersWithUnsaved = useMemo(() => deriveFoldersWithUnsavedFiles(folders, files, unsavedFileIds), [files, folders, unsavedFileIds]);
+
+  const hasAnyUnsavedNotes = unsavedFileIds.length > 0;
 
   const noteTypes = useMemo(() => {
     const map = new Map<string, number>();
@@ -144,9 +151,14 @@ export function FolderTree({
                 <span className="absolute -bottom-1 -right-1 inline-flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-700 px-0.5 text-[8px] font-bold leading-none text-white">T</span>
               </span>
             )}
-            <span>
-              {getFolderLabel(folder)}
-              {!isTemplatesFolder && <span className="text-xs opacity-70"> ({count})</span>}
+            <span className="flex w-full items-center justify-between gap-2">
+              <span>
+                {getFolderLabel(folder)}
+                {!isTemplatesFolder && <span className="text-xs opacity-70"> ({count})</span>}
+              </span>
+              {foldersWithUnsaved.has(folder.id) && (
+                <span className="text-xs font-bold leading-none text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes">!</span>
+              )}
             </span>
           </button>
           <div className={`items-center gap-1 ${isTemplatesFolder ? 'hidden' : 'hidden group-hover:flex'}`}>
@@ -227,7 +239,12 @@ export function FolderTree({
         <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
           <FileText size={14} />
         </span>
-        <span>All notes</span>
+        <span className="flex flex-1 items-center justify-between gap-2">
+          <span>All notes</span>
+          {hasAnyUnsavedNotes && (
+            <span className="text-xs font-bold leading-none text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes">!</span>
+          )}
+        </span>
       </button>
       {templatesFolder && (
         <div className="px-2 pb-1 pt-1">
