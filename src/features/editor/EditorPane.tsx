@@ -34,6 +34,11 @@ export function EditorPane() {
     getDraft,
     setDraft,
     clearDraft,
+    markGenerateRunning,
+    completeGenerate,
+    markGenerateFailed,
+    clearGenerateJob,
+    getGenerateJob,
   } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
@@ -46,6 +51,7 @@ export function EditorPane() {
   const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
   const [defaultModel, setDefaultModel] = useState('');
   const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
+  const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const originalTextRef = useRef<string | null>(null);
   const parsed = useMemo(
@@ -59,17 +65,21 @@ export function EditorPane() {
     if (!file) {
       setBody(parsed.body);
       setFrontmatter(parsed.frontmatter);
+      setShowGeneratedDraftNotice(false);
       return;
     }
     const cachedDraft = getDraft(file.id);
     if (cachedDraft) {
       setBody(cachedDraft.body);
       setFrontmatter(cachedDraft.frontmatter);
+      const generateJob = getGenerateJob(file.id);
+      setShowGeneratedDraftNotice(generateJob.status === 'completed' && cachedDraft.source === 'generate');
       return;
     }
     setBody(parsed.body);
     setFrontmatter(parsed.frontmatter);
-  }, [file, getDraft, parsed.body, parsed.frontmatter]);
+    setShowGeneratedDraftNotice(false);
+  }, [file, getDraft, getGenerateJob, parsed.body, parsed.frontmatter]);
 
   const updateDraftCache = (nextBody: string, nextFrontmatter: FrontmatterModel, source: 'manual' | 'generate') => {
     if (!file) return;
@@ -461,6 +471,7 @@ ${merged}`);
     originalTextRef.current = originalText;
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    markGenerateRunning(file.id);
     setGenerateState('running');
     try {
       const result = await generateUseCase.run({
@@ -470,15 +481,19 @@ ${merged}`);
         model: defaultModel,
         signal: controller.signal,
       });
-      const generated = splitFrontmatter(result.outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
-      setFrontmatter(generated.frontmatter);
-      setBody(generated.body);
-      updateDraftCache(generated.body, generated.frontmatter, 'generate');
+      const generatedDraft = completeGenerate(file.id, result.outputText);
+      if (generatedDraft) {
+        setFrontmatter(generatedDraft.frontmatter);
+        setBody(generatedDraft.body);
+      }
+      setShowGeneratedDraftNotice(true);
     } catch (error) {
       const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
       if (isCancelled) {
+        clearGenerateJob(file.id);
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
+        markGenerateFailed(file.id, error instanceof Error ? error.message : 'Generation failed.');
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
@@ -543,6 +558,8 @@ ${merged}`);
                     return;
                   }
                   clearDraft(file.id);
+                  clearGenerateJob(file.id);
+                  setShowGeneratedDraftNotice(false);
                   await refresh();
                 }}
               >
@@ -550,6 +567,20 @@ ${merged}`);
               </button>
             </div>
           </div>
+          {showGeneratedDraftNotice && (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              <span>Generated draft available — review and Save.</span>
+              <button
+                className="rounded border border-emerald-300 px-2 py-1"
+                onClick={() => {
+                  setShowGeneratedDraftNotice(false);
+                  clearGenerateJob(file.id);
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {editorTab !== 'preview' && (
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
             <button className={btn(active.h1)} onClick={() => toggleHeading(1)}>H1</button>
