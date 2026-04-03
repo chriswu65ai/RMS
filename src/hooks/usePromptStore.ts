@@ -140,8 +140,15 @@ export const usePromptStore = create<Store>()(
         get().selectFile(fileId, 'research');
       },
       transitionFromSearchResult: (fileId) => {
-        get().selectFile(fileId, 'research');
-        set({ search: '' });
+        const file = get().files.find((item) => item.id === fileId) ?? null;
+        set({
+          selectedFileId: file?.id ?? null,
+          selectedTicker: toSelectedTicker(file),
+          selectedFolderId: file?.folder_id ?? null,
+          selectedTag: null,
+          search: '',
+          lastView: 'research',
+        });
       },
       transitionTaskModal: (taskId) => set({ selectedTaskId: taskId ?? null, lastView: 'tasks' }),
       transitionTaskToNote: (task, createdFileId) => {
