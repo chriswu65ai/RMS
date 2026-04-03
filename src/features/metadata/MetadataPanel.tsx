@@ -40,10 +40,22 @@ export function MetadataPanel({
   viewTaskHelperText,
 }: Props) {
   const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? frontmatter.sectors?.[0] ?? '');
+  const [isBelowLg, setIsBelowLg] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)').matches : false,
+  );
 
   useEffect(() => {
     setSelectedSector(frontmatter.sector ?? frontmatter.sectors?.[0] ?? '');
   }, [frontmatter.sector, frontmatter.sectors]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
+    const onChange = (event: MediaQueryListEvent) => setIsBelowLg(event.matches);
+    setIsBelowLg(mediaQuery.matches);
+    mediaQuery.addEventListener('change', onChange);
+    return () => mediaQuery.removeEventListener('change', onChange);
+  }, []);
 
   const panelContents = (
     <div className="space-y-3 px-4 pb-4">
@@ -157,20 +169,22 @@ export function MetadataPanel({
 
   return (
     <>
-      <div className="fixed bottom-4 right-4 z-30 lg:hidden">
-        <button
-          className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-lg"
-          onClick={onToggleCollapsed}
-          aria-label={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
-          title={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
-        >
-          {collapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
-          Metadata
-        </button>
-      </div>
+      {isBelowLg && (
+        <div className="fixed bottom-4 right-4 z-30">
+          <button
+            className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-lg"
+            onClick={onToggleCollapsed}
+            aria-label={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
+            title={collapsed ? 'Expand metadata panel' : 'Collapse metadata panel'}
+          >
+            {collapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+            Metadata
+          </button>
+        </div>
+      )}
 
-      {!collapsed && (
-        <aside className="fixed inset-x-0 bottom-0 z-20 max-h-[70vh] overflow-y-auto rounded-t-xl border-t border-slate-200 bg-white pb-16 shadow-2xl lg:hidden">
+      {isBelowLg && !collapsed && (
+        <aside className="fixed inset-x-0 bottom-0 z-20 max-h-[70vh] overflow-y-auto rounded-t-xl border-t border-slate-200 bg-white pb-16 shadow-2xl">
           <div className="flex items-center justify-between py-2 pl-3 pr-4">
             <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <BadgeInfo size={12} />
