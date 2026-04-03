@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { Recommendation, type FrontmatterModel, type Note, type PromptFile } from '../types/models';
+import { Recommendation, type FrontmatterModel, type Note, type ResearchNote } from '../types/models';
 
 const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 
@@ -104,7 +104,7 @@ export function composeMarkdown(frontmatter: FrontmatterModel, body: string): st
   return `---\n${lines.join('\n')}\n---\n${body.startsWith('\n') ? body.slice(1) : body}`;
 }
 
-export function fileToNoteModel(file: PromptFile): Note {
+export function fileToNoteModel(file: ResearchNote): Note {
   const { frontmatter } = splitFrontmatter(file.content);
   return {
     id: file.id,

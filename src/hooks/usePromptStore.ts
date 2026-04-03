@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Folder, PromptFile, SettingsList, Workspace } from '../types/models';
+import type { Folder, ResearchNote, SettingsList, Workspace } from '../types/models';
 import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
 
@@ -48,7 +48,7 @@ export type EditorTab = 'edit' | 'preview' | 'split';
 type Store = {
   workspace: Workspace | null;
   folders: Folder[];
-  files: PromptFile[];
+  files: ResearchNote[];
   selectedFolderId: string | null;
   selectedFileId: string | null;
   selectedTaskId: string | null;
@@ -84,9 +84,9 @@ type Store = {
   reset: () => void;
 };
 
-const toSelectedTicker = (file: PromptFile | null) => file ? splitFrontmatter(file.content).frontmatter.ticker?.toString().trim().toUpperCase() ?? null : null;
+const toSelectedTicker = (file: ResearchNote | null) => file ? splitFrontmatter(file.content).frontmatter.ticker?.toString().trim().toUpperCase() ?? null : null;
 
-function sanitizeSelection(files: PromptFile[], selectedFileId: string | null) {
+function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null) {
   if (!selectedFileId) return { selectedFileId: null, selectedTicker: null };
   const existing = files.find((file) => file.id === selectedFileId) ?? null;
   return { selectedFileId: existing?.id ?? null, selectedTicker: toSelectedTicker(existing) };

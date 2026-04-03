@@ -37,7 +37,7 @@ const PRIORITY_RANK: Record<Priority | '', number> = {
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
 
 const blankTask = (): NewResearchTaskInput => ({
-  topic: '', details: '', ticker: '', note_type: 'Research', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
+  title: '', details: '', ticker: '', note_type: 'Research', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
   date_completed: '', archived: false, linked_note_file_id: '', linked_note_path: '', research_location_folder_id: '', research_location_path: '',
 });
 
@@ -259,9 +259,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       return;
     }
 
-    const taskContext = task.details || task.topic || '-';
+    const taskContext = task.details || task.title || '-';
     const template = matchingTemplateForType(type);
-    const noteTitle = task.topic.trim() || `${ticker} ${type}`;
+    const noteTitle = task.title.trim() || `${ticker} ${type}`;
     const taskContextBlock = `### Task context\n${taskContext}\n`;
     const frontmatter: FrontmatterModel = template
       ? { ...splitFrontmatter(template.content).frontmatter, template: false, title: noteTitle, ticker, type, date }
@@ -342,7 +342,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 {prioritizedTasks.filter((task) => task.status === column.key).map((task) => (
                   <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3" draggable onDragStart={() => setDraggingId(task.id)} onDragEnd={() => setDraggingId(null)}>
                     <div className="flex items-start justify-between gap-3">
-                      <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.topic || 'Untitled title'}</p><p className="text-xs font-semibold text-slate-700">{task.ticker}</p></button>
+                      <button className="text-left" onClick={() => { setModalState({ mode: 'edit', id: task.id, task: { ...task } }); setActivityExpanded(false); transitionTaskModal(task.id); }}><p className="font-medium text-slate-900">{task.title || 'Untitled title'}</p><p className="text-xs font-semibold text-slate-700">{task.ticker}</p></button>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
                       <p>Assignee: {task.assignee || '—'}</p>
@@ -375,7 +375,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
           <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <h3 className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.topic} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, topic: e.target.value } } : prev)} /></label>
+              <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
               <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;
                 const ticker = e.target.value.toUpperCase();
