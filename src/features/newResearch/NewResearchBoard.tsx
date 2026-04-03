@@ -170,15 +170,19 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const saveTask = async () => {
     if (!modalState) return;
     if (!modalState.task.ticker.trim()) return setError('Ticker is required.');
+    const willAutoComplete = modalState.task.date_completed.trim() && modalState.task.status !== TaskStatus.Completed;
+    const payload: NewResearchTaskInput = willAutoComplete
+      ? { ...modalState.task, status: TaskStatus.Completed }
+      : modalState.task;
 
     setSaving(true);
     setError(null);
     try {
       if (modalState.mode === 'create') {
-        const created = await createNewResearchTask(modalState.task);
+        const created = await createNewResearchTask(payload);
         setTasks((prev) => [created, ...prev]);
       } else if (modalState.id) {
-        const updated = await updateNewResearchTask(modalState.id, modalState.task);
+        const updated = await updateNewResearchTask(modalState.id, payload);
         setTasks((prev) => prev.map((task) => (task.id === modalState.id ? updated : task)));
       }
       setModalState(null);
@@ -423,7 +427,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               <label className="text-sm">Status<select className="input mt-1" value={modalState.task.status} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, status: e.target.value as TaskStatus } } : prev)}>{COLUMNS.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select></label>
               <label className="text-sm">Priority<select className="input mt-1" value={modalState.task.priority} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, priority: e.target.value as Priority | '' } } : prev)}><option value="">—</option>{Object.values(Priority).map((value) => <option key={value} value={value}>{PRIORITY_LABEL[value]}</option>)}</select></label>
               <label className="text-sm">Deadline<input className="input mt-1" type="date" value={modalState.task.deadline} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, deadline: e.target.value } } : prev)} /></label>
-              <label className="text-sm">Date completed<input className="input mt-1" type="date" value={modalState.task.date_completed} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, date_completed: e.target.value } } : prev)} /></label>
+              <label className="text-sm">Date completed<input className="input mt-1" type="date" value={modalState.task.date_completed} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, date_completed: e.target.value } } : prev)} />
+                {modalState.mode === 'edit' && modalState.task.date_completed.trim() && modalState.task.status !== TaskStatus.Completed
+                  ? <p className="mt-1 text-xs text-amber-700">Saving with a completion date will automatically move this task to Completed.</p>
+                  : null}
+              </label>
               <label className="text-sm md:col-span-2">Details<textarea className="input mt-1 min-h-32" value={modalState.task.details} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, details: e.target.value } } : prev)} /></label>
             </div>
             {modalState.id && (
