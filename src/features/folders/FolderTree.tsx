@@ -234,7 +234,7 @@ export function FolderTree({
           {renderFolderNode(templatesFolder, 0)}
         </div>
       )}
-      <div className="flex-1 space-y-1 overflow-y-auto p-2">
+      <div className="scrollbar-hidden flex-1 space-y-1 overflow-y-auto p-2">
         {(childrenByParent.get(null) ?? []).filter((folder) => !templatesFolder || folder.id !== templatesFolder.id).map((folder) => renderFolderNode(folder, 0))}
       </div>
 
@@ -252,7 +252,7 @@ export function FolderTree({
         </div>
 
         {!typesCollapsed && (
-          <div className="max-h-48 overflow-y-auto">
+          <div className="scrollbar-hidden max-h-48 overflow-y-auto">
             <button
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedTag === TYPE_FILTER_ALL ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}`}
               onClick={() => selectTag(TYPE_FILTER_ALL)}

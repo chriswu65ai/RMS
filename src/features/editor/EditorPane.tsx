@@ -1,7 +1,7 @@
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Minus, Save, Share2, Smile, Table, X } from 'lucide-react';
+import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Minus, Save, Search, Share2, Smile, Table, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
@@ -489,6 +489,10 @@ ${merged}`);
                 </button>
               ) : (
                 <button className="rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
+                  <span className="relative mr-1 inline-flex">
+                    <Search className="inline" size={14} />
+                    <span className="absolute -right-2 -top-1 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
+                  </span>
                   Generate
                 </button>
               )}
@@ -551,7 +555,7 @@ ${merged}`);
           {(editorTab === 'edit' || editorTab === 'split') && (
             <CodeMirror
               value={editorValue}
-              className="min-h-0 flex-1 overflow-auto"
+              className="editor-scroll min-h-0 flex-1"
               height="100%"
               extensions={[markdown({ extensions: [{ remove: ['SetextHeading'] }] })]}
               onCreateEditor={(view) => {

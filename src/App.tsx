@@ -200,12 +200,12 @@ function NewResearchPage() {
 
 function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolderPanelCollapsed }: { openTemplatePicker: () => void; folderPanelCollapsed: boolean; setFolderPanelCollapsed: (collapsed: boolean) => void }) {
   return (
-    <div className={`grid h-full ${folderPanelCollapsed ? 'grid-cols-[48px_minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
-      <aside className="border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
-      <section className="relative border-r border-slate-200 bg-panel">
+    <div className={`grid h-full min-h-0 overflow-hidden ${folderPanelCollapsed ? 'grid-cols-[48px_minmax(0,340px)_minmax(0,1fr)]' : 'grid-cols-[260px_minmax(0,340px)_minmax(0,1fr)]'}`}>
+      <aside className="min-h-0 border-r border-slate-200 bg-white"><FolderTree collapsed={folderPanelCollapsed} onToggleCollapsed={() => setFolderPanelCollapsed(!folderPanelCollapsed)} /></aside>
+      <section className="relative min-h-0 border-r border-slate-200 bg-panel">
         <FileList openTemplatePicker={openTemplatePicker} />
       </section>
-      <div className="h-full"><EditorPane /></div>
+      <div className="h-full min-h-0 overflow-hidden"><EditorPane /></div>
     </div>
   );
 }

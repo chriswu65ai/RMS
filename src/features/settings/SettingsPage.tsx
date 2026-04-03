@@ -91,12 +91,14 @@ export function SettingsPage() {
         }
 
         const parsed = splitFrontmatter(entry.content);
+        const importedAsTemplate = parsed.frontmatter.template === true;
         const { error } = await createFile({
           workspaceId: workspace.id,
           folderId: targetFolder?.id ?? null,
           folderPath: targetFolder?.path ?? null,
           name: fileName,
           content: entry.content,
+          isTemplate: importedAsTemplate,
           frontmatter: Object.keys(parsed.frontmatter).length > 0 ? parsed.frontmatter : null,
         });
         if (error) throw new Error(error.message);
