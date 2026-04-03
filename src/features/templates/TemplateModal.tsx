@@ -2,13 +2,13 @@ import { FilePlus2 } from 'lucide-react';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
+import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { createFile } from '../../lib/dataApi';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { files, workspace, selectedFolderId, folders, refresh, noteTypes, selectFile } = usePromptStore();
+  const { files, workspace, selectedFolderId, folders, refresh, noteTypes, selectFile } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
   const [search, setSearch] = useState('');
@@ -103,7 +103,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 if (error) return dialog.alert('Create failed', error.message);
                 await refresh();
                 const createdPath = `${folder?.path ? `${folder.path}/` : ''}${fileName}`;
-                const created = usePromptStore.getState().files.find((file) => !file.is_template && file.path === createdPath);
+                const created = useResearchStore.getState().files.find((file) => !file.is_template && file.path === createdPath);
                 if (created) {
                   selectFile(created.id, 'research');
                   navigate('/research.html');

@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder, renameFolder } from '../../lib/dataApi';
-import { usePromptStore } from '../../hooks/usePromptStore';
+import { useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { splitFrontmatter } from '../../lib/frontmatter';
 
@@ -15,7 +15,7 @@ export function FolderTree({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = usePromptStore();
+  const { folders, selectedFolderId, selectFolder, workspace, files, refresh, selectedTag, selectTag } = useResearchStore();
   const dialog = useDialog();
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [typesCollapsed, setTypesCollapsed] = useState(false);

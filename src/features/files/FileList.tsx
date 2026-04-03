@@ -2,7 +2,7 @@ import { FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
-import { buildCanonicalStockFileName, toLocalDateInputValue, usePromptStore } from '../../hooks/usePromptStore';
+import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 
@@ -10,7 +10,7 @@ const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
-  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes } = usePromptStore();
+  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes } = useResearchStore();
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');

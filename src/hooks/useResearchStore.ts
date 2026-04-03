@@ -109,7 +109,7 @@ function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null)
   return { selectedFileId: existing?.id ?? null, selectedTicker: toSelectedTicker(existing) };
 }
 
-const mergePersistedPromptState = (persistedState: unknown, currentState: Store) => {
+const mergePersistedResearchState = (persistedState: unknown, currentState: Store) => {
   const merged = { ...currentState, ...(persistedState as Partial<Store> | undefined) };
   const metadata = mergeMetadataListsWithDefaults(merged, DEFAULT_SETTINGS);
   return {
@@ -119,7 +119,7 @@ const mergePersistedPromptState = (persistedState: unknown, currentState: Store)
   };
 };
 
-export const usePromptStore = create<Store>()(
+export const useResearchStore = create<Store>()(
   persist(
     (set, get) => ({
       workspace: null,
@@ -241,7 +241,7 @@ export const usePromptStore = create<Store>()(
     }),
     {
       name: 'rms-app-state',
-      merge: (persistedState, currentState) => mergePersistedPromptState(persistedState, currentState as Store),
+      merge: (persistedState, currentState) => mergePersistedResearchState(persistedState, currentState as Store),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         const normalized = normalizeMetadataPanelCollapsed(state.metadataPanelCollapsed);

@@ -5,8 +5,8 @@ import { Copy, Download, List, ListOrdered, ListTodo, Minus, Save, Share2, Smile
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
-import { usePromptStore } from '../../hooks/usePromptStore';
-import { buildCanonicalStockFileName } from '../../hooks/usePromptStore';
+import { useResearchStore } from '../../hooks/useResearchStore';
+import { buildCanonicalStockFileName } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel, NewResearchTask } from '../../types/models';
@@ -16,7 +16,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 
 export function EditorPane() {
-  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal, editorTab, setEditorTab } = usePromptStore();
+  const { files, selectedFileId, refresh, noteTypes, sectors, metadataPanelCollapsed, setMetadataPanelCollapsed, transitionTaskModal, editorTab, setEditorTab } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);

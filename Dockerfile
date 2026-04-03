@@ -10,6 +10,6 @@ COPY . .
 RUN npm run build
 
 ENV NODE_ENV=production
-ENV SQLITE_PATH=/data/promptmanager.db
+ENV SQLITE_PATH=/data/researchmanager.db
 EXPOSE 4173
 CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4173"]
