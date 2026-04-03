@@ -184,7 +184,7 @@ export function MetadataPanel({
       )}
 
       {isBelowLg && !collapsed && (
-        <aside className="fixed inset-x-0 bottom-0 z-20 max-h-[70vh] overflow-y-auto rounded-t-xl border-t border-slate-200 bg-white pb-16 shadow-2xl">
+        <aside className="fixed inset-x-0 bottom-0 z-20 flex max-h-[70vh] min-h-0 flex-col rounded-t-xl border-t border-slate-200 bg-white pb-16 shadow-2xl">
           <div className="flex items-center justify-between py-2 pl-3 pr-4">
             <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <BadgeInfo size={12} />
@@ -199,7 +199,9 @@ export function MetadataPanel({
               <PanelRightClose size={16} />
             </button>
           </div>
-          {panelContents}
+          <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+            {panelContents}
+          </div>
         </aside>
       )}
 
@@ -217,7 +219,7 @@ export function MetadataPanel({
           </div>
         </aside>
       ) : (
-        <aside className="hidden border-l border-slate-200 bg-white lg:block">
+        <aside className="hidden min-h-0 border-l border-slate-200 bg-white lg:flex lg:flex-col">
           <div className="flex items-center justify-between py-2 pl-3 pr-4">
             <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <BadgeInfo size={12} />
@@ -232,7 +234,9 @@ export function MetadataPanel({
               <PanelRightClose size={16} />
             </button>
           </div>
-          {panelContents}
+          <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+            {panelContents}
+          </div>
         </aside>
       )}
     </>
