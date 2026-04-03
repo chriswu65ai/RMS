@@ -81,9 +81,6 @@ export function EditorPane() {
     })();
     return () => {
       cancelled = true;
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-      setGenerateState('idle');
     };
   }, []);
 

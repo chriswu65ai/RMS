@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
+import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
 import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
 
 const modelCatalogService = new ModelCatalogService();
 
 const providerLabel = (provider: AgentProvider) => provider.charAt(0).toUpperCase() + provider.slice(1);
+const statusLabel = (status: AgentActivityLog['status']) => status.charAt(0).toUpperCase() + status.slice(1);
+const formatDuration = (durationMs: number | null) => (durationMs && durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '—');
+const formatUsd = (amount: number | null) => (typeof amount === 'number' ? `$${amount.toFixed(4)}` : '—');
 const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'failed' | null) => {
   if (catalogStatus === 'live') return 'Live catalog loaded.';
   if (catalogStatus === 'unsupported') return 'Catalog unsupported; fallback auto-selected.';
@@ -14,6 +18,7 @@ const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'fai
 };
 
 export function AgentPage() {
+  const files = useResearchStore((state) => state.files);
   const [provider, setProvider] = useState<AgentProvider>('minimax');
   const [model, setModel] = useState('');
   const [models, setModels] = useState<ModelListItem[]>([]);
@@ -74,9 +79,24 @@ export function AgentPage() {
   const canSaveDefaults = model.trim().length > 0;
 
   const latestSummary = useMemo(() => activity.map((entry) => {
-    const duration = entry.duration_ms ? `${(entry.duration_ms / 1000).toFixed(1)}s` : '—';
-    return `${entry.action} ${entry.status} • ${providerLabel(entry.provider as AgentProvider)} • ${duration}`;
-  }), [activity]);
+    const matchingFile = files.find((file) => file.id === entry.note_id);
+    const target = matchingFile?.name || matchingFile?.path || (entry.note_id ? `note ${entry.note_id.slice(0, 8)}` : 'current note');
+    const verb = entry.action === 'generate' ? 'edit' : entry.action;
+    const modelName = entry.model || 'unknown model';
+    const providerName = providerLabel(entry.provider as AgentProvider);
+    const lead = `Called ${providerName} model ${modelName} to ${verb} ${target}`;
+    return {
+      id: entry.id,
+      lead,
+      status: statusLabel(entry.status),
+      duration: formatDuration(entry.duration_ms),
+      tokens: entry.token_estimate ?? null,
+      cost: formatUsd(entry.cost_estimate_usd),
+      timestamp: new Date(entry.timestamp).toLocaleString(),
+      details: entry.error_message_short,
+      chars: `${entry.input_chars} in / ${entry.output_chars} out`,
+    };
+  }), [activity, files]);
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -174,10 +194,23 @@ export function AgentPage() {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Activity log preview</h2>
+          <h2 className="text-lg font-semibold">Activity log</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <ul className="space-y-2 text-sm text-slate-700">
-              {latestSummary.map((line, index) => <li key={`${line}-${index}`}>{line}</li>)}
+            <ul className="space-y-3 text-sm text-slate-700">
+              {latestSummary.map((entry) => (
+                <li key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-sm text-slate-800">{entry.lead}.</p>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600">
+                    <span>Status: {entry.status}</span>
+                    <span>Duration: {entry.duration}</span>
+                    <span>Tokens: {entry.tokens ?? '—'}</span>
+                    <span>Cost: {entry.cost}</span>
+                    <span>Chars: {entry.chars}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">{entry.timestamp}</p>
+                  {entry.details ? <p className="mt-1 text-xs text-rose-600">{entry.details}</p> : null}
+                </li>
+              ))}
               {latestSummary.length === 0 ? <li className="text-slate-500">No activity yet.</li> : null}
             </ul>
           </div>
