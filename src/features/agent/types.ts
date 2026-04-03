@@ -20,6 +20,11 @@ export type ModelListItem = {
   displayName: string;
 };
 
+export type ModelCatalogFallbackReason =
+  | 'missing_api_key'
+  | 'provider_model_listing_unsupported'
+  | 'provider_model_listing_failed';
+
 export type AgentSettings = {
   default_provider: AgentProvider;
   default_model: string;

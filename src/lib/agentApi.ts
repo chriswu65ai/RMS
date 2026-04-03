@@ -1,4 +1,12 @@
-import type { AgentActivityLog, AgentProvider, AgentSettings, ModelListItem, SaveMode, TriggerSource } from '../features/agent/types';
+import type {
+  AgentActivityLog,
+  AgentProvider,
+  AgentSettings,
+  ModelCatalogFallbackReason,
+  ModelListItem,
+  SaveMode,
+  TriggerSource,
+} from '../features/agent/types';
 
 type ApiError = { error?: { message?: string } | null };
 
@@ -47,10 +55,20 @@ export async function listActivityLog(limit = 10): Promise<AgentActivityLog[]> {
   return response.json() as Promise<AgentActivityLog[]>;
 }
 
-export async function listModels(provider: AgentProvider): Promise<{ models: ModelListItem[]; source: 'provider' | 'fallback'; reason?: string | null }> {
+export async function listModels(provider: AgentProvider): Promise<{
+  models: ModelListItem[];
+  source: 'provider' | 'fallback';
+  reason?: ModelCatalogFallbackReason | null;
+  reason_message?: string | null;
+}> {
   const response = await fetch(`/api/agent/models?provider=${provider}`);
   if (!response.ok) throw new Error(await asErrorMessage(response));
-  return response.json() as Promise<{ models: ModelListItem[]; source: 'provider' | 'fallback'; reason?: string | null }>;
+  return response.json() as Promise<{
+    models: ModelListItem[];
+    source: 'provider' | 'fallback';
+    reason?: ModelCatalogFallbackReason | null;
+    reason_message?: string | null;
+  }>;
 }
 
 export async function generateText(params: {
