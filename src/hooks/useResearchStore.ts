@@ -68,6 +68,12 @@ export type DraftEntry = {
   source: DraftSource;
   updatedAt: number;
 };
+export type GenerateJobStatus = 'idle' | 'running' | 'completed' | 'failed';
+export type GenerateJob = {
+  status: GenerateJobStatus;
+  error?: string;
+  completedAt?: number;
+};
 
 type Store = {
   workspace: Workspace | null;
@@ -87,6 +93,7 @@ type Store = {
   metadataPanelCollapsed: boolean;
   editorTab: EditorTab;
   draftByFileId: Record<string, DraftEntry>;
+  generateJobsByFileId: Record<string, GenerateJob>;
   loading: boolean;
   error: string | null;
   setSearch: (search: string) => void;
@@ -99,6 +106,11 @@ type Store = {
   setDraft: (fileId: string, draftPayload: DraftEntry) => void;
   clearDraft: (fileId: string) => void;
   getDraft: (fileId: string) => DraftEntry | null;
+  markGenerateRunning: (fileId: string) => void;
+  completeGenerate: (fileId: string, outputText: string) => DraftEntry | null;
+  markGenerateFailed: (fileId: string, error?: string) => void;
+  clearGenerateJob: (fileId: string) => void;
+  getGenerateJob: (fileId: string) => GenerateJob;
   setSectors: (sectors: string[]) => void;
   selectFolder: (id: string | null) => void;
   selectFile: (id: string | null, view?: AppView) => void;
@@ -113,6 +125,7 @@ type Store = {
 };
 
 const toSelectedTicker = (file: ResearchNote | null) => file ? splitFrontmatter(file.content).frontmatter.ticker?.toString().trim().toUpperCase() ?? null : null;
+const IDLE_GENERATE_JOB: GenerateJob = { status: 'idle' };
 
 function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null) {
   if (!selectedFileId) return { selectedFileId: null, selectedTicker: null };
@@ -150,6 +163,7 @@ export const useResearchStore = create<Store>()(
       metadataPanelCollapsed: false,
       editorTab: 'split',
       draftByFileId: {},
+      generateJobsByFileId: {},
       loading: false,
       error: null,
       setSearch: (search) => set({ search }),
@@ -172,6 +186,45 @@ export const useResearchStore = create<Store>()(
         return { draftByFileId: rest };
       }),
       getDraft: (fileId) => get().draftByFileId[fileId] ?? null,
+      markGenerateRunning: (fileId) => set((state) => ({
+        generateJobsByFileId: {
+          ...state.generateJobsByFileId,
+          [fileId]: { status: 'running' },
+        },
+      })),
+      completeGenerate: (fileId, outputText) => {
+        const { noteTypes, sectors } = get();
+        const generated = splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+        const draftPayload: DraftEntry = {
+          body: generated.body,
+          frontmatter: generated.frontmatter,
+          source: 'generate',
+          updatedAt: Date.now(),
+        };
+        set((state) => ({
+          draftByFileId: {
+            ...state.draftByFileId,
+            [fileId]: draftPayload,
+          },
+          generateJobsByFileId: {
+            ...state.generateJobsByFileId,
+            [fileId]: { status: 'completed', completedAt: Date.now() },
+          },
+        }));
+        return draftPayload;
+      },
+      markGenerateFailed: (fileId, errorMessage) => set((state) => ({
+        generateJobsByFileId: {
+          ...state.generateJobsByFileId,
+          [fileId]: { status: 'failed', error: errorMessage },
+        },
+      })),
+      clearGenerateJob: (fileId) => set((state) => {
+        if (!state.generateJobsByFileId[fileId]) return state;
+        const { [fileId]: _removed, ...rest } = state.generateJobsByFileId;
+        return { generateJobsByFileId: rest };
+      }),
+      getGenerateJob: (fileId) => get().generateJobsByFileId[fileId] ?? IDLE_GENERATE_JOB,
       selectFolder: (id) => set({ selectedFolderId: id, selectedTag: null, selectedFileId: null, selectedTicker: null }),
       selectFile: (id, view = 'research') => {
         const file = get().files.find((item) => item.id === id) ?? null;
@@ -259,6 +312,7 @@ export const useResearchStore = create<Store>()(
           selectedTag: null,
           search: '',
           draftByFileId: {},
+          generateJobsByFileId: {},
           loading: false,
           error: null,
         });
@@ -284,6 +338,7 @@ export const useResearchStore = create<Store>()(
         editorTab: state.editorTab,
         selectedTicker: state.selectedTicker,
         draftByFileId: state.draftByFileId,
+        generateJobsByFileId: state.generateJobsByFileId,
       }),
     },
   ),
