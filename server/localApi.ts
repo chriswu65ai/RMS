@@ -189,13 +189,11 @@ function ensureWorkspaceWithStarterContent() {
 
   const now = new Date().toISOString();
   const workspaceId = randomUUID();
-  const researchFolderId = randomUUID();
   const templatesFolderId = randomUUID();
 
   execSql(`
 begin;
 insert into workspaces (id, name, created_at, updated_at) values (${sqlEscape(workspaceId)}, 'Workspace', ${sqlEscape(now)}, ${sqlEscape(now)});
-insert into folders (id, workspace_id, parent_id, name, path, created_at, updated_at) values (${sqlEscape(researchFolderId)}, ${sqlEscape(workspaceId)}, NULL, 'Research', 'Research', ${sqlEscape(now)}, ${sqlEscape(now)});
 insert into folders (id, workspace_id, parent_id, name, path, created_at, updated_at) values (${sqlEscape(templatesFolderId)}, ${sqlEscape(workspaceId)}, NULL, 'Templates', 'Templates', ${sqlEscape(now)}, ${sqlEscape(now)});
 commit;
 `);
