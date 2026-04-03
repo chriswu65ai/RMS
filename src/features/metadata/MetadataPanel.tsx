@@ -118,7 +118,7 @@ export function MetadataPanel({
             onIdentityBlur({ date: frontmatter.date ?? '', ticker: frontmatter.ticker ?? '', type: e.target.value });
           }}
         >
-          <option value="" disabled>Select note type</option>
+          <option value="">—</option>
           {noteTypes.map((type) => (
             <option key={type} value={type}>{type}</option>
           ))}

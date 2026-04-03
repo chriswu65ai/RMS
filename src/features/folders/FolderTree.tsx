@@ -123,10 +123,11 @@ export function FolderTree({
     const isTemplatesFolder = Boolean(templatesFolder && templatesFolder.id === folder.id);
     const selectedStyle = selectedFolderId === folder.id ? 'bg-slate-900 text-white' : 'hover:bg-slate-100';
     const showChevron = hasChildren && !isTemplatesFolder;
+    const rowIndentPx = isTemplatesFolder ? depth * 14 : 24 + (depth * 14);
 
     return (
       <div key={folder.id}>
-        <div className="group flex items-center gap-1" style={{ paddingLeft: `${depth * 14}px` }}>
+        <div className="group flex items-center gap-1" style={{ paddingLeft: `${rowIndentPx}px` }}>
           {showChevron ? (
             <button
               className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100"
