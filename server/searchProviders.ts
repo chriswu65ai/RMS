@@ -150,7 +150,10 @@ class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
     const policy = options.policy ?? 'open_web';
     const deduped = dedupeByCanonicalUrl(rawResults);
     const domainFiltered = applyDomainPolicy(deduped, policy, options.domainList);
-    const boosted = applyDomainBoosts(domainFiltered, policy === 'open_web' ? options.domainBoost : undefined);
+    const boosted = applyDomainBoosts(
+      domainFiltered,
+      policy === 'open_web' || policy === 'prefer_list' ? options.domainBoost : undefined,
+    );
     return enforceResultCap(boosted, options.resultCap);
   }
 }

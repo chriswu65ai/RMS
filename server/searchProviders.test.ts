@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchUtils } from './searchProviders.js';
+import { searchProviderRegistry, searchUtils } from './searchProviders.js';
 
 test('domain policy only_list keeps only matching hostnames and subdomains', () => {
   const results = [
@@ -39,6 +39,35 @@ test('domain boosts reorder results by weighted preferred sources', () => {
 
   assert.equal(ranked[0]?.url, 'https://docs.example.com/filing');
   assert.equal((ranked[0]?.score ?? 0) > (ranked[1]?.score ?? 0), true);
+});
+
+test('duckduckgo prefer_list applies domain boosts without filtering open-web results', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <a class="result__a" href="https://general.org/insight">General result</a>
+    <a class="result__snippet">General snippet</a>
+    <a class="result__a" href="https://docs.example.com/filing">Preferred result</a>
+    <a class="result__snippet">Preferred snippet</a>
+  `;
+
+  globalThis.fetch = async () => new Response(html, { status: 200 });
+
+  try {
+    const results = await searchProviderRegistry.duckduckgo.search('earnings', {
+      policy: 'prefer_list',
+      domainList: ['example.com'],
+      domainBoost: {
+        'example.com': 5,
+      },
+    });
+
+    assert.deepEqual(results.map((item) => item.url), [
+      'https://docs.example.com/filing',
+      'https://general.org/insight',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('dedupe canonical URL strips UTM params and trailing slash', () => {
