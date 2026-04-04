@@ -67,6 +67,11 @@ type AgentGenerationParams = {
   };
 } | null;
 
+type OllamaRuntimeConfig = {
+  baseUrl: string;
+  model: string;
+};
+
 type AgentActivityLogRow = {
   id: string;
   timestamp: string;
@@ -356,15 +361,34 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
   };
 };
 
+const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider; default_model: string; generation_params?: AgentGenerationParams }): OllamaRuntimeConfig => {
+  const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
+  const localModel = settings.generation_params?.local_connection?.model?.trim() || '';
+  const defaultModel = settings.default_provider === 'ollama' ? settings.default_model.trim() : '';
+  return {
+    baseUrl,
+    model: defaultModel || localModel,
+  };
+};
+
 const getAgentSettings = () => {
   const settings = queryJson<AgentSettingsRow>('select default_provider, default_model, generation_params_json from agent_settings where id = 1 limit 1')[0];
   const provider = isAgentProvider(settings?.default_provider) ? settings.default_provider : 'minimax';
   const generationParams = normalizeAgentGenerationParams(settings?.generation_params_json ? JSON.parse(settings.generation_params_json) : null);
-  return {
+  const nextSettings = {
     default_provider: provider,
     default_model: settings?.default_model ?? '',
     generation_params: generationParams,
   };
+  const ollamaRuntime = resolveOllamaRuntimeConfig(nextSettings);
+  if (nextSettings.generation_params?.local_connection) {
+    nextSettings.generation_params.local_connection.base_url = ollamaRuntime.baseUrl;
+    nextSettings.generation_params.local_connection.model = ollamaRuntime.model;
+  }
+  if (nextSettings.default_provider === 'ollama') {
+    nextSettings.default_model = ollamaRuntime.model;
+  }
+  return nextSettings;
 };
 
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
@@ -412,8 +436,20 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
         return true;
       }
-      const defaultModel = String(payload.default_model ?? '').trim();
+      let defaultModel = String(payload.default_model ?? '').trim();
       const generationParams = normalizeAgentGenerationParams(payload.generation_params);
+      const ollamaRuntime = resolveOllamaRuntimeConfig({
+        default_provider: provider,
+        default_model: defaultModel,
+        generation_params: generationParams,
+      });
+      if (generationParams?.local_connection) {
+        generationParams.local_connection.base_url = ollamaRuntime.baseUrl;
+        generationParams.local_connection.model = ollamaRuntime.model;
+      }
+      if (provider === 'ollama') {
+        defaultModel = ollamaRuntime.model;
+      }
       execSql(`update agent_settings set
         default_provider = ${sqlEscape(provider)},
         default_model = ${sqlEscape(defaultModel)},
@@ -472,7 +508,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const settings = getAgentSettings();
       const preferredModel = settings.default_provider === provider ? settings.default_model : undefined;
       const fallbackModels = FALLBACK_MODELS[provider];
-      const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
+      const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
         writeJson(res, 200, {
@@ -485,7 +521,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
 
-      const result = await providerRegistry[provider].listModels(apiKey ?? '', { fallbackModels, preferredModel, baseUrl });
+      const result = await providerRegistry[provider].listModels(apiKey ?? '', { fallbackModels, preferredModel, baseUrl: ollamaRuntime.baseUrl });
       if (result.catalog_status !== 'live') {
         console.warn('[agent-models] catalog fallback', { provider, catalog_status: result.catalog_status, reason_code: result.reason_code });
       }
@@ -516,12 +552,19 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const model = String(payload.model ?? '').trim();
       const inputText = String(payload.input_text ?? '');
-      if (!model) {
+      if (provider !== 'ollama' && !model) {
         writeJson(res, 400, { error: { message: 'Model is required.' } });
         return true;
       }
       if (!inputText.trim()) {
         writeJson(res, 400, { error: { message: 'Input text is required.' } });
+        return true;
+      }
+      const settings = getAgentSettings();
+      const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
+      const resolvedModel = provider === 'ollama' ? ollamaRuntime.model : model;
+      if (!resolvedModel) {
+        writeJson(res, 400, { error: { message: 'Model is required.' } });
         return true;
       }
       const now = new Date().toISOString();
@@ -533,7 +576,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         trigger_source: String(payload.trigger_source ?? 'manual'),
         initiated_by: String(payload.initiated_by ?? 'user'),
         provider,
-        model,
+        model: resolvedModel,
         status: 'started',
         duration_ms: null,
         input_chars: inputText.length,
@@ -551,7 +594,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           trigger_source: String(payload.trigger_source ?? 'manual'),
           initiated_by: String(payload.initiated_by ?? 'user'),
           provider,
-          model,
+          model: resolvedModel,
           status: 'failed',
           duration_ms: Date.now() - startedAt,
           input_chars: inputText.length,
@@ -566,16 +609,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const controller = new AbortController();
       req.on('aborted', () => controller.abort());
       try {
-        const settings = getAgentSettings();
-        const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
         beginNdjson(res);
         writeNdjson(res, { type: 'status', stage: 'started' });
         const result = await providerRegistry[provider].generate({
-          model,
+          model: resolvedModel,
           inputText,
           generationParams: {
             ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
-            ...(provider === 'ollama' ? { baseUrl } : {}),
+            ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
           },
         }, apiKey ?? '', controller.signal, {
           onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
@@ -587,7 +628,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           trigger_source: String(payload.trigger_source ?? 'manual'),
           initiated_by: String(payload.initiated_by ?? 'user'),
           provider,
-          model,
+          model: resolvedModel,
           status: 'success',
           duration_ms: Date.now() - startedAt,
           input_chars: inputText.length,
@@ -607,7 +648,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           trigger_source: String(payload.trigger_source ?? 'manual'),
           initiated_by: String(payload.initiated_by ?? 'user'),
           provider,
-          model,
+          model: resolvedModel,
           status: aborted ? 'cancelled' : 'failed',
           duration_ms: Date.now() - startedAt,
           input_chars: inputText.length,

@@ -125,3 +125,13 @@ test('ollama returns explicit unreachable reason when local daemon is down', asy
   assert.equal(result.catalog_status, 'failed');
   assert.equal(result.reason_code, 'ollama_unreachable');
 });
+
+test('selectBestModel keeps ollama preferred model stable when live list contains it', () => {
+  const discovered: ModelListEntry[] = [
+    { modelId: 'llama3.1:8b', displayName: 'Llama 3.1 8B', B: 1 },
+    { modelId: 'qwen2.5:14b', displayName: 'Qwen 2.5 14B', B: 1 },
+  ];
+  const selected = selectBestModel('ollama', discovered, FALLBACK_MODELS.ollama, 'qwen2.5:14b');
+  assert.equal(selected.selected_model, 'qwen2.5:14b');
+  assert.equal(selected.selection_source, 'live_catalog');
+});
