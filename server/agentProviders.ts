@@ -17,6 +17,10 @@ export type AgentGenerateResponse = {
   costEstimate?: number;
 };
 
+export type AgentGenerateCallbacks = {
+  onTextDelta?: (deltaText: string) => void;
+};
+
 export type ModelListEntry = { modelId: string; displayName: string; B: number };
 
 export type CatalogStatus = 'live' | 'unsupported' | 'failed';
@@ -41,7 +45,7 @@ export type ListModelsResult = {
 };
 
 export interface ProviderAdapter {
-  generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse>;
+  generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal, callbacks?: AgentGenerateCallbacks): Promise<AgentGenerateResponse>;
   listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult>;
 }
 
@@ -72,6 +76,11 @@ const extractTextFromUnknown = (value: unknown): string => {
     if (typeof record.content === 'string') return record.content;
   }
   return '';
+};
+
+const emitTextDelta = (callbacks: AgentGenerateCallbacks | undefined, deltaText: string) => {
+  if (!deltaText) return;
+  callbacks?.onTextDelta?.(deltaText);
 };
 
 const normalizeModelList = (raw: Array<{ id?: string; model?: string; name?: string }>): ModelListEntry[] => raw
@@ -184,7 +193,12 @@ const getMiniMaxBaseUrls = (apiKey: string): string[] => {
 };
 
 class MinimaxAdapter implements ProviderAdapter {
-  async generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse> {
+  async generate(
+    request: AgentGenerateRequest,
+    apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentGenerateResponse> {
     const startedAt = Date.now();
     let response: Response | null = null;
     for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
@@ -200,6 +214,7 @@ class MinimaxAdapter implements ProviderAdapter {
             messages: [{ role: 'user', content: request.inputText }],
             temperature: request.generationParams?.temperature ?? 0.2,
             max_tokens: request.generationParams?.maxTokens,
+            stream: true,
           }),
           signal,
         });
@@ -214,26 +229,87 @@ class MinimaxAdapter implements ProviderAdapter {
 
     if (!response?.ok) throw new Error('MiniMax generate failed.');
 
-    const data = await response.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-      reply?: string;
-      output_text?: string;
-      text?: string;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-    };
-    const outputText = [
-      extractTextFromUnknown(data.choices?.[0]?.message?.content),
-      extractTextFromUnknown(data.reply),
-      extractTextFromUnknown(data.output_text),
-      extractTextFromUnknown(data.text),
-    ].find((item) => item.trim()) ?? '';
+    const chunks: string[] = [];
+    let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+    const body = response.body;
+    if (!body) throw new Error('MiniMax returned empty output.');
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const frames = buffered.split('\n\n');
+      buffered = frames.pop() ?? '';
+      for (const frame of frames) {
+        const line = frame.split('\n').find((entry) => entry.startsWith('data:'));
+        if (!line) continue;
+        const dataPayload = line.slice(5).trim();
+        if (!dataPayload || dataPayload === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(dataPayload) as {
+            choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+            reply?: string;
+            output_text?: string;
+            text?: string;
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+          };
+          const deltaText = extractTextFromUnknown(parsed.choices?.[0]?.delta?.content);
+          if (deltaText) {
+            chunks.push(deltaText);
+            emitTextDelta(callbacks, deltaText);
+            continue;
+          }
+          const fallbackText = [
+            extractTextFromUnknown(parsed.choices?.[0]?.message?.content),
+            extractTextFromUnknown(parsed.reply),
+            extractTextFromUnknown(parsed.output_text),
+            extractTextFromUnknown(parsed.text),
+          ].find((item) => item.trim()) ?? '';
+          if (fallbackText) {
+            chunks.push(fallbackText);
+            emitTextDelta(callbacks, fallbackText);
+          }
+          if (parsed.usage) usage = parsed.usage;
+        } catch {
+          // ignore malformed chunks
+        }
+      }
+    }
+    buffered += decoder.decode();
+    if (chunks.length === 0 && buffered.trim()) {
+      try {
+        const parsed = JSON.parse(buffered.trim()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          reply?: string;
+          output_text?: string;
+          text?: string;
+          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+        };
+        const fallbackText = [
+          extractTextFromUnknown(parsed.choices?.[0]?.message?.content),
+          extractTextFromUnknown(parsed.reply),
+          extractTextFromUnknown(parsed.output_text),
+          extractTextFromUnknown(parsed.text),
+        ].find((item) => item.trim()) ?? '';
+        if (fallbackText) {
+          chunks.push(fallbackText);
+          emitTextDelta(callbacks, fallbackText);
+        }
+        if (parsed.usage) usage = parsed.usage;
+      } catch {
+        // ignore malformed non-stream fallback
+      }
+    }
+    const outputText = chunks.join('').trim();
     if (!outputText.trim()) throw new Error('MiniMax returned empty output.');
     return {
       outputText,
       usage: {
-        inputTokens: data.usage?.prompt_tokens,
-        outputTokens: data.usage?.completion_tokens,
-        totalTokens: data.usage?.total_tokens,
+        inputTokens: usage?.prompt_tokens,
+        outputTokens: usage?.completion_tokens,
+        totalTokens: usage?.total_tokens,
       },
       latencyMs: Date.now() - startedAt,
     };
@@ -308,7 +384,12 @@ class MinimaxAdapter implements ProviderAdapter {
 }
 
 class OpenAIAdapter implements ProviderAdapter {
-  async generate(_request: AgentGenerateRequest, _apiKey: string, _signal?: AbortSignal): Promise<AgentGenerateResponse> {
+  async generate(
+    _request: AgentGenerateRequest,
+    _apiKey: string,
+    _signal?: AbortSignal,
+    _callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentGenerateResponse> {
     throw new Error('OpenAI adapter is not implemented yet.');
   }
 
@@ -366,7 +447,12 @@ class OpenAIAdapter implements ProviderAdapter {
 }
 
 class AnthropicAdapter implements ProviderAdapter {
-  async generate(_request: AgentGenerateRequest, _apiKey: string, _signal?: AbortSignal): Promise<AgentGenerateResponse> {
+  async generate(
+    _request: AgentGenerateRequest,
+    _apiKey: string,
+    _signal?: AbortSignal,
+    _callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentGenerateResponse> {
     throw new Error('Anthropic adapter is not implemented yet.');
   }
 
@@ -432,7 +518,12 @@ const normalizeOllamaBaseUrl = (baseUrl?: string) => {
 };
 
 class OllamaAdapter implements ProviderAdapter {
-  async generate(request: AgentGenerateRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse> {
+  async generate(
+    request: AgentGenerateRequest,
+    _apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentGenerateResponse> {
     const startedAt = Date.now();
     const baseUrl = normalizeOllamaBaseUrl((request.generationParams as { baseUrl?: string } | undefined)?.baseUrl);
     let response: Response;
@@ -443,7 +534,7 @@ class OllamaAdapter implements ProviderAdapter {
         body: JSON.stringify({
           model: request.model,
           prompt: request.inputText,
-          stream: false,
+          stream: true,
           options: {
             temperature: request.generationParams?.temperature,
             num_predict: request.generationParams?.maxTokens,
@@ -463,8 +554,45 @@ class OllamaAdapter implements ProviderAdapter {
       throw new Error('Ollama generate failed.');
     }
 
-    const payload = await response.json() as { response?: string };
-    const outputText = (payload.response ?? '').trim();
+    if (!response.body) throw new Error('Ollama returned empty output.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    let outputText = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const payload = JSON.parse(trimmed) as { response?: string };
+          const deltaText = payload.response ?? '';
+          if (!deltaText) continue;
+          outputText += deltaText;
+          emitTextDelta(callbacks, deltaText);
+        } catch {
+          // ignore malformed line
+        }
+      }
+    }
+    buffered += decoder.decode();
+    if (buffered.trim()) {
+      try {
+        const payload = JSON.parse(buffered.trim()) as { response?: string };
+        const deltaText = payload.response ?? '';
+        if (deltaText) {
+          outputText += deltaText;
+          emitTextDelta(callbacks, deltaText);
+        }
+      } catch {
+        // ignore trailing malformed chunk
+      }
+    }
+    outputText = outputText.trim();
     if (!outputText) throw new Error('Ollama returned empty output.');
     return {
       outputText,

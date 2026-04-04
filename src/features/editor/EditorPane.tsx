@@ -478,6 +478,12 @@ export function EditorPane() {
         provider: defaultProvider,
         model: defaultModel,
         signal: controller.signal,
+        onProgress: (nextOutputText) => {
+          const nextParsed = splitFrontmatter(nextOutputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          setFrontmatter(nextParsed.frontmatter);
+          setBody(nextParsed.body);
+          updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'generate');
+        },
       });
       const generatedDraft = completeGenerate(file.id, result.outputText);
       if (generatedDraft) {
@@ -488,14 +494,27 @@ export function EditorPane() {
     } catch (error) {
       const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
       if (isCancelled) {
+        if (originalTextRef.current) {
+          const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          setFrontmatter(restored.frontmatter);
+          setBody(restored.body);
+          updateDraftCache(restored.body, restored.frontmatter, 'manual');
+        }
         clearGenerateJob(file.id);
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
+        if (originalTextRef.current) {
+          const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          setFrontmatter(restored.frontmatter);
+          setBody(restored.body);
+          updateDraftCache(restored.body, restored.frontmatter, 'manual');
+        }
         markGenerateFailed(file.id, error instanceof Error ? error.message : 'Generation failed.');
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
       abortControllerRef.current = null;
+      originalTextRef.current = null;
       setGenerateState('idle');
     }
   };

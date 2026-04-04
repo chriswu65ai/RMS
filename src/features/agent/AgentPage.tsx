@@ -321,9 +321,9 @@ export function AgentPage() {
             </button>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <ul className="flex gap-3 overflow-x-auto pb-1 text-sm text-slate-700">
+            <ul className="max-h-[26rem] space-y-2 overflow-y-auto pr-1 text-sm text-slate-700">
               {latestSummary.map((entry) => (
-                <li key={entry.id} className="w-[calc((100%-1.5rem)/3)] min-w-[280px] shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <li key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-sm text-slate-800">{entry.lead}.</p>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600">
                     <span>Status: {entry.status}</span>
