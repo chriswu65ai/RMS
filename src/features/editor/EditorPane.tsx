@@ -50,6 +50,7 @@ export function EditorPane() {
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
   const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
   const [defaultModel, setDefaultModel] = useState('');
+  const [ollamaRuntimeSummary, setOllamaRuntimeSummary] = useState<{ baseUrl: string; model: string }>({ baseUrl: 'http://localhost:11434', model: '' });
   const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -116,11 +117,17 @@ export function EditorPane() {
         const settings = await getAgentSettings();
         if (cancelled) return;
         setDefaultProvider(settings.default_provider);
-        setDefaultModel(settings.default_model);
+        const canonicalOllamaModel = settings.generation_params?.local_connection?.model?.trim() || settings.default_model;
+        setDefaultModel(settings.default_provider === 'ollama' ? canonicalOllamaModel : settings.default_model);
+        setOllamaRuntimeSummary({
+          baseUrl: settings.generation_params?.local_connection?.base_url?.trim() || 'http://localhost:11434',
+          model: canonicalOllamaModel,
+        });
       } catch {
         if (!cancelled) {
           setDefaultProvider('minimax');
           setDefaultModel('');
+          setOllamaRuntimeSummary({ baseUrl: 'http://localhost:11434', model: '' });
         }
       }
     })();
@@ -584,6 +591,10 @@ export function EditorPane() {
               </button>
             </div>
           </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Active runtime: {defaultProvider} / {defaultModel || 'not configured'}
+            {defaultProvider === 'ollama' ? ` (${ollamaRuntimeSummary.baseUrl})` : ''}
+          </p>
           {showGeneratedDraftNotice && (
             <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
               <span>Generated draft available — review and Save.</span>

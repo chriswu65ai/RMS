@@ -25,19 +25,14 @@ export function AgentPage() {
   const [model, setModel] = useState('');
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [localBaseUrl, setLocalBaseUrl] = useState(LOCAL_BASE_URL_DEFAULT);
-  const [localModel, setLocalModel] = useState('');
-  const [localModels, setLocalModels] = useState<ModelListItem[]>([]);
+  const [localRuntimeModel, setLocalRuntimeModel] = useState('');
+  const [savedLocalRuntime, setSavedLocalRuntime] = useState({ baseUrl: LOCAL_BASE_URL_DEFAULT, model: '' });
   const [modelState, setModelState] = useState<{
     loading: boolean;
     catalogStatus: 'live' | 'unsupported' | 'failed' | null;
     selectionSource: 'live_catalog' | 'provider_fallback' | null;
     reasonCode: ModelCatalogReasonCode | null;
   }>({ loading: false, catalogStatus: null, selectionSource: null, reasonCode: null });
-  const [localModelState, setLocalModelState] = useState<{
-    loading: boolean;
-    status: 'live' | 'failed' | null;
-    reasonCode: 'ok' | 'network_error' | 'empty_response' | null;
-  }>({ loading: false, status: null, reasonCode: null });
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<CloudAgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
@@ -47,10 +42,11 @@ export function AgentPage() {
     : (model.trim()
       ? [{ modelId: model, displayName: model }]
       : []);
-  const localModelOptions = localModels.length > 0
-    ? localModels
-    : (localModel.trim()
-      ? [{ modelId: localModel, displayName: localModel }]
+  const localModelValue = provider === 'ollama' ? model : localRuntimeModel;
+  const localModelOptions = (provider === 'ollama' && models.length > 0)
+    ? models
+    : (localModelValue.trim()
+      ? [{ modelId: localModelValue, displayName: localModelValue }]
       : []);
 
   const refreshModels = async (nextProvider: AgentProvider, applySelection = true) => {
@@ -78,41 +74,21 @@ export function AgentPage() {
     }
   };
 
-  const refreshLocalModels = async (baseUrl: string, applySelection = true) => {
-    setLocalModelState({ loading: true, status: null, reasonCode: null });
-    try {
-      const endpoint = `${baseUrl.replace(/\/+$/, '')}/api/tags`;
-      const response = await fetch(endpoint);
-      if (!response.ok) throw new Error('Failed loading local models.');
-      const payload = await response.json() as { models?: Array<{ name?: string; model?: string }> };
-      const discovered = (payload.models ?? [])
-        .map((entry) => (entry.name ?? entry.model ?? '').trim())
-        .filter(Boolean)
-        .map((modelId) => ({
-          modelId,
-          displayName: modelId.split(':')[0]?.replace(/[-_]/g, ' ')?.replace(/\b\w/g, (char) => char.toUpperCase()) || modelId,
-        }));
-      setLocalModels(discovered);
-      setLocalModelState({ loading: false, status: discovered.length > 0 ? 'live' : 'failed', reasonCode: discovered.length > 0 ? 'ok' : 'empty_response' });
-      if (applySelection && discovered[0]?.modelId) {
-        setLocalModel(discovered[0].modelId);
-      }
-    } catch {
-      setLocalModels([]);
-      setLocalModelState({ loading: false, status: 'failed', reasonCode: 'network_error' });
-    }
-  };
-
   useEffect(() => {
     void (async () => {
       try {
         const [settings, events] = await Promise.all([getAgentSettings(), listActivityLog(12)]);
         setProvider(settings.default_provider);
-        setModel(settings.default_model);
+        const canonicalLocalModel = settings.generation_params?.local_connection?.model?.trim() || settings.default_model;
+        setModel(settings.default_provider === 'ollama' ? canonicalLocalModel : settings.default_model);
         setLocalBaseUrl(settings.generation_params?.local_connection?.base_url?.trim() || LOCAL_BASE_URL_DEFAULT);
-        setLocalModel(settings.generation_params?.local_connection?.model?.trim() || '');
+        setSavedLocalRuntime({
+          baseUrl: settings.generation_params?.local_connection?.base_url?.trim() || LOCAL_BASE_URL_DEFAULT,
+          model: canonicalLocalModel,
+        });
+        setLocalRuntimeModel(canonicalLocalModel);
         setActivity(events);
-        await refreshModels(settings.default_provider, !settings.default_model.trim());
+        await refreshModels(settings.default_provider, !(settings.default_provider === 'ollama' ? canonicalLocalModel : settings.default_model).trim());
 
         const statuses = await Promise.all(CLOUD_AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
@@ -123,8 +99,16 @@ export function AgentPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (provider === 'ollama') {
+      setLocalRuntimeModel(model);
+    }
+  }, [provider, model]);
+
   const canSaveDefaults = model.trim().length > 0;
-  const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && localModel.trim().length > 0;
+  const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && localModelValue.trim().length > 0;
+  const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || localRuntimeModel.trim() !== savedLocalRuntime.model;
+  const activeOllamaModel = provider === 'ollama' ? model : savedLocalRuntime.model;
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -161,7 +145,7 @@ export function AgentPage() {
                   onChange={(event) => {
                     const nextProvider = event.target.value as AgentProvider;
                     setProvider(nextProvider);
-                    void refreshModels(nextProvider);
+                    void refreshModels(nextProvider, nextProvider !== 'ollama');
                   }}
                 >
                   {AGENT_PROVIDERS.map((candidate) => <option key={candidate} value={candidate}>{providerLabel(candidate)}</option>)}
@@ -188,8 +172,31 @@ export function AgentPage() {
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 disabled={!canSaveDefaults}
                 onClick={async () => {
+                  if (provider !== 'ollama' && hasUnsavedLocalChanges) {
+                    setMessage('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.');
+                    return;
+                  }
                   try {
-                    await saveAgentSettings({ default_provider: provider, default_model: model });
+                    const settings = await getAgentSettings();
+                    const canonicalOllamaModel = provider === 'ollama' ? model.trim() : (settings.generation_params?.local_connection?.model?.trim() || savedLocalRuntime.model);
+                    const canonicalBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT;
+                    await saveAgentSettings({
+                      ...settings,
+                      default_provider: provider,
+                      default_model: model,
+                      generation_params: {
+                        ...(settings.generation_params ?? {}),
+                        local_connection: {
+                          base_url: canonicalBaseUrl,
+                          model: canonicalOllamaModel,
+                          B: settings.generation_params?.local_connection?.B ?? 1,
+                        },
+                      },
+                    });
+                    if (provider === 'ollama') {
+                      setSavedLocalRuntime({ baseUrl: canonicalBaseUrl, model: canonicalOllamaModel });
+                      setLocalRuntimeModel(canonicalOllamaModel);
+                    }
                     setMessage('Default provider/model saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
@@ -259,25 +266,42 @@ export function AgentPage() {
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Installed model</span>
-                <select className="input" value={localModel} onChange={(event) => setLocalModel(event.target.value)} disabled={localModelState.loading || localModelOptions.length === 0}>
+                <select
+                  className="input"
+                  value={localModelValue}
+                  onChange={(event) => {
+                    if (provider === 'ollama') {
+                      setModel(event.target.value);
+                      setLocalRuntimeModel(event.target.value);
+                      return;
+                    }
+                    setLocalRuntimeModel(event.target.value);
+                  }}
+                  disabled={(provider === 'ollama' && modelState.loading) || localModelOptions.length === 0}
+                >
                   {localModelOptions.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
                 </select>
               </label>
             </div>
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-              {localModelState.loading ? <span>Refreshing models…</span> : null}
-              {!localModelState.loading && localModelState.status === 'live' ? <span>Live catalog loaded.</span> : null}
-              {!localModelState.loading && localModelState.status === 'failed' && localModelState.reasonCode === 'empty_response'
+              {modelState.loading ? <span>Refreshing models…</span> : null}
+              {!modelState.loading && provider === 'ollama' && modelState.catalogStatus === 'live' ? <span>Live catalog loaded.</span> : null}
+              {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'empty_response'
                 ? <span>No installed Ollama models found.</span>
                 : null}
-              {!localModelState.loading && localModelState.status === 'failed' && localModelState.reasonCode === 'network_error'
+              {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                 ? <span>Could not connect to local model service.</span>
                 : null}
             </div>
+            <p className="mt-2 text-xs text-slate-600">Active Ollama runtime: <span className="font-medium">{localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT}</span> / <span className="font-medium">{activeOllamaModel || 'not configured'}</span></p>
+            {hasUnsavedLocalChanges ? <p className="mt-2 text-xs text-amber-700">Unsaved local runtime changes.</p> : null}
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                onClick={() => void refreshLocalModels(localBaseUrl)}
+                onClick={() => {
+                  if (provider !== 'ollama') setProvider('ollama');
+                  void refreshModels('ollama');
+                }}
               >
                 Refresh models
               </button>
@@ -287,17 +311,22 @@ export function AgentPage() {
                 onClick={async () => {
                   try {
                     const settings = await getAgentSettings();
+                    const canonicalBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT;
+                    const canonicalModel = localModelValue.trim();
                     await saveAgentSettings({
                       ...settings,
                       generation_params: {
                         ...(settings.generation_params ?? {}),
                         local_connection: {
-                          base_url: localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT,
-                          model: localModel,
+                          base_url: canonicalBaseUrl,
+                          model: canonicalModel,
                           B: settings.generation_params?.local_connection?.B ?? 1,
                         },
                       },
+                      ...(settings.default_provider === 'ollama' ? { default_model: canonicalModel } : {}),
                     });
+                    setSavedLocalRuntime({ baseUrl: canonicalBaseUrl, model: canonicalModel });
+                    setLocalRuntimeModel(canonicalModel);
                     setMessage('Local model settings saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
