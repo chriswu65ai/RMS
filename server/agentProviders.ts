@@ -1,4 +1,4 @@
-export type AgentProvider = 'minimax' | 'openai' | 'anthropic';
+export type AgentProvider = 'minimax' | 'openai' | 'anthropic' | 'ollama';
 
 export type AgentGenerateRequest = {
   model: string;
@@ -6,6 +6,7 @@ export type AgentGenerateRequest = {
   generationParams?: {
     temperature?: number;
     maxTokens?: number;
+    baseUrl?: string;
   };
 };
 
@@ -16,7 +17,7 @@ export type AgentGenerateResponse = {
   costEstimate?: number;
 };
 
-export type ModelListEntry = { modelId: string; displayName: string };
+export type ModelListEntry = { modelId: string; displayName: string; B: number };
 
 export type CatalogStatus = 'live' | 'unsupported' | 'failed';
 export type ModelCatalogReasonCode =
@@ -26,7 +27,8 @@ export type ModelCatalogReasonCode =
   | 'rate_limited'
   | 'unsupported_endpoint'
   | 'network_error'
-  | 'empty_response';
+  | 'empty_response'
+  | 'ollama_unreachable';
 
 export type SelectionSource = 'live_catalog' | 'provider_fallback';
 
@@ -40,7 +42,7 @@ export type ListModelsResult = {
 
 export interface ProviderAdapter {
   generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse>;
-  listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult>;
+  listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult>;
 }
 
 const estimateTokens = (text: string) => Math.max(1, Math.round(text.length / 4));
@@ -78,6 +80,7 @@ const normalizeModelList = (raw: Array<{ id?: string; model?: string; name?: str
     return {
       modelId,
       displayName: (entry.name ?? modelId).trim() || modelId,
+      B: 1,
     };
   })
   .filter((entry) => entry.modelId.length > 0);
@@ -423,22 +426,124 @@ class AnthropicAdapter implements ProviderAdapter {
   }
 }
 
+const normalizeOllamaBaseUrl = (baseUrl?: string) => {
+  const trimmed = (baseUrl ?? '').trim();
+  return (trimmed || 'http://localhost:11434').replace(/\/+$/, '');
+};
+
+class OllamaAdapter implements ProviderAdapter {
+  async generate(request: AgentGenerateRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentGenerateResponse> {
+    const startedAt = Date.now();
+    const baseUrl = normalizeOllamaBaseUrl((request.generationParams as { baseUrl?: string } | undefined)?.baseUrl);
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: request.model,
+          prompt: request.inputText,
+          stream: false,
+          options: {
+            temperature: request.generationParams?.temperature,
+            num_predict: request.generationParams?.maxTokens,
+          },
+        }),
+        signal,
+      });
+    } catch {
+      throw new Error('Ollama unavailable/unreachable.');
+    }
+
+    if (!response.ok) {
+      const status = response.status;
+      if (status >= 500 || status === 404 || status === 503) {
+        throw new Error('Ollama unavailable/unreachable.');
+      }
+      throw new Error('Ollama generate failed.');
+    }
+
+    const payload = await response.json() as { response?: string };
+    const outputText = (payload.response ?? '').trim();
+    if (!outputText) throw new Error('Ollama returned empty output.');
+    return {
+      outputText,
+      usage: estimateUsage(request.inputText, outputText),
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
+  async listModels(_apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
+    const baseUrl = normalizeOllamaBaseUrl(options.baseUrl);
+    try {
+      const response = await fetch(`${baseUrl}/api/tags`, { method: 'GET', signal });
+      if (!response.ok) {
+        return asDiscoveryResult({
+          provider: 'ollama',
+          discoveredModels: [],
+          fallbackModels: options.fallbackModels,
+          preferredModel: options.preferredModel,
+          catalogStatus: 'failed',
+          reasonCode: 'ollama_unreachable',
+        });
+      }
+      const payload = await response.json() as { models?: Array<{ name?: string; model?: string }> };
+      const discovered = uniqueModels((payload.models ?? [])
+        .map((entry) => {
+          const modelId = (entry.name ?? entry.model ?? '').trim();
+          return { modelId, displayName: modelId, B: 1 };
+        })
+        .filter((entry) => entry.modelId.length > 0));
+      if (discovered.length === 0) {
+        return asDiscoveryResult({
+          provider: 'ollama',
+          discoveredModels: [],
+          fallbackModels: options.fallbackModels,
+          preferredModel: options.preferredModel,
+          catalogStatus: 'failed',
+          reasonCode: 'empty_response',
+        });
+      }
+      return asDiscoveryResult({
+        provider: 'ollama',
+        discoveredModels: rankByPriority('ollama', discovered),
+        fallbackModels: options.fallbackModels,
+        preferredModel: options.preferredModel,
+        catalogStatus: 'live',
+        reasonCode: 'ok',
+      });
+    } catch {
+      return asDiscoveryResult({
+        provider: 'ollama',
+        discoveredModels: [],
+        fallbackModels: options.fallbackModels,
+        preferredModel: options.preferredModel,
+        catalogStatus: 'failed',
+        reasonCode: 'ollama_unreachable',
+      });
+    }
+  }
+}
+
 export const providerRegistry: Record<AgentProvider, ProviderAdapter> = {
   minimax: new MinimaxAdapter(),
   openai: new OpenAIAdapter(),
   anthropic: new AnthropicAdapter(),
+  ollama: new OllamaAdapter(),
 };
 
 export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
-  minimax: [{ modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5' }],
-  openai: [{ modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini' }],
-  anthropic: [{ modelId: 'claude-3-5-sonnet-latest', displayName: 'Claude 3.5 Sonnet' }],
+  minimax: [{ modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5', B: 1 }],
+  openai: [{ modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', B: 1 }],
+  anthropic: [{ modelId: 'claude-3-5-sonnet-latest', displayName: 'Claude 3.5 Sonnet', B: 1 }],
+  ollama: [{ modelId: 'llama3.2:latest', displayName: 'Llama 3.2', B: 1 }],
 };
 
 const MODEL_PRIORITY: Record<AgentProvider, string[]> = {
   minimax: ['MiniMax-M2.5', 'MiniMax-Text-01'],
   openai: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini', 'gpt-4o'],
   anthropic: ['claude-3-7-sonnet-latest', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
+  ollama: ['llama3.2:latest', 'qwen2.5:latest', 'mistral:latest'],
 };
 
 export const estimateUsage = (inputText: string, outputText: string) => {
