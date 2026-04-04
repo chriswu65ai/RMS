@@ -1033,3 +1033,39 @@ test('agent generate only injects citation instruction and appends Sources block
     providerRegistry.openai.generate = originalGenerate;
   }
 });
+
+test('deleting a research task also removes activity events', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Delete me',
+    ticker: 'ACME',
+    status: 'ideas',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string };
+
+  const updateResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'researching',
+    assignee: 'Analyst',
+  });
+  assert.equal(updateResponse.status, 200);
+
+  const activityBeforeDelete = await callRoute('GET', `/api/research-tasks/${createdTask.id}/activity`);
+  assert.equal(activityBeforeDelete.status, 200);
+  const eventsBeforeDelete = JSON.parse(activityBeforeDelete.body) as Array<{ event_type: string }>;
+  assert.equal(eventsBeforeDelete.length > 0, true);
+
+  const deleteResponse = await callRoute('DELETE', `/api/research-tasks/${createdTask.id}`);
+  assert.equal(deleteResponse.status, 200);
+
+  const activityAfterDelete = await callRoute('GET', `/api/research-tasks/${createdTask.id}/activity`);
+  assert.equal(activityAfterDelete.status, 200);
+  const eventsAfterDelete = JSON.parse(activityAfterDelete.body) as Array<{ event_type: string }>;
+  assert.deepEqual(eventsAfterDelete, []);
+});
+
+test('deleting a non-existent research task returns 404', async () => {
+  const deleteResponse = await callRoute('DELETE', `/api/research-tasks/${randomUUID()}`);
+  assert.equal(deleteResponse.status, 404);
+  const payload = JSON.parse(deleteResponse.body) as { error?: { message?: string } };
+  assert.equal(payload.error?.message, 'Task not found.');
+});
