@@ -9,6 +9,8 @@ export class GenerateUseCase {
     model: string;
     signal?: AbortSignal;
     onProgress?: (nextOutputText: string) => void;
+    onSources?: (sources: Array<{ title: string; url: string; snippet: string; provider: string; published_at?: string }>) => void;
+    onSearchWarning?: (message: string) => void;
   }): Promise<{ outputText: string }> {
     return generateText({
       noteId: params.noteId,
@@ -19,6 +21,8 @@ export class GenerateUseCase {
       saveMode: SaveMode.ManualOnly,
       signal: params.signal,
       onProgress: params.onProgress,
+      onSources: params.onSources,
+      onSearchWarning: params.onSearchWarning,
     });
   }
 }

@@ -12,6 +12,13 @@ import type {
 } from '../features/agent/types';
 
 type ApiError = { error?: { message?: string } | null };
+type StreamSource = {
+  title: string;
+  url: string;
+  snippet: string;
+  provider: string;
+  published_at?: string;
+};
 
 const asErrorMessage = async (response: Response) => {
   try {
@@ -121,6 +128,8 @@ export async function generateText(params: {
   saveMode: SaveMode;
   signal?: AbortSignal;
   onProgress?: (nextOutputText: string) => void;
+  onSources?: (sources: StreamSource[]) => void;
+  onSearchWarning?: (message: string) => void;
 }): Promise<{ outputText: string }> {
   const response = await fetch('/api/agent/generate', {
     method: 'POST',
@@ -155,10 +164,16 @@ export async function generateText(params: {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const payload = JSON.parse(trimmed) as { type?: string; deltaText?: string; message?: string; outputText?: string };
+      const payload = JSON.parse(trimmed) as { type?: string; deltaText?: string; message?: string; outputText?: string; sources?: StreamSource[] };
       if (payload.type === 'delta') {
         outputText += payload.deltaText ?? '';
         params.onProgress?.(outputText);
+      }
+      if (payload.type === 'sources') {
+        params.onSources?.(Array.isArray(payload.sources) ? payload.sources : []);
+      }
+      if (payload.type === 'search_warning') {
+        params.onSearchWarning?.(payload.message ?? 'Web search failed.');
       }
       if (payload.type === 'done') {
         outputText = payload.outputText ?? outputText;
