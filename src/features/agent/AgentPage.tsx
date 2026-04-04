@@ -2,7 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { clearActivityLog, getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
-import { AGENT_PROVIDERS, CLOUD_AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type CloudAgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
+import {
+  AGENT_PROVIDERS,
+  CLOUD_AGENT_PROVIDERS,
+  type AgentActivityLog,
+  type AgentProvider,
+  type CloudAgentProvider,
+  type ModelCatalogReasonCode,
+  type ModelListItem,
+  type WebSearchDomainPolicy,
+  type WebSearchMode,
+  type WebSearchRecency,
+} from './types';
 import { formatLocalDateTime } from '../../lib/time';
 import { fetchOllamaTagsDirect } from './ollamaDirect';
 import { getSavedLocalRuntime } from './runtimeConfig';
@@ -10,6 +21,25 @@ import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaM
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
+const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
+const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
+
+const WEB_SEARCH_PROVIDERS = [{ value: 'duckduckgo', label: 'DuckDuckGo' }] as const;
+const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
+  { value: 'single', label: 'Single' },
+  { value: 'deep', label: 'Deep' },
+];
+const WEB_SEARCH_RECENCY_OPTIONS: Array<{ value: WebSearchRecency; label: string }> = [
+  { value: 'any', label: 'Any time' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '365d', label: 'Last year' },
+];
+const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: string }> = [
+  { value: 'open_web', label: 'open_web' },
+  { value: 'prefer_list', label: 'prefer_list' },
+  { value: 'only_list', label: 'only_list' },
+];
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -45,6 +75,15 @@ export function AgentPage() {
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
   const [localSaveMessage, setLocalSaveMessage] = useState('');
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchProvider, setWebSearchProvider] = useState<'duckduckgo'>('duckduckgo');
+  const [webSearchMode, setWebSearchMode] = useState<WebSearchMode>('single');
+  const [webSearchMaxResults, setWebSearchMaxResults] = useState(String(WEB_SEARCH_MAX_RESULTS_DEFAULT));
+  const [webSearchTimeoutMs, setWebSearchTimeoutMs] = useState(String(WEB_SEARCH_TIMEOUT_MS_DEFAULT));
+  const [webSearchSafeSearch, setWebSearchSafeSearch] = useState(true);
+  const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
+  const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
+  const [webSearchStatusMessage, setWebSearchStatusMessage] = useState('');
   const modelOptions = models.length > 0
     ? models
     : (selectedProviderModel.trim()
@@ -111,6 +150,16 @@ export function AgentPage() {
         setSavedLocalRuntime(savedRuntime);
         setOllamaRuntimeModelDraft(savedRuntime.model);
         setActivity(events);
+        const webSearchSettings = settings.generation_params?.web_search;
+        setWebSearchEnabled(Boolean(webSearchSettings?.enabled));
+        setWebSearchProvider(webSearchSettings?.provider === 'duckduckgo' ? 'duckduckgo' : 'duckduckgo');
+        setWebSearchMode(webSearchSettings?.mode === 'deep' ? 'deep' : 'single');
+        setWebSearchMaxResults(String(webSearchSettings?.max_results ?? WEB_SEARCH_MAX_RESULTS_DEFAULT));
+        setWebSearchTimeoutMs(String(webSearchSettings?.timeout_ms ?? WEB_SEARCH_TIMEOUT_MS_DEFAULT));
+        setWebSearchSafeSearch(webSearchSettings?.safe_search ?? true);
+        setWebSearchRecency(webSearchSettings?.recency ?? 'any');
+        setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
+
         const shouldRefreshOnMount = !settings.default_model.trim()
           || (settings.default_provider === 'ollama' && !savedRuntime.model.trim());
         if (shouldRefreshOnMount) {
@@ -128,7 +177,16 @@ export function AgentPage() {
 
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
   const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && localModelValue.trim().length > 0;
+  const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutMs) > 0;
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
+  const webSearchWarningBanner = useMemo(() => {
+    if (!webSearchEnabled) return '';
+    const latestSearchFailure = activity.find((entry) =>
+      entry.status === 'failed' && Boolean(entry.error_message_short?.toLowerCase().includes('search')));
+    return latestSearchFailure?.error_message_short
+      ? `Web search is enabled, but recent runs reported search failures: ${latestSearchFailure.error_message_short}`
+      : '';
+  }, [activity, webSearchEnabled]);
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -155,6 +213,11 @@ export function AgentPage() {
       <div className="mx-auto max-w-6xl space-y-6">
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Choose agent</h2>
+          {webSearchWarningBanner ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {webSearchWarningBanner}
+            </div>
+          ) : null}
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-sm">
@@ -227,6 +290,120 @@ export function AgentPage() {
                 }}
               >
                 Save default agent
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Web Search</h2>
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Enable web search</span>
+                <input
+                  className="h-4 w-4"
+                  type="checkbox"
+                  checked={webSearchEnabled}
+                  onChange={(event) => {
+                    setWebSearchEnabled(event.target.checked);
+                    setWebSearchStatusMessage('');
+                  }}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Provider</span>
+                <select
+                  className="input"
+                  value={webSearchProvider}
+                  onChange={(event) => {
+                    setWebSearchProvider(event.target.value as 'duckduckgo');
+                    setWebSearchStatusMessage('');
+                  }}
+                >
+                  {WEB_SEARCH_PROVIDERS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Mode</span>
+                <select className="input" value={webSearchMode} onChange={(event) => setWebSearchMode(event.target.value as WebSearchMode)}>
+                  {WEB_SEARCH_MODES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Max results</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  value={webSearchMaxResults}
+                  onChange={(event) => setWebSearchMaxResults(event.target.value)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Timeout (ms)</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  value={webSearchTimeoutMs}
+                  onChange={(event) => setWebSearchTimeoutMs(event.target.value)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Safe search</span>
+                <input
+                  className="h-4 w-4"
+                  type="checkbox"
+                  checked={webSearchSafeSearch}
+                  onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Recency</span>
+                <select className="input" value={webSearchRecency} onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}>
+                  {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Domain policy</span>
+                <select className="input" value={webSearchDomainPolicy} onChange={(event) => setWebSearchDomainPolicy(event.target.value as WebSearchDomainPolicy)}>
+                  {WEB_SEARCH_DOMAIN_POLICIES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                </select>
+              </label>
+            </div>
+            {webSearchStatusMessage ? <p className="mt-2 text-xs text-emerald-700">{webSearchStatusMessage}</p> : null}
+            <div className="mt-3">
+              <button
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                disabled={!canSaveWebSearch}
+                onClick={async () => {
+                  try {
+                    const settings = await getAgentSettings();
+                    await saveAgentSettings({
+                      ...settings,
+                      generation_params: {
+                        ...(settings.generation_params ?? {}),
+                        web_search: {
+                          enabled: webSearchEnabled,
+                          provider: webSearchProvider,
+                          mode: webSearchMode,
+                          max_results: Math.max(1, Number(webSearchMaxResults) || WEB_SEARCH_MAX_RESULTS_DEFAULT),
+                          timeout_ms: Math.max(1, Number(webSearchTimeoutMs) || WEB_SEARCH_TIMEOUT_MS_DEFAULT),
+                          safe_search: webSearchSafeSearch,
+                          recency: webSearchRecency,
+                          domain_policy: webSearchDomainPolicy,
+                        },
+                      },
+                    });
+                    setWebSearchStatusMessage('Web search settings saved.');
+                    setMessage('Web search settings saved.');
+                  } catch (error) {
+                    setMessage(error instanceof Error ? error.message : 'Failed saving web search settings.');
+                  }
+                }}
+              >
+                Save web search settings
               </button>
             </div>
           </div>
