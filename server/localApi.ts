@@ -438,6 +438,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       let defaultModel = String(payload.default_model ?? '').trim();
       const generationParams = normalizeAgentGenerationParams(payload.generation_params);
+      if (provider === 'ollama' && defaultModel && generationParams?.local_connection) {
+        generationParams.local_connection.model = defaultModel;
+      }
+      if (provider === 'ollama' && !defaultModel && generationParams?.local_connection?.model) {
+        defaultModel = generationParams.local_connection.model;
+      }
       const ollamaRuntime = resolveOllamaRuntimeConfig({
         default_provider: provider,
         default_model: defaultModel,

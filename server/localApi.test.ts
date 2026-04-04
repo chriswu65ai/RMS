@@ -66,7 +66,7 @@ const callRoute = async (method: string, url: string, body?: unknown) => {
 test('saving ollama defaults keeps default_model and local_connection.model in sync', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
-    default_model: 'llama3.2:3b',
+    default_model: 'llama3.2:latest',
     generation_params: {
       local_connection: {
         base_url: 'http://localhost:11500',
@@ -83,8 +83,45 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
     default_model: string;
     generation_params?: { local_connection?: { model?: string } };
   };
-  assert.equal(payload.default_model, 'llama3.2:3b');
-  assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:3b');
+  assert.equal(payload.default_model, 'llama3.2:latest');
+  assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
+});
+
+test('saving ollama defaults persists switched model as a single source of truth', async () => {
+  const firstSave = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  assert.equal(firstSave.status, 200);
+
+  const secondSave = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'deepseek-r1:8b',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  assert.equal(secondSave.status, 200);
+
+  const settingsResponse = await callRoute('GET', '/api/agent/settings');
+  assert.equal(settingsResponse.status, 200);
+  const payload = JSON.parse(settingsResponse.body) as {
+    default_model: string;
+    generation_params?: { local_connection?: { model?: string } };
+  };
+  assert.equal(payload.default_model, 'deepseek-r1:8b');
+  assert.equal(payload.generation_params?.local_connection?.model, 'deepseek-r1:8b');
 });
 
 test('ollama generate uses unified runtime model and base URL from settings', async () => {
