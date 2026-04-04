@@ -59,7 +59,7 @@ type AgentSettingsRow = {
   generation_params_json: string | null;
 };
 
-type WebSearchProvider = 'duckduckgo';
+type WebSearchProvider = 'duckduckgo' | 'searxng';
 type WebSearchMode = 'single' | 'deep';
 type WebSearchRecency = 'any' | '7d' | '30d' | '365d';
 type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
@@ -82,6 +82,12 @@ type AgentGenerationParams = {
     recency: WebSearchRecency;
     domain_policy: WebSearchDomainPolicy;
     source_citation: boolean;
+    provider_config?: {
+      searxng?: {
+        base_url: string;
+        use_json_api: boolean;
+      };
+    };
   };
 } | null;
 
@@ -399,14 +405,17 @@ const isAgentProvider = (value: unknown): value is AgentProvider => typeof value
 
 const OLLAMA_BASE_URL_DEFAULT = 'http://localhost:11434';
 
-const WEB_SEARCH_PROVIDER: WebSearchProvider = 'duckduckgo';
+const WEB_SEARCH_PROVIDER_DEFAULT: WebSearchProvider = 'duckduckgo';
 const WEB_SEARCH_MODE_DEFAULT: WebSearchMode = 'single';
 const WEB_SEARCH_RECENCY_DEFAULT: WebSearchRecency = 'any';
 const WEB_SEARCH_DOMAIN_POLICY_DEFAULT: WebSearchDomainPolicy = 'open_web';
 const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
 const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
 const WEB_SEARCH_SAFE_SEARCH_DEFAULT = true;
+const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
+const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
 
+const isWebSearchProvider = (value: unknown): value is WebSearchProvider => value === 'duckduckgo' || value === 'searxng';
 const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
@@ -492,6 +501,12 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
   const webSearch = next.web_search && typeof next.web_search === 'object'
     ? (next.web_search as Record<string, unknown>)
     : null;
+  const webSearchProviderConfig = webSearch?.provider_config && typeof webSearch.provider_config === 'object'
+    ? (webSearch.provider_config as Record<string, unknown>)
+    : null;
+  const searxngConfig = webSearchProviderConfig?.searxng && typeof webSearchProviderConfig.searxng === 'object'
+    ? (webSearchProviderConfig.searxng as Record<string, unknown>)
+    : null;
   return {
     temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
     maxTokens: typeof next.maxTokens === 'number' ? next.maxTokens : undefined,
@@ -508,7 +523,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
     },
     web_search: {
       enabled: typeof webSearch?.enabled === 'boolean' ? webSearch.enabled : false,
-      provider: WEB_SEARCH_PROVIDER,
+      provider: isWebSearchProvider(webSearch?.provider) ? webSearch.provider : WEB_SEARCH_PROVIDER_DEFAULT,
       mode: isWebSearchMode(webSearch?.mode) ? webSearch.mode : WEB_SEARCH_MODE_DEFAULT,
       max_results: typeof webSearch?.max_results === 'number' && Number.isFinite(webSearch.max_results)
         ? Math.max(1, Math.floor(webSearch.max_results))
@@ -520,6 +535,16 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       recency: isWebSearchRecency(webSearch?.recency) ? webSearch.recency : WEB_SEARCH_RECENCY_DEFAULT,
       domain_policy: isWebSearchDomainPolicy(webSearch?.domain_policy) ? webSearch.domain_policy : WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
       source_citation: typeof webSearch?.source_citation === 'boolean' ? webSearch.source_citation : false,
+      provider_config: {
+        searxng: {
+          base_url: typeof searxngConfig?.base_url === 'string' && searxngConfig.base_url.trim()
+            ? searxngConfig.base_url.trim()
+            : WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+          use_json_api: typeof searxngConfig?.use_json_api === 'boolean'
+            ? searxngConfig.use_json_api
+            : WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
+        },
+      },
     },
   };
 };
@@ -872,7 +897,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const preferredSources = queryJson<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
         const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
           enabled: false,
-          provider: WEB_SEARCH_PROVIDER,
+          provider: WEB_SEARCH_PROVIDER_DEFAULT,
           mode: WEB_SEARCH_MODE_DEFAULT,
           max_results: WEB_SEARCH_MAX_RESULTS_DEFAULT,
           timeout_ms: WEB_SEARCH_TIMEOUT_MS_DEFAULT,
@@ -880,6 +905,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           recency: WEB_SEARCH_RECENCY_DEFAULT,
           domain_policy: WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
           source_citation: false,
+          provider_config: {
+            searxng: {
+              base_url: WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+              use_json_api: WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
+            },
+          },
         };
         const webSearchMetadata: PreparedWebSearchContext = {
           enabled: Boolean(normalizedWebSearchConfig.enabled),
@@ -916,12 +947,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                   mode: normalizedWebSearchConfig.mode,
                   policy: normalizedWebSearchConfig.domain_policy,
                   resultCap: perQueryCap,
+                  timeoutMs: normalizedWebSearchConfig.timeout_ms,
                   safeSearch: normalizedWebSearchConfig.safe_search,
                   recency: normalizedWebSearchConfig.recency,
                   domainList,
                   domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
                     ? domainBoost
                     : undefined,
+                  providerConfig: normalizedWebSearchConfig.provider_config,
                 }, searchTimeoutController.signal);
                 appendSearchDiagnostic({
                   provider: normalizedWebSearchConfig.provider,
