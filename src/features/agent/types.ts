@@ -35,6 +35,11 @@ export type AgentSettings = {
   generation_params?: {
     temperature?: number;
     maxTokens?: number;
+    local_connection?: {
+      base_url: string;
+      model: string;
+      B: number;
+    };
   } | null;
 };
 

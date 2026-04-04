@@ -19,16 +19,25 @@ const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'fai
 };
 
 export function AgentPage() {
+  const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
   const files = useResearchStore((state) => state.files);
   const [provider, setProvider] = useState<AgentProvider>('minimax');
   const [model, setModel] = useState('');
   const [models, setModels] = useState<ModelListItem[]>([]);
+  const [localBaseUrl, setLocalBaseUrl] = useState(LOCAL_BASE_URL_DEFAULT);
+  const [localModel, setLocalModel] = useState('');
+  const [localModels, setLocalModels] = useState<ModelListItem[]>([]);
   const [modelState, setModelState] = useState<{
     loading: boolean;
     catalogStatus: 'live' | 'unsupported' | 'failed' | null;
     selectionSource: 'live_catalog' | 'provider_fallback' | null;
     reasonCode: ModelCatalogReasonCode | null;
   }>({ loading: false, catalogStatus: null, selectionSource: null, reasonCode: null });
+  const [localModelState, setLocalModelState] = useState<{
+    loading: boolean;
+    status: 'live' | 'failed' | null;
+    reasonCode: 'ok' | 'network_error' | 'empty_response' | null;
+  }>({ loading: false, status: null, reasonCode: null });
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<AgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
@@ -37,6 +46,11 @@ export function AgentPage() {
     ? models
     : (model.trim()
       ? [{ modelId: model, displayName: model }]
+      : []);
+  const localModelOptions = localModels.length > 0
+    ? localModels
+    : (localModel.trim()
+      ? [{ modelId: localModel, displayName: localModel }]
       : []);
 
   const refreshModels = async (nextProvider: AgentProvider, applySelection = true) => {
@@ -64,12 +78,39 @@ export function AgentPage() {
     }
   };
 
+  const refreshLocalModels = async (baseUrl: string, applySelection = true) => {
+    setLocalModelState({ loading: true, status: null, reasonCode: null });
+    try {
+      const endpoint = `${baseUrl.replace(/\/+$/, '')}/api/tags`;
+      const response = await fetch(endpoint);
+      if (!response.ok) throw new Error('Failed loading local models.');
+      const payload = await response.json() as { models?: Array<{ name?: string; model?: string }> };
+      const discovered = (payload.models ?? [])
+        .map((entry) => (entry.name ?? entry.model ?? '').trim())
+        .filter(Boolean)
+        .map((modelId) => ({
+          modelId,
+          displayName: modelId.split(':')[0]?.replace(/[-_]/g, ' ')?.replace(/\b\w/g, (char) => char.toUpperCase()) || modelId,
+        }));
+      setLocalModels(discovered);
+      setLocalModelState({ loading: false, status: discovered.length > 0 ? 'live' : 'failed', reasonCode: discovered.length > 0 ? 'ok' : 'empty_response' });
+      if (applySelection && discovered[0]?.modelId) {
+        setLocalModel(discovered[0].modelId);
+      }
+    } catch {
+      setLocalModels([]);
+      setLocalModelState({ loading: false, status: 'failed', reasonCode: 'network_error' });
+    }
+  };
+
   useEffect(() => {
     void (async () => {
       try {
         const [settings, events] = await Promise.all([getAgentSettings(), listActivityLog(12)]);
         setProvider(settings.default_provider);
         setModel(settings.default_model);
+        setLocalBaseUrl(settings.generation_params?.local_connection?.base_url?.trim() || LOCAL_BASE_URL_DEFAULT);
+        setLocalModel(settings.generation_params?.local_connection?.model?.trim() || '');
         setActivity(events);
 
         const statuses = await Promise.all(AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
@@ -82,6 +123,7 @@ export function AgentPage() {
   }, []);
 
   const canSaveDefaults = model.trim().length > 0;
+  const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && localModel.trim().length > 0;
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -107,7 +149,7 @@ export function AgentPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Provider config</h2>
+          <h2 className="text-lg font-semibold">Cloud model</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-sm">
@@ -153,13 +195,8 @@ export function AgentPage() {
                 Save defaults
               </button>
             </div>
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Credentials</h2>
-          <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="mt-5 border-t border-slate-200 pt-4">
+              <div className="grid gap-4 md:grid-cols-3">
               {AGENT_PROVIDERS.map((candidate) => (
                 <div key={candidate} className="space-y-2 rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center justify-between">
@@ -194,6 +231,73 @@ export function AgentPage() {
                   </div>
                 </div>
               ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Local model</h2>
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Base URL</span>
+                <input
+                  className="input"
+                  value={localBaseUrl}
+                  placeholder={LOCAL_BASE_URL_DEFAULT}
+                  onChange={(event) => setLocalBaseUrl(event.target.value)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Installed model</span>
+                <select className="input" value={localModel} onChange={(event) => setLocalModel(event.target.value)} disabled={localModelState.loading || localModelOptions.length === 0}>
+                  {localModelOptions.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+              {localModelState.loading ? <span>Refreshing models…</span> : null}
+              {!localModelState.loading && localModelState.status === 'live' ? <span>Live catalog loaded.</span> : null}
+              {!localModelState.loading && localModelState.status === 'failed' && localModelState.reasonCode === 'empty_response'
+                ? <span>No installed Ollama models found.</span>
+                : null}
+              {!localModelState.loading && localModelState.status === 'failed' && localModelState.reasonCode === 'network_error'
+                ? <span>Could not connect to local model service.</span>
+                : null}
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                onClick={() => void refreshLocalModels(localBaseUrl)}
+              >
+                Refresh models
+              </button>
+              <button
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                disabled={!canSaveLocalDefaults}
+                onClick={async () => {
+                  try {
+                    const settings = await getAgentSettings();
+                    await saveAgentSettings({
+                      ...settings,
+                      generation_params: {
+                        ...(settings.generation_params ?? {}),
+                        local_connection: {
+                          base_url: localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT,
+                          model: localModel,
+                          B: settings.generation_params?.local_connection?.B ?? 1,
+                        },
+                      },
+                    });
+                    setMessage('Local model settings saved.');
+                  } catch (error) {
+                    setMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
+                  }
+                }}
+              >
+                Save local settings
+              </button>
             </div>
           </div>
         </section>
