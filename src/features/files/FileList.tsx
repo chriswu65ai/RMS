@@ -83,18 +83,24 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     };
   };
 
+  const normalizeFileNameInput = (input: string) => {
+    const trimmed = input.trim();
+    const baseName = trimmed.replace(/\.md$/i, '').trim();
+    const fileName = `${baseName}.md`;
+    return { fileName, baseName };
+  };
+
   const promptForFileName = async (title: string) => {
     const fileNameInput = await dialog.prompt(
       title,
       '',
-      'File name (free-form, .md optional). Tip: YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+      'File name (.md optional). YYYY-MM-DD TICKER-type.md auto-appends metadata.',
       {
       validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
       },
     );
     if (fileNameInput === null) return null;
-    const normalized = fileNameInput.trim();
-    return normalized.toLowerCase().endsWith('.md') ? normalized : `${normalized}.md`;
+    return normalizeFileNameInput(fileNameInput);
   };
 
   return (
@@ -105,8 +111,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
             className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium hover:bg-slate-50"
             onClick={async () => {
               if (!workspace) return;
-              const fileName = await promptForFileName('New file');
-              if (!fileName) return;
+              const normalizedInput = await promptForFileName('New file');
+              if (!normalizedInput) return;
+              const { fileName, baseName } = normalizedInput;
               const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
               const duplicate = hasDuplicateInFolder(folder?.id ?? null, fileName);
               if (duplicate) {
@@ -115,7 +122,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               }
               const identity = parseStockIdentityFromName(fileName);
               const frontmatter: FrontmatterModel = {
-                title: identity ? `${identity.ticker} ${identity.type}` : fileName.replace(/\.md$/i, ''),
+                title: identity ? `${identity.ticker} ${identity.type}` : baseName,
                 ticker: identity?.ticker ?? '',
                 type: identity?.type ?? (noteTypes[0] ?? ''),
                 date: identity?.date ?? '',

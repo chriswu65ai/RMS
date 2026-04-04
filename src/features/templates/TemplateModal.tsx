@@ -24,6 +24,13 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
     };
   };
 
+  const normalizeFileNameInput = (input: string) => {
+    const trimmed = input.trim();
+    const baseName = trimmed.replace(/\.md$/i, '').trim();
+    const fileName = `${baseName}.md`;
+    return { fileName, baseName };
+  };
+
   const templates = useMemo(
     () =>
       files.filter((f) => {
@@ -73,13 +80,13 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 const fileNameInput = await dialog.prompt(
                   'New file',
                   '',
-                  'File name (free-form, .md optional). Tip: YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+                  'File name (.md optional). YYYY-MM-DD TICKER-type.md auto-appends metadata.',
                   {
                     validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
                   },
                 );
                 if (fileNameInput === null) return;
-                const fileName = fileNameInput.trim().toLowerCase().endsWith('.md') ? fileNameInput.trim() : `${fileNameInput.trim()}.md`;
+                const { fileName, baseName } = normalizeFileNameInput(fileNameInput);
                 const folder = folders.find((f) => f.id === selectedFolderId) ?? null;
                 const parsed = splitFrontmatter(selected.content);
                 const duplicate = hasDuplicateInFolder(folder?.id ?? null, fileName);
@@ -91,7 +98,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 const clonedFrontmatter = {
                   ...parsed.frontmatter,
                   template: false,
-                  title: identity ? `${identity.ticker} ${identity.type}` : fileName.replace(/\.md$/i, ''),
+                  title: identity ? `${identity.ticker} ${identity.type}` : baseName,
                   ticker: identity?.ticker ?? '',
                   type: identity?.type ?? (noteTypes[0] ?? ''),
                   date: identity?.date ?? '',
