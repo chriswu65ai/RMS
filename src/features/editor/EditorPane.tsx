@@ -590,7 +590,7 @@ export function EditorPane() {
                   <X className="mr-1" size={14} />Cancel
                 </button>
               ) : (
-                <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim() || generateState === 'running'}>
+                <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
                   <span className="relative mr-3 inline-flex items-center">
                     <Microchip className="inline" size={14} />
                     <span className="absolute -right-2 -top-0.5 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
