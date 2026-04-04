@@ -78,3 +78,24 @@ export type AgentActivityLog = {
   cost_estimate_usd: number | null;
   error_message_short: string | null;
 };
+
+export type PreferredSource = {
+  id: string;
+  domain: string;
+  weight: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreatePreferredSourceInput = {
+  domain: string;
+  weight?: number;
+  enabled?: boolean;
+};
+
+export type UpdatePreferredSourceInput = {
+  domain?: string;
+  weight?: number;
+  enabled?: boolean;
+};

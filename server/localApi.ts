@@ -105,6 +105,14 @@ type AgentActivityLogRow = {
   error_message_short: string | null;
 };
 
+type PreferredSourceRow = {
+  id: string;
+  domain: string;
+  weight: number;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+};
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -373,6 +381,32 @@ const WEB_SEARCH_SAFE_SEARCH_DEFAULT = true;
 const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
+const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+const normalizeDomain = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  let domain = value.trim().toLowerCase();
+  domain = domain.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  domain = domain.replace(/^\/\//, '');
+  domain = domain.split(/[/?#]/, 1)[0] ?? '';
+  domain = domain.replace(/:\d+$/, '');
+  domain = domain.replace(/\.+$/, '');
+  return domain;
+};
+
+const isValidDomain = (domain: string): boolean => DOMAIN_PATTERN.test(domain);
+
+const parseOptionalWeight = (value: unknown): number | null => {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return Number.NaN;
+  if (value < 1 || value > 100) return Number.NaN;
+  return value;
+};
+
+const normalizePreferredSourceRow = (row: PreferredSourceRow) => ({
+  ...row,
+  enabled: Boolean(row.enabled),
+});
 
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
@@ -593,6 +627,91 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const limit = Math.min(50, Math.max(1, Number.parseInt(parsedUrl.searchParams.get('limit') ?? '10', 10) || 10));
       const rows = queryJson<AgentActivityLogRow>(`select * from agent_activity_log order by timestamp desc limit ${limit}`);
       writeJson(res, 200, rows);
+      return true;
+    }
+
+    if (req.method === 'GET' && url === '/api/agent/preferred-sources') {
+      const rows = queryJson<PreferredSourceRow>('select * from preferred_sources order by weight desc, domain asc');
+      writeJson(res, 200, rows.map(normalizePreferredSourceRow));
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/agent/preferred-sources') {
+      const payload = await readJsonBody(req);
+      const domain = normalizeDomain(payload.domain);
+      if (!domain || !isValidDomain(domain)) {
+        writeJson(res, 400, { error: { message: 'Invalid domain format.' } });
+        return true;
+      }
+      const weight = parseOptionalWeight(payload.weight);
+      if (Number.isNaN(weight)) {
+        writeJson(res, 400, { error: { message: 'Weight must be between 1 and 100.' } });
+        return true;
+      }
+      const enabled = typeof payload.enabled === 'boolean' ? payload.enabled : true;
+      const existing = queryJson<Pick<PreferredSourceRow, 'id'>>(
+        `select id from preferred_sources where domain = ${sqlEscape(domain)} limit 1`,
+      )[0];
+      if (existing) {
+        writeJson(res, 409, { error: { message: 'Domain already exists.' } });
+        return true;
+      }
+      const now = new Date().toISOString();
+      const id = randomUUID();
+      execSql(`insert into preferred_sources (id, domain, weight, enabled, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(domain)}, ${sqlEscape(weight ?? 1)}, ${sqlEscape(enabled ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      const created = queryJson<PreferredSourceRow>(`select * from preferred_sources where id = ${sqlEscape(id)} limit 1`)[0];
+      writeJson(res, 200, normalizePreferredSourceRow(created));
+      return true;
+    }
+
+    if (req.method === 'PATCH' && /^\/api\/agent\/preferred-sources\/[^/]+$/.test(url)) {
+      const id = url.replace('/api/agent/preferred-sources/', '').trim();
+      const existing = queryJson<PreferredSourceRow>(`select * from preferred_sources where id = ${sqlEscape(id)} limit 1`)[0];
+      if (!existing) {
+        writeJson(res, 404, { error: { message: 'Preferred source not found.' } });
+        return true;
+      }
+      const payload = await readJsonBody(req);
+      const nextDomain = payload.domain === undefined ? existing.domain : normalizeDomain(payload.domain);
+      if (!nextDomain || !isValidDomain(nextDomain)) {
+        writeJson(res, 400, { error: { message: 'Invalid domain format.' } });
+        return true;
+      }
+      const weight = parseOptionalWeight(payload.weight);
+      if (Number.isNaN(weight)) {
+        writeJson(res, 400, { error: { message: 'Weight must be between 1 and 100.' } });
+        return true;
+      }
+      const nextWeight = weight ?? existing.weight;
+      const nextEnabled = typeof payload.enabled === 'boolean' ? payload.enabled : Boolean(existing.enabled);
+      const duplicate = queryJson<Pick<PreferredSourceRow, 'id'>>(
+        `select id from preferred_sources where domain = ${sqlEscape(nextDomain)} and id != ${sqlEscape(id)} limit 1`,
+      )[0];
+      if (duplicate) {
+        writeJson(res, 409, { error: { message: 'Domain already exists.' } });
+        return true;
+      }
+      const now = new Date().toISOString();
+      execSql(`update preferred_sources set
+        domain = ${sqlEscape(nextDomain)},
+        weight = ${sqlEscape(nextWeight)},
+        enabled = ${sqlEscape(nextEnabled ? 1 : 0)},
+        updated_at = ${sqlEscape(now)}
+        where id = ${sqlEscape(id)}`);
+      const updated = queryJson<PreferredSourceRow>(`select * from preferred_sources where id = ${sqlEscape(id)} limit 1`)[0];
+      writeJson(res, 200, normalizePreferredSourceRow(updated));
+      return true;
+    }
+
+    if (req.method === 'DELETE' && /^\/api\/agent\/preferred-sources\/[^/]+$/.test(url)) {
+      const id = url.replace('/api/agent/preferred-sources/', '').trim();
+      const existing = queryJson<Pick<PreferredSourceRow, 'id'>>(`select id from preferred_sources where id = ${sqlEscape(id)} limit 1`)[0];
+      if (!existing) {
+        writeJson(res, 404, { error: { message: 'Preferred source not found.' } });
+        return true;
+      }
+      execSql(`delete from preferred_sources where id = ${sqlEscape(id)}`);
+      writeJson(res, 200, { error: null });
       return true;
     }
 
