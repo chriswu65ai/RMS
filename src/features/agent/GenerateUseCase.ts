@@ -8,6 +8,7 @@ export class GenerateUseCase {
     provider: AgentProvider;
     model: string;
     signal?: AbortSignal;
+    onProgress?: (nextOutputText: string) => void;
   }): Promise<{ outputText: string }> {
     return generateText({
       noteId: params.noteId,
@@ -17,6 +18,7 @@ export class GenerateUseCase {
       triggerSource: TriggerSource.Manual,
       saveMode: SaveMode.ManualOnly,
       signal: params.signal,
+      onProgress: params.onProgress,
     });
   }
 }

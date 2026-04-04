@@ -269,6 +269,17 @@ const writeJson = (res: ServerResponse, status: number, body: unknown) => {
   res.end(JSON.stringify(body));
 };
 
+const beginNdjson = (res: ServerResponse) => {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+};
+
+const writeNdjson = (res: ServerResponse, payload: Record<string, unknown>) => {
+  res.write(`${JSON.stringify(payload)}\n`);
+};
+
 const readJsonBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
   const chunks: Uint8Array[] = [];
   for await (const chunk of req) {
@@ -557,6 +568,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       try {
         const settings = getAgentSettings();
         const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
+        beginNdjson(res);
+        writeNdjson(res, { type: 'status', stage: 'started' });
         const result = await providerRegistry[provider].generate({
           model,
           inputText,
@@ -564,7 +577,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
             ...(provider === 'ollama' ? { baseUrl } : {}),
           },
-        }, apiKey ?? '', controller.signal);
+        }, apiKey ?? '', controller.signal, {
+          onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
+        });
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
@@ -581,7 +596,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
         });
-        writeJson(res, 200, result);
+        writeNdjson(res, { type: 'done', ...result });
+        res.end();
       } catch (error) {
         const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
         appendAgentActivityLog({
@@ -600,7 +616,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           cost_estimate_usd: null,
           error_message_short: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
         });
-        writeJson(res, aborted ? 499 : 400, { error: { message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.') } });
+        if (res.headersSent) {
+          writeNdjson(res, { type: 'error', message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.'), aborted });
+          res.end();
+        } else {
+          writeJson(res, aborted ? 499 : 400, { error: { message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.') } });
+        }
       }
       return true;
     }

@@ -86,6 +86,7 @@ export async function generateText(params: {
   triggerSource: TriggerSource;
   saveMode: SaveMode;
   signal?: AbortSignal;
+  onProgress?: (nextOutputText: string) => void;
 }): Promise<{ outputText: string }> {
   const response = await fetch('/api/agent/generate', {
     method: 'POST',
@@ -102,5 +103,38 @@ export async function generateText(params: {
     signal: params.signal,
   });
   if (!response.ok) throw new Error(await asErrorMessage(response));
-  return response.json() as Promise<{ outputText: string }>;
+  const contentType = response.headers.get('Content-Type') ?? '';
+  if (!contentType.includes('application/x-ndjson')) {
+    return response.json() as Promise<{ outputText: string }>;
+  }
+  if (!response.body) return { outputText: '' };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let outputText = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffered += decoder.decode(value, { stream: true });
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const payload = JSON.parse(trimmed) as { type?: string; deltaText?: string; message?: string; outputText?: string };
+      if (payload.type === 'delta') {
+        outputText += payload.deltaText ?? '';
+        params.onProgress?.(outputText);
+      }
+      if (payload.type === 'done') {
+        outputText = payload.outputText ?? outputText;
+        params.onProgress?.(outputText);
+        return { outputText };
+      }
+      if (payload.type === 'error') {
+        throw new Error(payload.message ?? 'Generation failed.');
+      }
+    }
+  }
+  return { outputText };
 }
