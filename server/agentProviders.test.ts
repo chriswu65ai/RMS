@@ -13,6 +13,23 @@ const jsonResponse = (status: number, payload: unknown) => new Response(JSON.str
   headers: { 'Content-Type': 'application/json' },
 });
 
+const sseResponse = (frames: unknown[]) => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+};
+
 test('selectBestModel keeps preferred model when present in discovered models', () => {
   const discovered: ModelListEntry[] = [
     { modelId: 'gpt-4.1', displayName: 'GPT-4.1', B: 1 },
@@ -197,4 +214,24 @@ test('ollama tool parsing extracts function arguments object', async () => {
   const first = await providerRegistry.ollama.generateToolFirstTurn({ model: 'llama3.1:8b', inputText: 'Find latest', tools: [tool], generationParams: { baseUrl: 'http://localhost:11434' } }, '');
   assert.equal(first.toolCalls[0]?.name, 'web_search');
   assert.deepEqual(first.toolCalls[0]?.arguments, { query: 'amd outlook' });
+});
+
+test('minimax generate keeps delta chunks incremental and ignores fallback full message replay', async () => {
+  globalThis.fetch = async () => sseResponse([
+    { choices: [{ delta: { content: 'Hello ' } }] },
+    { choices: [{ delta: { content: 'world' } }] },
+    { choices: [{ message: { content: 'Hello world' } }], usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 } },
+  ]);
+
+  const deltas: string[] = [];
+  const result = await providerRegistry.minimax.generate(
+    { model: 'abab6.5s-chat', inputText: 'Say hello' },
+    'test-key',
+    undefined,
+    { onTextDelta: (delta) => deltas.push(delta) },
+  );
+
+  assert.equal(result.outputText, 'Hello world');
+  assert.deepEqual(deltas, ['Hello ', 'world']);
+  assert.equal(deltas.join(''), result.outputText);
 });
