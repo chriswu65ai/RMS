@@ -1189,7 +1189,17 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'DELETE' && url.startsWith('/api/research-tasks/')) {
       const taskId = url.replace('/api/research-tasks/', '').trim();
-      execSql(`delete from new_research_tasks where id = ${sqlEscape(taskId)}`);
+      const existing = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      if (!existing) {
+        writeJson(res, 404, { error: { message: 'Task not found.' } });
+        return true;
+      }
+      execSql(`
+        begin;
+        delete from task_activity_events where task_id = ${sqlEscape(taskId)};
+        delete from new_research_tasks where id = ${sqlEscape(taskId)};
+        commit;
+      `);
       writeJson(res, 200, { error: null });
       return true;
     }
