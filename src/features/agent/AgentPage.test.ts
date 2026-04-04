@@ -69,7 +69,7 @@ test('web search save payload preserves existing params and normalizes numeric c
     domainPolicy: 'prefer_list',
     sourceCitation: false,
     searxngBaseUrl: 'http://localhost:8080',
-    searxngUseJsonApi: true,
+    searxngUseHtmlMode: false,
   });
 
   assert.equal(payload.generation_params?.temperature, 0.2);
@@ -103,13 +103,13 @@ test('web search save payload includes source_citation when enabled', () => {
     domainPolicy: 'open_web',
     sourceCitation: true,
     searxngBaseUrl: 'http://localhost:8080',
-    searxngUseJsonApi: true,
+    searxngUseHtmlMode: false,
   });
 
   assert.equal(payload.generation_params?.web_search?.source_citation, true);
 });
 
-test('web search save payload stores searxng provider config under provider_config.searxng', () => {
+test('web search save payload maps HTML toggle to inverted searxng use_json_api flag', () => {
   const payload = buildWebSearchSettingsPayload({
     default_provider: 'openai',
     default_model: 'gpt-4.1',
@@ -125,7 +125,7 @@ test('web search save payload stores searxng provider config under provider_conf
     domainPolicy: 'open_web',
     sourceCitation: false,
     searxngBaseUrl: 'http://127.0.0.1:8080',
-    searxngUseJsonApi: false,
+    searxngUseHtmlMode: true,
   });
 
   assert.deepEqual(payload.generation_params?.web_search?.provider_config, {
@@ -134,6 +134,28 @@ test('web search save payload stores searxng provider config under provider_conf
       use_json_api: false,
     },
   });
+});
+
+test('web search save payload keeps JSON API enabled when HTML toggle is unchecked', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'searxng',
+    mode: 'single',
+    maxResults: '5',
+    timeoutMs: '5000',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://127.0.0.1:8080',
+    searxngUseHtmlMode: false,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, true);
 });
 
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
@@ -171,7 +193,7 @@ test('web search mode persists across save payload builds', () => {
     domainPolicy: 'open_web',
     sourceCitation: false,
     searxngBaseUrl: 'http://localhost:8080',
-    searxngUseJsonApi: true,
+    searxngUseHtmlMode: false,
   });
   assert.equal(payload.generation_params?.web_search?.mode, 'deep');
 });
@@ -197,7 +219,7 @@ test('web search save payload omits searxng provider_config when provider is duc
     domainPolicy: 'open_web',
     sourceCitation: false,
     searxngBaseUrl: 'http://10.11.10.11:2000',
-    searxngUseJsonApi: false,
+    searxngUseHtmlMode: true,
   });
 
   assert.equal(payload.generation_params?.web_search?.provider, 'duckduckgo');

@@ -38,7 +38,7 @@ import {
   WEB_SEARCH_MODE_OPTIONS,
   WEB_SEARCH_PROVIDER_OPTIONS,
   WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
-  WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
+  WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT,
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
   shouldShowSearxngConfigFields,
 } from './webSearchSettings';
@@ -97,7 +97,7 @@ export function AgentPage() {
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProvider>('duckduckgo');
   const [webSearchSearxngBaseUrl, setWebSearchSearxngBaseUrl] = useState(WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
-  const [webSearchSearxngUseJsonApi, setWebSearchSearxngUseJsonApi] = useState(WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT);
+  const [webSearchSearxngUseHtmlMode, setWebSearchSearxngUseHtmlMode] = useState(WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT);
   const [webSearchMode, setWebSearchMode] = useState<WebSearchMode>('single');
   const [webSearchMaxResults, setWebSearchMaxResults] = useState(String(WEB_SEARCH_MAX_RESULTS_DEFAULT));
   const [webSearchTimeoutMs, setWebSearchTimeoutMs] = useState(String(WEB_SEARCH_TIMEOUT_MS_DEFAULT));
@@ -194,7 +194,7 @@ export function AgentPage() {
         setWebSearchEnabled(Boolean(webSearchSettings?.enabled));
         setWebSearchProvider(webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo');
         setWebSearchSearxngBaseUrl(webSearchSettings?.provider_config?.searxng?.base_url ?? WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
-        setWebSearchSearxngUseJsonApi(webSearchSettings?.provider_config?.searxng?.use_json_api ?? WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT);
+        setWebSearchSearxngUseHtmlMode(!(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true));
         setWebSearchMode(webSearchSettings?.mode === 'deep' ? 'deep' : 'single');
         setWebSearchMaxResults(String(webSearchSettings?.max_results ?? WEB_SEARCH_MAX_RESULTS_DEFAULT));
         setWebSearchTimeoutMs(String(webSearchSettings?.timeout_ms ?? WEB_SEARCH_TIMEOUT_MS_DEFAULT));
@@ -393,13 +393,13 @@ export function AgentPage() {
                     />
                   </label>
                   <label className="space-y-1 text-sm">
-                    <span className="text-slate-600">Use JSON API</span>
+                    <span className="text-slate-600">HTML instead of JSON API</span>
                     <input
                       className="h-4 w-4"
                       type="checkbox"
-                      checked={webSearchSearxngUseJsonApi}
+                      checked={webSearchSearxngUseHtmlMode}
                       onChange={(event) => {
-                        setWebSearchSearxngUseJsonApi(event.target.checked);
+                        setWebSearchSearxngUseHtmlMode(event.target.checked);
                         setWebSearchStatusMessage('');
                       }}
                     />
@@ -488,7 +488,7 @@ export function AgentPage() {
                       domainPolicy: webSearchDomainPolicy,
                       sourceCitation: webSearchSourceCitation,
                       searxngBaseUrl: webSearchSearxngBaseUrl,
-                      searxngUseJsonApi: webSearchSearxngUseJsonApi,
+                      searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
                     }));
                     setWebSearchStatusMessage('Web search settings saved.');
                   } catch (error) {

@@ -5,6 +5,7 @@ export const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
 export const WEB_SEARCH_SOURCE_CITATION_DEFAULT = false;
 export const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 export const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
+export const WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT = !WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT;
 export const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ value: WebSearchProvider; label: string }> = [
   { value: 'duckduckgo', label: 'DuckDuckGo' },
   { value: 'searxng', label: 'SearXNG' },
@@ -31,14 +32,14 @@ export const buildWebSearchSettingsPayload = (
     domainPolicy: WebSearchDomainPolicy;
     sourceCitation: boolean;
     searxngBaseUrl: string;
-    searxngUseJsonApi: boolean;
+    searxngUseHtmlMode: boolean;
   },
 ): AgentSettings => {
   const providerConfig = draft.provider === 'searxng'
     ? {
       searxng: {
         base_url: draft.searxngBaseUrl.trim() || WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
-        use_json_api: draft.searxngUseJsonApi,
+        use_json_api: !draft.searxngUseHtmlMode,
       },
     }
     : undefined;
