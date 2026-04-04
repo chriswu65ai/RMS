@@ -302,6 +302,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
         safe_search?: boolean;
         recency?: string;
         domain_policy?: string;
+        source_citation?: boolean;
       };
     };
   };
@@ -313,6 +314,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.safe_search, false);
   assert.equal(payload.generation_params?.web_search?.recency, '30d');
   assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
+  assert.equal(payload.generation_params?.web_search?.source_citation, false);
 });
 
 test('preferred sources create normalizes domain and supports listing', async () => {
@@ -385,6 +387,7 @@ test('agent generate enriches input with deep web search context and caps source
         max_results: 12,
         timeout_ms: 3000,
         domain_policy: 'open_web',
+        source_citation: true,
       },
     },
   });
@@ -490,6 +493,7 @@ test('agent settings normalize invalid web search values to defaults', async () 
         safe_search: 'sometimes',
         recency: '90d',
         domain_policy: 'invalid-policy',
+        source_citation: 'yes',
       },
     },
   });
@@ -520,6 +524,7 @@ test('agent settings normalize invalid web search values to defaults', async () 
     safe_search: true,
     recency: 'any',
     domain_policy: 'open_web',
+    source_citation: false,
   });
 });
 
@@ -709,6 +714,77 @@ test('agent generate emits stream sources before done and warning frames on sear
     const warningFrames = warningResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string; stage?: string });
     assert.equal(warningFrames.some((frame) => frame.type === 'search_warning' && frame.message === 'simulated failure'), true);
     assert.equal(warningFrames.some((frame) => frame.type === 'status' && frame.stage === 'web_search_warning'), true);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate only injects citation instruction and appends Sources block when source_citation is enabled', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  let receivedInput = '';
+  providerRegistry.openai.generate = async (request) => {
+    receivedInput = request.inputText;
+    return { outputText: 'Summary body', latencyMs: 1 };
+  };
+  searchProviderRegistry.duckduckgo.search = async () => ([
+    { title: 'Example Title', url: 'https://example.com/a', snippet: 'example snippet A', provider: 'duckduckgo' },
+    { title: '', url: 'https://example.com/b', snippet: 'example snippet B', provider: 'duckduckgo' },
+  ]);
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+          source_citation: false,
+        },
+      },
+    });
+    const disabledResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(disabledResponse.status, 200);
+    assert.doesNotMatch(receivedInput, /Strict citation mode/);
+    const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const disabledDone = disabledFrames.find((frame) => frame.type === 'done');
+    assert.equal(disabledDone?.outputText, 'Summary body');
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+          source_citation: true,
+        },
+      },
+    });
+    const enabledResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(enabledResponse.status, 200);
+    assert.match(receivedInput, /Strict citation mode/);
+    const enabledFrames = enabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
+    assert.match(enabledDone?.outputText ?? '', /Summary body\n\n---\nSources\n1\. \[Example Title\]\(https:\/\/example\.com\/a\)\n2\. \[https:\/\/example\.com\/b\]\(https:\/\/example\.com\/b\)\n---$/);
+    assert.doesNotMatch(enabledDone?.outputText ?? '', /snippet/i);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;

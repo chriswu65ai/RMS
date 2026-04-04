@@ -57,6 +57,7 @@ export type AgentSettings = {
       safe_search: boolean;
       recency: WebSearchRecency;
       domain_policy: WebSearchDomainPolicy;
+      source_citation: boolean;
     };
   } | null;
 };
