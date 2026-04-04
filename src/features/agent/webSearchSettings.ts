@@ -5,9 +5,14 @@ export const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
 export const WEB_SEARCH_SOURCE_CITATION_DEFAULT = false;
 export const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 export const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
+export const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ value: WebSearchProvider; label: string }> = [
+  { value: 'duckduckgo', label: 'DuckDuckGo' },
+  { value: 'searxng', label: 'SearXNG' },
+];
 
 const normalizePositiveInteger = (value: string, fallback: number) => Math.max(1, Number(value) || fallback);
 export const getWebSearchSourceCitationDefault = (sourceCitation: boolean | undefined) => sourceCitation ?? WEB_SEARCH_SOURCE_CITATION_DEFAULT;
+export const shouldShowSearxngConfigFields = (provider: WebSearchProvider) => provider === 'searxng';
 
 export const buildWebSearchSettingsPayload = (
   settings: AgentSettings,

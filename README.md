@@ -17,7 +17,9 @@ Stock Research Management System is a Markdown-first app for managing stock rese
 The web search settings saved in `generation_params.web_search` are:
 
 - `enabled` (`boolean`): turn enrichment on/off.
-- `provider` (`duckduckgo`): active search backend.
+- `provider` (`duckduckgo | searxng`): active search backend.
+- `provider_config.searxng.base_url` (`string`): SearXNG origin used for `/search` requests (default: `http://localhost:8080`).
+- `provider_config.searxng.use_json_api` (`boolean`): request SearXNG JSON mode (`format=json`) instead of HTML parsing.
 - `mode` (`single | deep`):
   - `single`: one query using the prompt text.
   - `deep`: up to three related queries (`base`, `latest updates`, `official source`).
@@ -29,6 +31,14 @@ The web search settings saved in `generation_params.web_search` are:
   - `open_web`: no preferred-source policy applied.
   - `prefer_list`: open web + preferred-source ranking boosts.
   - `only_list`: strict domain filtering to enabled preferred sources.
+
+### Agent > Web Search: SearXNG setup notes
+
+- If you select **SearXNG** in the provider dropdown, the Agent page shows:
+  - **SearXNG base URL** (text input)
+  - **Use JSON API** (checkbox)
+- LAN/Docker caveat: if SearXNG runs on a different machine, do **not** use `localhost` from the app container. Use the host's reachable LAN IP instead, for example `http://10.11.10.11:2000`.
+- Authentication support for SearXNG is intentionally deferred to phase 2 to keep the first rollout simple.
 
 ## Privacy and logging
 
