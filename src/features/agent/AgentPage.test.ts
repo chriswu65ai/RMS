@@ -52,6 +52,8 @@ test('web search save payload preserves existing params and normalizes numeric c
     recency: '30d',
     domainPolicy: 'prefer_list',
     sourceCitation: false,
+    searxngBaseUrl: 'http://localhost:8080',
+    searxngUseJsonApi: true,
   });
 
   assert.equal(payload.generation_params?.temperature, 0.2);
@@ -84,9 +86,38 @@ test('web search save payload includes source_citation when enabled', () => {
     recency: 'any',
     domainPolicy: 'open_web',
     sourceCitation: true,
+    searxngBaseUrl: 'http://localhost:8080',
+    searxngUseJsonApi: true,
   });
 
   assert.equal(payload.generation_params?.web_search?.source_citation, true);
+});
+
+test('web search save payload stores searxng provider config under provider_config.searxng', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'searxng',
+    mode: 'single',
+    maxResults: '5',
+    timeoutMs: '5000',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://127.0.0.1:8080',
+    searxngUseJsonApi: false,
+  });
+
+  assert.deepEqual(payload.generation_params?.web_search?.provider_config, {
+    searxng: {
+      base_url: 'http://127.0.0.1:8080',
+      use_json_api: false,
+    },
+  });
 });
 
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
