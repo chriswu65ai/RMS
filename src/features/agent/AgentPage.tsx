@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { clearActivityLog, getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
-import { AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
+import { AGENT_PROVIDERS, CLOUD_AGENT_PROVIDERS, type AgentActivityLog, type AgentProvider, type CloudAgentProvider, type ModelCatalogReasonCode, type ModelListItem } from './types';
 import { formatLocalDateTime } from '../../lib/time';
 
 const modelCatalogService = new ModelCatalogService();
@@ -39,8 +39,8 @@ export function AgentPage() {
     reasonCode: 'ok' | 'network_error' | 'empty_response' | null;
   }>({ loading: false, status: null, reasonCode: null });
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
-  const [statusByProvider, setStatusByProvider] = useState<Record<AgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
-  const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<AgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
+  const [statusByProvider, setStatusByProvider] = useState<Record<CloudAgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
+  const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
   const modelOptions = models.length > 0
     ? models
@@ -112,8 +112,9 @@ export function AgentPage() {
         setLocalBaseUrl(settings.generation_params?.local_connection?.base_url?.trim() || LOCAL_BASE_URL_DEFAULT);
         setLocalModel(settings.generation_params?.local_connection?.model?.trim() || '');
         setActivity(events);
+        await refreshModels(settings.default_provider, !settings.default_model.trim());
 
-        const statuses = await Promise.all(AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
+        const statuses = await Promise.all(CLOUD_AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
       } catch (error) {
         setMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
@@ -149,11 +150,11 @@ export function AgentPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Cloud model</h2>
+          <h2 className="text-lg font-semibold">Choose agent</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Default provider</span>
+                <span className="text-slate-600">Provider</span>
                 <select
                   className="input"
                   value={provider}
@@ -167,7 +168,7 @@ export function AgentPage() {
                 </select>
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Default model</span>
+                <span className="text-slate-600">Model</span>
                 <select className="input" value={model} onChange={(event) => setModel(event.target.value)} disabled={modelState.loading || modelOptions.length === 0}>
                   {modelOptions.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
                 </select>
@@ -177,6 +178,9 @@ export function AgentPage() {
               {modelState.loading ? <span>Refreshing models…</span> : null}
               {!modelState.loading && modelState.catalogStatus
                 ? <span>{catalogStatusBannerMessage(modelState.catalogStatus)}</span>
+                : null}
+              {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
+                ? <span>Could not connect to Ollama at {localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT}.</span>
                 : null}
             </div>
             <div className="mt-3">
@@ -195,9 +199,14 @@ export function AgentPage() {
                 Save defaults
               </button>
             </div>
-            <div className="mt-5 border-t border-slate-200 pt-4">
-              <div className="grid gap-4 md:grid-cols-3">
-              {AGENT_PROVIDERS.map((candidate) => (
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Cloud APIs</h2>
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              {CLOUD_AGENT_PROVIDERS.map((candidate) => (
                 <div key={candidate} className="space-y-2 rounded-lg border border-slate-200 p-3">
                   <div className="flex items-center justify-between">
                     <h3 className="font-medium">{providerLabel(candidate)}</h3>
@@ -231,13 +240,12 @@ export function AgentPage() {
                   </div>
                 </div>
               ))}
-              </div>
             </div>
           </div>
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Local model</h2>
+          <h2 className="text-lg font-semibold">Local provider (Ollama)</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-sm">

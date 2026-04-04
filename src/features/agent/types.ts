@@ -1,6 +1,8 @@
-export type AgentProvider = 'minimax' | 'openai' | 'anthropic';
+export type AgentProvider = 'minimax' | 'openai' | 'anthropic' | 'ollama';
 
-export const AGENT_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic'];
+export const AGENT_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic', 'ollama'];
+export const CLOUD_AGENT_PROVIDERS = ['minimax', 'openai', 'anthropic'] as const;
+export type CloudAgentProvider = typeof CLOUD_AGENT_PROVIDERS[number];
 
 export const TriggerSource = {
   Manual: 'manual',
@@ -27,7 +29,8 @@ export type ModelCatalogReasonCode =
   | 'rate_limited'
   | 'unsupported_endpoint'
   | 'network_error'
-  | 'empty_response';
+  | 'empty_response'
+  | 'ollama_unreachable';
 
 export type AgentSettings = {
   default_provider: AgentProvider;
