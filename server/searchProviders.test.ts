@@ -156,6 +156,80 @@ test('searxng json adapter maps recency and safe search controls', async () => {
   }
 });
 
+test('searxng json adapter sanitizes accidental full /search URL and keeps a single /search segment', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    await searchProviderRegistry.searxng.search('test query', {
+      providerConfig: {
+        searxng: {
+          base_url: 'http://localhost:8080/search?q=old&format=json#frag',
+          use_json_api: true,
+        },
+      },
+    });
+
+    assert.equal(requestedUrls.length, 1);
+    const requestUrl = new URL(requestedUrls[0] ?? '');
+    assert.equal(requestUrl.origin, 'http://localhost:8080');
+    assert.equal(requestUrl.pathname, '/search');
+    assert.equal(requestUrl.searchParams.get('q'), 'test query');
+    assert.equal(requestUrl.searchParams.get('format'), 'json');
+    assert.equal(requestUrl.searchParams.get('safesearch'), '1');
+    assert.equal(requestUrl.toString().match(/\/search/g)?.length ?? 0, 1);
+    assert.equal(requestUrl.searchParams.get('old'), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng html adapter sanitizes accidental full /search URL and omits format=json', async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchAcceptHeader = '';
+  const requestedUrls: string[] = [];
+  const html = `
+    <article class="result">
+      <h3><a href="https://example.com/html">HTML Result</a></h3>
+      <p class="content">snippet</p>
+    </article>
+  `;
+  globalThis.fetch = async (input, init) => {
+    requestedUrls.push(String(input));
+    fetchAcceptHeader = String(new Headers(init?.headers).get('accept') ?? '');
+    return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+
+  try {
+    await searchProviderRegistry.searxng.search('test query', {
+      providerConfig: {
+        searxng: {
+          base_url: 'http://localhost:8080/search',
+          use_json_api: false,
+        },
+      },
+    });
+
+    assert.equal(requestedUrls.length, 1);
+    const requestUrl = new URL(requestedUrls[0] ?? '');
+    assert.equal(requestUrl.origin, 'http://localhost:8080');
+    assert.equal(requestUrl.pathname, '/search');
+    assert.equal(requestUrl.searchParams.get('q'), 'test query');
+    assert.equal(requestUrl.searchParams.get('format'), null);
+    assert.equal(requestUrl.toString().match(/\/search/g)?.length ?? 0, 1);
+    assert.equal(fetchAcceptHeader, 'text/html');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('searxng json adapter parses canonical result shape with title fallback', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({
