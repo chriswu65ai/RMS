@@ -35,6 +35,7 @@ import {
   buildWebSearchSettingsPayload,
   getWebSearchSourceCitationDefault,
   WEB_SEARCH_MAX_RESULTS_DEFAULT,
+  WEB_SEARCH_MODE_OPTIONS,
   WEB_SEARCH_PROVIDER_OPTIONS,
   WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
   WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
@@ -45,10 +46,6 @@ import { getWebSearchWarningBannerMessage } from './activityWarnings';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
-const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
-  { value: 'single', label: 'Single' },
-  { value: 'deep', label: 'Deep' },
-];
 const WEB_SEARCH_RECENCY_OPTIONS: Array<{ value: WebSearchRecency; label: string }> = [
   { value: 'any', label: 'Any time' },
   { value: '7d', label: 'Last 7 days' },
@@ -235,6 +232,10 @@ export function AgentPage() {
     return 'only_list (strict filter): Restrict search results to enabled preferred sources only.';
   }, [webSearchDomainPolicy]);
   const isValidDomain = (value: string) => DOMAIN_PATTERN.test(value.trim());
+  const webSearchModeHelperText = useMemo(() => {
+    const matched = WEB_SEARCH_MODE_OPTIONS.find((candidate) => candidate.value === webSearchMode);
+    return matched?.helper ?? '';
+  }, [webSearchMode]);
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -408,8 +409,9 @@ export function AgentPage() {
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Mode</span>
                 <select className="input" value={webSearchMode} onChange={(event) => setWebSearchMode(event.target.value as WebSearchMode)}>
-                  {WEB_SEARCH_MODES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                 </select>
+                <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Max results</span>

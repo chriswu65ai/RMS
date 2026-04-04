@@ -4,8 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider } from './agentProviders';
-import { searchProviderRegistry, searchUtils, type SearchResult } from './searchProviders';
-import { appendSearchDiagnostic } from './searchLogging';
+import { type SearchResult } from './searchProviders';
+import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -97,10 +97,6 @@ type PreparedWebSearchContext = {
   mode: WebSearchMode;
   queryCount: number;
   sourceCount: number;
-  warning?: {
-    code: 'search_failed';
-    message: string;
-  };
 };
 
 type OllamaRuntimeConfig = {
@@ -445,35 +441,6 @@ const normalizePreferredSourceRow = (row: PreferredSourceRow) => ({
   ...row,
   enabled: Boolean(row.enabled),
 });
-
-const buildWebSearchQueries = (inputText: string, mode: WebSearchMode): string[] => {
-  const base = inputText.trim();
-  if (!base) return [];
-  if (mode === 'single') return [base];
-  return Array.from(new Set([
-    base,
-    `${base} latest updates`,
-    `${base} official source`,
-  ])).slice(0, 3);
-};
-
-const buildSourceContextBlock = (queries: string[], sources: SearchResult[]): string => {
-  const queryLines = queries.map((query, index) => `${index + 1}. ${query}`);
-  const sourceLines = sources.map((source, index) => {
-    const publishedAt = source.published_at ? ` | published_at=${source.published_at}` : '';
-    return `${index + 1}. title="${source.title}" | url=${source.url}${publishedAt}\n   snippet="${source.snippet}"`;
-  });
-  return [
-    '<web_search_context>',
-    '<queries>',
-    ...queryLines,
-    '</queries>',
-    '<sources>',
-    ...sourceLines,
-    '</sources>',
-    '</web_search_context>',
-  ].join('\n');
-};
 
 const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((source) => ({
   title: source.title,
@@ -922,95 +889,25 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
         let preparedInputText = inputText;
         if (normalizedWebSearchConfig.enabled) {
-          const queries = buildWebSearchQueries(inputText, normalizedWebSearchConfig.mode);
-          const domainList = preferredSources.map((source) => source.domain.toLowerCase());
-          const domainBoost = preferredSources.reduce<Record<string, number>>((acc, source) => {
-            acc[source.domain.toLowerCase()] = source.weight;
-            return acc;
-          }, {});
-          const searchTimeoutController = new AbortController();
-          const timeoutId = setTimeout(() => searchTimeoutController.abort(), normalizedWebSearchConfig.timeout_ms);
-          controller.signal.addEventListener('abort', () => searchTimeoutController.abort(), { once: true });
-          try {
-            const allResults: SearchResult[] = [];
-            let remainingBudget = Math.max(1, normalizedWebSearchConfig.max_results);
-            let executedQueryCount = 0;
-            for (const query of queries) {
-              if (remainingBudget <= 0) break;
-              const perQueryCap = normalizedWebSearchConfig.mode === 'single'
-                ? remainingBudget
-                : Math.max(1, Math.ceil(remainingBudget / 2));
-              const searchStartedAt = Date.now();
-              try {
-                executedQueryCount += 1;
-                const queryResults = await searchProviderRegistry[normalizedWebSearchConfig.provider].search(query, {
-                  mode: normalizedWebSearchConfig.mode,
-                  policy: normalizedWebSearchConfig.domain_policy,
-                  resultCap: perQueryCap,
-                  timeoutMs: normalizedWebSearchConfig.timeout_ms,
-                  safeSearch: normalizedWebSearchConfig.safe_search,
-                  recency: normalizedWebSearchConfig.recency,
-                  domainList,
-                  domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
-                    ? domainBoost
-                    : undefined,
-                  providerConfig: normalizedWebSearchConfig.provider_config,
-                }, searchTimeoutController.signal);
-                appendSearchDiagnostic({
-                  provider: normalizedWebSearchConfig.provider,
-                  mode: normalizedWebSearchConfig.mode,
-                  query,
-                  resultCount: queryResults.length,
-                  latencyMs: Date.now() - searchStartedAt,
-                });
-                allResults.push(...queryResults);
-                remainingBudget = Math.max(0, remainingBudget - queryResults.length);
-              } catch (searchError) {
-                appendSearchDiagnostic({
-                  provider: normalizedWebSearchConfig.provider,
-                  mode: normalizedWebSearchConfig.mode,
-                  query,
-                  resultCount: 0,
-                  latencyMs: Date.now() - searchStartedAt,
-                  status: 'error',
-                  error: searchError,
-                });
-                throw searchError;
-              }
-            }
-            const dedupedSources = searchUtils.dedupeByCanonicalUrl(allResults);
-            const finalCap = normalizedWebSearchConfig.mode === 'deep'
-              ? Math.min(8, Math.max(1, normalizedWebSearchConfig.max_results))
-              : Math.max(1, normalizedWebSearchConfig.max_results);
-            const finalSources = searchUtils.enforceResultCap(dedupedSources, finalCap);
-            normalizedSources = normalizeStreamingSources(finalSources);
-            webSearchMetadata.queryCount = executedQueryCount;
-            webSearchMetadata.sourceCount = finalSources.length;
-            if (finalSources.length > 0) {
-              const sourceContextBlock = buildSourceContextBlock(queries, finalSources);
-              if (normalizedWebSearchConfig.source_citation) {
-                preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Strict citation mode: when using web_search_context sources, cite supporting claims with bracket indices like [1], [2] that map directly to the numbered <sources> list above. Do not invent citations or URLs.</web_search_context_note>`;
-              } else {
-                preparedInputText = `${sourceContextBlock}\n\n${inputText}`;
-              }
-            }
-          } catch (error) {
-            webSearchMetadata.warning = {
-              code: 'search_failed',
-              message: error instanceof Error ? error.message : 'Web search failed.',
-            };
-          } finally {
-            clearTimeout(timeoutId);
-          }
+          const orchestration = await runAgentToolOrchestration({
+            provider,
+            model: resolvedModel,
+            inputText,
+            apiKey: apiKey ?? '',
+            baseUrl: provider === 'ollama' ? ollamaRuntime.baseUrl : undefined,
+            settings: normalizedWebSearchConfig,
+            preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
+            signal: controller.signal,
+          });
+          normalizedSources = normalizeStreamingSources(orchestration.allSources);
+          webSearchMetadata.queryCount = orchestration.queryCount;
+          webSearchMetadata.sourceCount = orchestration.sourceCount;
+          preparedInputText = orchestration.consumedInputText;
         }
         beginNdjson(res);
         writeNdjson(res, { type: 'status', stage: 'started' });
         if (normalizedSources.length > 0) {
           writeNdjson(res, { type: 'sources', sources: normalizedSources });
-        }
-        if (webSearchMetadata.warning) {
-          writeNdjson(res, { type: 'search_warning', message: webSearchMetadata.warning.message });
-          writeNdjson(res, { type: 'status', stage: 'web_search_warning', web_search: webSearchMetadata });
         }
         const result = await providerRegistry[provider].generate({
           model: resolvedModel,
@@ -1022,6 +919,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }, apiKey ?? '', controller.signal, {
           onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
         });
+        if (normalizedWebSearchConfig.enabled && normalizedWebSearchConfig.source_citation && normalizedSources.length > 0) {
+          const hasCitation = /\[\d+\]/.test(result.outputText);
+          if (!hasCitation) {
+            throw new Error('Citation mode requires bracket citations like [1] that reference returned sources.');
+          }
+        }
         const outputText = normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
           ? `${result.outputText}\n\n${buildWebSearchSourcesAppendix(normalizedSources)}`
           : result.outputText;
@@ -1040,8 +943,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           token_estimate: result.usage?.totalTokens ?? null,
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
-          search_warning: webSearchMetadata.warning ? 1 : 0,
-          search_warning_message: webSearchMetadata.warning?.message ?? null,
+          search_warning: 0,
+          search_warning_message: null,
         });
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         res.end();
