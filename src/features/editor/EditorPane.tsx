@@ -587,7 +587,7 @@ export function EditorPane() {
           </div>
           {showGeneratedDraftNotice && (
             <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-              <span>Generated draft available — review and Save.</span>
+              <span>Note successfully drafted - review and save</span>
               <button
                 className="rounded border border-emerald-300 px-2 py-1"
                 onClick={() => {
