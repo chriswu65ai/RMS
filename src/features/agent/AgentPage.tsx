@@ -219,7 +219,7 @@ export function AgentPage() {
                   }
                 }}
               >
-                Save defaults
+                Save default agent
               </button>
             </div>
           </div>
