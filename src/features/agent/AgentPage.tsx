@@ -111,7 +111,11 @@ export function AgentPage() {
         setSavedLocalRuntime(savedRuntime);
         setOllamaRuntimeModelDraft(savedRuntime.model);
         setActivity(events);
-        await refreshModels(settings.default_provider, !settings.default_model.trim(), savedRuntime.baseUrl);
+        const shouldRefreshOnMount = !settings.default_model.trim()
+          || (settings.default_provider === 'ollama' && !savedRuntime.model.trim());
+        if (shouldRefreshOnMount) {
+          await refreshModels(settings.default_provider, !settings.default_model.trim(), savedRuntime.baseUrl);
+        }
 
         const statuses = await Promise.all(CLOUD_AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
@@ -192,6 +196,9 @@ export function AgentPage() {
                 : null}
               {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                 ? <span>Could not connect to Ollama at {localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT}.</span>
+                : null}
+              {!modelState.loading && !modelState.catalogStatus
+                ? <span>Models shown from saved settings. Press Refresh models to fetch latest options.</span>
                 : null}
             </div>
             <div className="mt-3">
