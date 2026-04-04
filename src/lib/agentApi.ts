@@ -12,7 +12,7 @@ import type {
 } from '../features/agent/types';
 
 type ApiError = { error?: { message?: string } | null };
-type StreamSource = {
+export type StreamSource = {
   title: string;
   url: string;
   snippet: string;
