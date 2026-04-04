@@ -171,6 +171,8 @@ export function EditorPane() {
 
   const merged = composeMarkdown(frontmatter, body);
   const editorValue = showMetadata ? merged : body;
+  const toVisibleEditorText = (nextBody: string, nextFrontmatter: FrontmatterModel): string =>
+    showMetadata ? composeMarkdown(nextFrontmatter, nextBody) : nextBody;
   const dirty = merged !== file.content;
   const generatedSources = generatedSourcesByFileId[file.id] ?? [];
   const isSourcesBubbleClosed = sourcesBubbleClosedByFileId[file.id] ?? false;
