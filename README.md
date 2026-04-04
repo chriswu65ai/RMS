@@ -1,16 +1,56 @@
 # Stock Research Management System
 
-Stock Research Management System is a Markdown-first app for managing stock research notes with a local SQLite backend.
+Stock Research Management System is a Markdown-first app for managing stock research notes with a local SQLite backend and optional agent-assisted generation.
 
-## Part 1 Scope (Current Baseline)
+## Feature overview
 
-- Local-first runtime using SQLite and local API routes (`/api/bootstrap`, `/api/files`, `/api/folders`).
-- Folder + file manager for stock research notes.
-- Metadata workflow with stock fields (`ticker`, `type`, `date`, `sector`) and recommendation enum (`buy`, `hold`, `sell`, `avoid`, or blank).
-- Template-based note creation and canonical filename pattern:
-  - `YYYY-MM-DD <TICKER>-<TYPE>.md`
-- Markdown editor + preview panes.
-- Import/export support with folder structure parity.
+- Local-first runtime with SQLite-backed API routes (`/api/bootstrap`, `/api/files`, `/api/folders`, and `/api/agent/*`).
+- Folder/file manager for stock research notes with template-driven note creation.
+- Metadata workflow for equity research (`ticker`, `type`, `date`, `sector`, recommendation).
+- Agent settings for provider/model defaults, local Ollama runtime, and web search-assisted generation.
+- Preferred source list for domain weighting/filtering during web search.
+- Activity log for agent calls and outcomes (success, failures, cancellation).
+- Markdown editing, preview, and import/export with folder structure parity.
+
+## Agent web search configuration fields
+
+The web search settings saved in `generation_params.web_search` are:
+
+- `enabled` (`boolean`): turn enrichment on/off.
+- `provider` (`duckduckgo`): active search backend.
+- `mode` (`single | deep`):
+  - `single`: one query using the prompt text.
+  - `deep`: up to three related queries (`base`, `latest updates`, `official source`).
+- `max_results` (`number >= 1`): fetch cap before dedupe/final cap logic.
+- `timeout_ms` (`number >= 1`): total search timeout budget.
+- `safe_search` (`boolean`): stored UI preference for provider-level filtering.
+- `recency` (`any | 7d | 30d | 365d`): stored UI preference for time filtering.
+- `domain_policy` (`open_web | prefer_list | only_list`):
+  - `open_web`: no preferred-source policy applied.
+  - `prefer_list`: open web + preferred-source ranking boosts.
+  - `only_list`: strict domain filtering to enabled preferred sources.
+
+## Privacy and logging
+
+- Runtime data is local. SQLite data is persisted in `/data/researchmanager.db` (compose volume).
+- Search diagnostics are appended to `data/search-runtime.log` for operational debugging.
+- The app **does not** emit raw SQL query logs for normal DB operations.
+- API keys are stored via the local secret store and are not written to the search runtime log.
+
+## Operational troubleshooting
+
+- **No search sources returned**
+  - Confirm web search is enabled in Agent settings.
+  - Check whether `domain_policy=only_list` is over-restrictive for current preferred sources.
+  - Inspect `data/search-runtime.log` for provider errors/timeouts.
+- **Search warning events in the stream**
+  - Generation is fail-open: text generation can continue while search fails.
+  - Validate network egress and retry with lower `max_results` or higher `timeout_ms`.
+- **Ollama connection issues**
+  - Verify local base URL (default: `http://localhost:11434`) and local model availability.
+  - Use “Refresh models” after runtime/model changes.
+- **Model mismatch between default model and local runtime model**
+  - Save defaults again; for Ollama, the selected model is mirrored into runtime model state.
 
 ## Setup (Docker only)
 
@@ -18,7 +58,4 @@ Stock Research Management System is a Markdown-first app for managing stock rese
    ```bash
    docker compose up --build
    ```
-2. Open:
-   - `http://localhost:4173`
-
-SQLite data is persisted to `/data/researchmanager.db` in the compose volume.
+2. Open `http://localhost:4173`.
