@@ -44,20 +44,31 @@ const mkReq = (method: string, url: string, body?: unknown) => {
   return req;
 };
 
-let handleLocalApiRoute: RouteHandler;
+let handleLocalApiRoute: RouteHandler | undefined;
+const testDbPath = path.join(os.tmpdir(), `rms-local-api-${randomUUID()}.db`);
+const testSecureStorePath = path.join(os.tmpdir(), `rms-secure-${randomUUID()}.json`);
+let localApiImportCounter = 0;
 
-const getHandler = async () => {
+const getHandler = async (fresh = false) => {
+  if (fresh) handleLocalApiRoute = undefined;
   if (handleLocalApiRoute) return handleLocalApiRoute;
-  const testDbPath = path.join(os.tmpdir(), `rms-local-api-${randomUUID()}.db`);
   process.env.SQLITE_PATH = testDbPath;
-  process.env.SECURE_STORE_PATH = path.join(os.tmpdir(), `rms-secure-${randomUUID()}.json`);
-  const localApiModule = await import(new URL('./localApi.js', import.meta.url).href);
+  process.env.SECURE_STORE_PATH = testSecureStorePath;
+  const localApiModule = await import(new URL(`./localApi.js?instance=${localApiImportCounter += 1}`, import.meta.url).href);
   handleLocalApiRoute = localApiModule.handleLocalApiRoute as RouteHandler;
   return handleLocalApiRoute;
 };
 
 const callRoute = async (method: string, url: string, body?: unknown) => {
-  const handler = await getHandler();
+  const handler = await getHandler(false);
+  const req = mkReq(method, url, body);
+  const res = new MockResponse();
+  const handled = await handler(req, res);
+  return { handled, status: res.statusCode, body: res.bodyText(), headers: res.headers };
+};
+
+const callRouteAfterRestart = async (method: string, url: string, body?: unknown) => {
+  const handler = await getHandler(true);
   const req = mkReq(method, url, body);
   const res = new MockResponse();
   const handled = await handler(req, res);
@@ -551,6 +562,40 @@ test('agent generate hard-fails when web search tool call fails', async () => {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
   });
+});
+
+test('agent activity log is runtime-only and resets on restart', async () => {
+  await callRoute('DELETE', '/api/agent/activity-log');
+  const clearResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(clearResponse.status, 200);
+  assert.deepEqual(JSON.parse(clearResponse.body), []);
+
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+  });
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    const generateResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(generateResponse.status, 200);
+  } finally {
+    providerRegistry.openai.generate = originalGenerate;
+  }
+
+  const beforeRestart = await callRoute('GET', '/api/agent/activity-log?limit=10');
+  const beforeRows = JSON.parse(beforeRestart.body) as Array<{ status: string }>;
+  assert.equal(beforeRows.some((entry) => entry.status === 'success'), true);
+
+  const afterRestart = await callRouteAfterRestart('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(afterRestart.status, 200);
+  assert.deepEqual(JSON.parse(afterRestart.body), []);
 });
 
 test('agent settings normalize invalid web search values to defaults', async () => {

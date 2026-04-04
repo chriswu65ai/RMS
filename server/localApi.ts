@@ -440,6 +440,8 @@ const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
 const WEB_SEARCH_SAFE_SEARCH_DEFAULT = true;
 const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
+const AGENT_ACTIVITY_BUFFER_MAX = 1000;
+const agentActivityBuffer: AgentActivityLogRow[] = [];
 
 const isWebSearchProvider = (value: unknown): value is WebSearchProvider => value === 'duckduckgo' || value === 'searxng';
 const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
@@ -577,33 +579,10 @@ const getAgentSettings = () => {
 };
 
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
-  execSql(`insert into agent_activity_log (
-    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short, search_warning, search_warning_message, web_search_enabled, tool_calls_attempted, tool_calls_succeeded, search_query_count, source_count, tool_failure_reason
-  ) values (
-    ${sqlEscape(randomUUID())},
-    ${sqlEscape(entry.timestamp)},
-    ${sqlEscape(entry.note_id)},
-    ${sqlEscape(entry.action)},
-    ${sqlEscape(entry.trigger_source)},
-    ${sqlEscape(entry.initiated_by)},
-    ${sqlEscape(entry.provider)},
-    ${sqlEscape(entry.model)},
-    ${sqlEscape(entry.status)},
-    ${sqlEscape(entry.duration_ms)},
-    ${sqlEscape(entry.input_chars)},
-    ${sqlEscape(entry.output_chars)},
-    ${sqlEscape(entry.token_estimate)},
-    ${sqlEscape(entry.cost_estimate_usd)},
-    ${sqlEscape(entry.error_message_short)},
-    ${sqlEscape(entry.search_warning)},
-    ${sqlEscape(entry.search_warning_message)},
-    ${sqlEscape(entry.web_search_enabled)},
-    ${sqlEscape(entry.tool_calls_attempted)},
-    ${sqlEscape(entry.tool_calls_succeeded)},
-    ${sqlEscape(entry.search_query_count)},
-    ${sqlEscape(entry.source_count)},
-    ${sqlEscape(entry.tool_failure_reason)}
-  )`);
+  agentActivityBuffer.push({ id: randomUUID(), ...entry });
+  if (agentActivityBuffer.length > AGENT_ACTIVITY_BUFFER_MAX) {
+    agentActivityBuffer.splice(0, agentActivityBuffer.length - AGENT_ACTIVITY_BUFFER_MAX);
+  }
 };
 
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -739,7 +718,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'GET' && url.startsWith('/api/agent/activity-log')) {
       const parsedUrl = new URL(url, 'http://localhost');
       const limit = Math.min(50, Math.max(1, Number.parseInt(parsedUrl.searchParams.get('limit') ?? '10', 10) || 10));
-      const rows = queryJson<AgentActivityLogRow>(`select * from agent_activity_log order by timestamp desc limit ${limit}`);
+      const rows = agentActivityBuffer.slice(-limit).reverse();
       writeJson(res, 200, rows);
       return true;
     }
@@ -830,7 +809,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     }
 
     if (req.method === 'DELETE' && url === '/api/agent/activity-log') {
-      execSql('delete from agent_activity_log');
+      agentActivityBuffer.length = 0;
       writeJson(res, 200, { error: null });
       return true;
     }
