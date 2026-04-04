@@ -105,3 +105,77 @@ test('dedupe canonical URL strips UTM params and trailing slash', () => {
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.url, 'https://example.com/path');
 });
+
+test('searxng json adapter maps recency and safe search controls', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    return new Response(JSON.stringify({
+      results: [
+        {
+          title: 'Preferred result',
+          url: 'https://docs.example.com/report',
+          content: 'Preferred snippet',
+          publishedDate: '2026-03-01',
+        },
+        {
+          title: 'General result',
+          url: 'https://general.org/insight',
+          content: 'General snippet',
+        },
+      ],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('earnings', {
+      policy: 'prefer_list',
+      safeSearch: false,
+      recency: '30d',
+      domainList: ['example.com'],
+      domainBoost: { 'example.com': 10 },
+      providerConfig: {
+        searxng: {
+          base_url: 'http://localhost:7777',
+          use_json_api: true,
+        },
+      },
+    });
+
+    assert.equal(requestedUrls.length, 1);
+    assert.match(requestedUrls[0] ?? '', /http:\/\/localhost:7777\/search\?/);
+    assert.match(requestedUrls[0] ?? '', /format=json/);
+    assert.match(requestedUrls[0] ?? '', /safesearch=0/);
+    assert.match(requestedUrls[0] ?? '', /time_range=month/);
+    assert.equal(results[0]?.url, 'https://docs.example.com/report');
+    assert.equal(results[0]?.published_at, '2026-03-01');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng adapter applies only_list policy and result cap', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    results: [
+      { title: 'Keep', url: 'https://docs.example.com/one', content: 'one' },
+      { title: 'Drop', url: 'https://other.org/two', content: 'two' },
+      { title: 'Keep 2', url: 'https://sub.example.com/three', content: 'three' },
+    ],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('query', {
+      policy: 'only_list',
+      domainList: ['example.com'],
+      resultCap: 1,
+      providerConfig: { searxng: { use_json_api: true } },
+    });
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.url, 'https://docs.example.com/one');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

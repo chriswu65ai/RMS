@@ -17,10 +17,17 @@ export type SearchOptions = {
   mode?: SearchMode;
   policy?: SearchPolicy;
   resultCap?: number;
+  timeoutMs?: number;
   domainList?: string[];
   domainBoost?: Record<string, number>;
   safeSearch?: boolean;
   recency?: 'any' | '7d' | '30d' | '365d';
+  providerConfig?: {
+    searxng?: {
+      base_url?: string;
+      use_json_api?: boolean;
+    };
+  };
 };
 
 export interface SearchProviderAdapter {
@@ -115,6 +122,29 @@ const applyDomainBoosts = (results: SearchResult[], boostMap: Record<string, num
 
 const enforceResultCap = (results: SearchResult[], resultCap?: number): SearchResult[] => results.slice(0, sanitizeResultCap(resultCap));
 
+
+
+const SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
+const SEARXNG_USE_JSON_API_DEFAULT = true;
+
+const normalizeSearxngBaseUrl = (value?: string): string => {
+  if (typeof value !== 'string' || !value.trim()) return SEARXNG_BASE_URL_DEFAULT;
+  const trimmed = value.trim();
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return SEARXNG_BASE_URL_DEFAULT;
+  }
+};
+
+const mapRecencyToSearxngTimeRange = (recency?: SearchOptions['recency']): string | null => {
+  if (recency === '7d') return 'week';
+  if (recency === '30d') return 'month';
+  if (recency === '365d') return 'year';
+  return null;
+};
+
 const decodeHtml = (value: string): string => value
   .replace(/&amp;/g, '&')
   .replace(/&lt;/g, '<')
@@ -165,6 +195,71 @@ class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
   }
 }
 
+class SearxngSearchAdapter implements SearchProviderAdapter {
+  async search(query: string, options: SearchOptions = {}, signal?: AbortSignal): Promise<SearchResult[]> {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return [];
+
+    const baseUrl = normalizeSearxngBaseUrl(options.providerConfig?.searxng?.base_url);
+    const useJsonApi = options.providerConfig?.searxng?.use_json_api ?? SEARXNG_USE_JSON_API_DEFAULT;
+    const requestUrl = new URL('/search', `${baseUrl}/`);
+    requestUrl.searchParams.set('q', trimmedQuery);
+    requestUrl.searchParams.set('safesearch', options.safeSearch === false ? '0' : '1');
+    if (useJsonApi) requestUrl.searchParams.set('format', 'json');
+    const timeRange = mapRecencyToSearxngTimeRange(options.recency);
+    if (timeRange) requestUrl.searchParams.set('time_range', timeRange);
+
+    const response = await fetch(requestUrl, {
+      method: 'GET',
+      signal,
+      headers: {
+        Accept: useJsonApi ? 'application/json' : 'text/html',
+      },
+    });
+
+    if (!response.ok) throw new Error('SearXNG search failed.');
+
+    let rawResults: SearchResult[] = [];
+    if (useJsonApi) {
+      const payload = await response.json() as {
+        results?: Array<{
+          title?: string;
+          url?: string;
+          content?: string;
+          publishedDate?: string;
+        }>;
+      };
+      rawResults = (payload.results ?? []).map((result, index) => ({
+        title: (result.title ?? '').trim() || (result.url ?? '').trim(),
+        url: (result.url ?? '').trim(),
+        snippet: (result.content ?? '').trim(),
+        provider: 'searxng' as const,
+        score: Math.max(0, 1 - (index * 0.01)),
+        ...(result.publishedDate ? { published_at: result.publishedDate } : {}),
+      })).filter((result) => Boolean(result.url));
+    } else {
+      const html = await response.text();
+      const matches = Array.from(html.matchAll(/<h3[^>]*class="[^"]*result_header[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<p[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/p>/g));
+      rawResults = matches.map((match, index) => ({
+        title: decodeHtml(match[2].replace(/<[^>]+>/g, '').trim()),
+        url: decodeHtml(match[1].trim()),
+        snippet: decodeHtml(match[3].replace(/<[^>]+>/g, '').trim()),
+        provider: 'searxng' as const,
+        score: Math.max(0, 1 - (index * 0.01)),
+      }));
+    }
+
+    const policy = options.policy ?? 'open_web';
+    const deduped = dedupeByCanonicalUrl(rawResults);
+    const domainFiltered = applyDomainPolicy(deduped, policy, options.domainList);
+    const boosted = applyDomainBoosts(
+      domainFiltered,
+      policy === 'open_web' || policy === 'prefer_list' ? options.domainBoost : undefined,
+    );
+    return enforceResultCap(boosted, options.resultCap);
+  }
+}
+
 class UnimplementedSearchAdapter implements SearchProviderAdapter {
   constructor(private readonly provider: Exclude<WebSearchProvider, 'duckduckgo'>) {}
 
@@ -175,11 +270,11 @@ class UnimplementedSearchAdapter implements SearchProviderAdapter {
 
 export const searchProviderRegistry: Record<WebSearchProvider, SearchProviderAdapter> = {
   duckduckgo: new DuckDuckGoSearchAdapter(),
-  searxng: new UnimplementedSearchAdapter('searxng'),
+  searxng: new SearxngSearchAdapter(),
   google: new UnimplementedSearchAdapter('google'),
 };
 
-export const searchProviderPlaceholders: ReadonlyArray<Exclude<WebSearchProvider, 'duckduckgo'>> = ['searxng', 'google'];
+export const searchProviderPlaceholders: ReadonlyArray<Exclude<WebSearchProvider, 'duckduckgo' | 'searxng'>> = ['google'];
 
 export const searchUtils = {
   canonicalizeUrl,

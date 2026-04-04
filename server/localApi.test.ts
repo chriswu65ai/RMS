@@ -279,7 +279,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
       temperature: 0.2,
       web_search: {
         enabled: true,
-        provider: 'duckduckgo',
+        provider: 'searxng',
         mode: 'deep',
         safe_search: false,
         recency: '30d',
@@ -307,7 +307,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
     };
   };
   assert.equal(payload.generation_params?.web_search?.enabled, true);
-  assert.equal(payload.generation_params?.web_search?.provider, 'duckduckgo');
+  assert.equal(payload.generation_params?.web_search?.provider, 'searxng');
   assert.equal(payload.generation_params?.web_search?.mode, 'deep');
   assert.equal(payload.generation_params?.web_search?.max_results, 5);
   assert.equal(payload.generation_params?.web_search?.timeout_ms, 5000);
@@ -315,6 +315,8 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.recency, '30d');
   assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
   assert.equal(payload.generation_params?.web_search?.source_citation, false);
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://localhost:8080');
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, true);
 });
 
 test('preferred sources create normalizes domain and supports listing', async () => {
@@ -525,9 +527,57 @@ test('agent settings normalize invalid web search values to defaults', async () 
     recency: 'any',
     domain_policy: 'open_web',
     source_citation: false,
+    provider_config: {
+      searxng: {
+        base_url: 'http://localhost:8080',
+        use_json_api: true,
+      },
+    },
   });
 });
 
+
+
+test('agent settings normalize and persist searxng provider config', async () => {
+  const saveResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        provider: 'searxng',
+        mode: 'single',
+        provider_config: {
+          searxng: {
+            base_url: 'http://127.0.0.1:9999/',
+            use_json_api: false,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(saveResponse.status, 200);
+
+  const settingsResponse = await callRoute('GET', '/api/agent/settings');
+  assert.equal(settingsResponse.status, 200);
+  const payload = JSON.parse(settingsResponse.body) as {
+    generation_params?: {
+      web_search?: {
+        provider?: string;
+        provider_config?: {
+          searxng?: {
+            base_url?: string;
+            use_json_api?: boolean;
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(payload.generation_params?.web_search?.provider, 'searxng');
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:9999/');
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, false);
+});
 test('agent generate routes single and deep mode with expected query fan-out', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
