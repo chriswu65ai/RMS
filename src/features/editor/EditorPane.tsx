@@ -55,7 +55,8 @@ export function EditorPane() {
   const [defaultModel, setDefaultModel] = useState('');
   const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
-  const [generatedSources, setGeneratedSources] = useState<StreamSource[]>([]);
+  const [generatedSourcesByFileId, setGeneratedSourcesByFileId] = useState<Record<string, StreamSource[]>>({});
+  const [sourcesBubbleClosedByFileId, setSourcesBubbleClosedByFileId] = useState<Record<string, boolean>>({});
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -171,9 +172,8 @@ export function EditorPane() {
   const merged = composeMarkdown(frontmatter, body);
   const editorValue = showMetadata ? merged : body;
   const dirty = merged !== file.content;
-  const toVisibleEditorText = (nextBody: string, nextFrontmatter: FrontmatterModel) => (
-    showMetadata ? composeMarkdown(nextFrontmatter, nextBody) : nextBody
-  );
+  const generatedSources = generatedSourcesByFileId[file.id] ?? [];
+  const isSourcesBubbleClosed = sourcesBubbleClosedByFileId[file.id] ?? false;
 
   const getLineText = () => {
     const view = viewRef.current;
@@ -525,7 +525,8 @@ export function EditorPane() {
     pendingHistoryBaselineRef.current = null;
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    setGeneratedSources([]);
+    setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: [] }));
+    setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
     setSearchWarningMessage(null);
     markGenerateRunning(file.id);
     setGenerateState('running');
@@ -544,7 +545,8 @@ export function EditorPane() {
           updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'generate');
         },
         onSources: (sources) => {
-          setGeneratedSources(sources);
+          setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: sources }));
+          setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
         },
         onSearchWarning: (message) => {
           setSearchWarningMessage(message);
@@ -700,9 +702,20 @@ export function EditorPane() {
               <span>{searchWarningMessage}</span>
             </div>
           )}
-          {generatedSources.length > 0 && (
+          {generatedSources.length > 0 && !isSourcesBubbleClosed && (
             <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              <p className="font-semibold text-slate-900">Web sources</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-slate-900">Sources</p>
+                <button
+                  type="button"
+                  className="rounded border border-slate-300 p-0.5 text-slate-500 transition-colors hover:text-slate-700"
+                  aria-label="Close sources"
+                  title="Close sources"
+                  onClick={() => setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }))}
+                >
+                  <X size={12} />
+                </button>
+              </div>
               <ul className="mt-1 space-y-1">
                 {generatedSources.map((source, index) => (
                   <li key={`${source.url}-${index}`}>
