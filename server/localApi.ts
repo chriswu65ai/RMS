@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider } from './agentProviders';
+import { searchProviderRegistry, searchUtils, type SearchResult } from './searchProviders';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -81,6 +82,18 @@ type AgentGenerationParams = {
     domain_policy: WebSearchDomainPolicy;
   };
 } | null;
+
+type PreparedWebSearchContext = {
+  enabled: boolean;
+  provider: WebSearchProvider;
+  mode: WebSearchMode;
+  queryCount: number;
+  sourceCount: number;
+  warning?: {
+    code: 'search_failed';
+    message: string;
+  };
+};
 
 type OllamaRuntimeConfig = {
   baseUrl: string;
@@ -407,6 +420,35 @@ const normalizePreferredSourceRow = (row: PreferredSourceRow) => ({
   ...row,
   enabled: Boolean(row.enabled),
 });
+
+const buildWebSearchQueries = (inputText: string, mode: WebSearchMode): string[] => {
+  const base = inputText.trim();
+  if (!base) return [];
+  if (mode === 'single') return [base];
+  return Array.from(new Set([
+    base,
+    `${base} latest updates`,
+    `${base} official source`,
+  ])).slice(0, 3);
+};
+
+const buildSourceContextBlock = (queries: string[], sources: SearchResult[]): string => {
+  const queryLines = queries.map((query, index) => `${index + 1}. ${query}`);
+  const sourceLines = sources.map((source, index) => {
+    const publishedAt = source.published_at ? ` | published_at=${source.published_at}` : '';
+    return `${index + 1}. title="${source.title}" | url=${source.url}${publishedAt}\n   snippet="${source.snippet}"`;
+  });
+  return [
+    '<web_search_context>',
+    '<queries>',
+    ...queryLines,
+    '</queries>',
+    '<sources>',
+    ...sourceLines,
+    '</sources>',
+    '</web_search_context>',
+  ].join('\n');
+};
 
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
@@ -787,11 +829,83 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const controller = new AbortController();
       req.on('aborted', () => controller.abort());
       try {
+        const preferredSources = queryJson<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
+        const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
+          enabled: false,
+          provider: WEB_SEARCH_PROVIDER,
+          mode: WEB_SEARCH_MODE_DEFAULT,
+          max_results: WEB_SEARCH_MAX_RESULTS_DEFAULT,
+          timeout_ms: WEB_SEARCH_TIMEOUT_MS_DEFAULT,
+          safe_search: WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+          recency: WEB_SEARCH_RECENCY_DEFAULT,
+          domain_policy: WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
+        };
+        const webSearchMetadata: PreparedWebSearchContext = {
+          enabled: Boolean(normalizedWebSearchConfig.enabled),
+          provider: normalizedWebSearchConfig.provider,
+          mode: normalizedWebSearchConfig.mode,
+          queryCount: 0,
+          sourceCount: 0,
+        };
+        let preparedInputText = inputText;
+        if (normalizedWebSearchConfig.enabled) {
+          const queries = buildWebSearchQueries(inputText, normalizedWebSearchConfig.mode);
+          const domainList = preferredSources.map((source) => source.domain.toLowerCase());
+          const domainBoost = preferredSources.reduce<Record<string, number>>((acc, source) => {
+            acc[source.domain.toLowerCase()] = source.weight;
+            return acc;
+          }, {});
+          const searchTimeoutController = new AbortController();
+          const timeoutId = setTimeout(() => searchTimeoutController.abort(), normalizedWebSearchConfig.timeout_ms);
+          controller.signal.addEventListener('abort', () => searchTimeoutController.abort(), { once: true });
+          try {
+            const allResults: SearchResult[] = [];
+            let remainingBudget = Math.max(1, normalizedWebSearchConfig.max_results);
+            for (const query of queries) {
+              if (remainingBudget <= 0) break;
+              const perQueryCap = normalizedWebSearchConfig.mode === 'single'
+                ? remainingBudget
+                : Math.max(1, Math.ceil(remainingBudget / 2));
+              const queryResults = await searchProviderRegistry[normalizedWebSearchConfig.provider].search(query, {
+                mode: normalizedWebSearchConfig.mode,
+                policy: normalizedWebSearchConfig.domain_policy,
+                resultCap: perQueryCap,
+                domainList,
+                domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
+                  ? domainBoost
+                  : undefined,
+              }, searchTimeoutController.signal);
+              allResults.push(...queryResults);
+              remainingBudget = Math.max(0, remainingBudget - queryResults.length);
+            }
+            const dedupedSources = searchUtils.dedupeByCanonicalUrl(allResults);
+            const finalCap = normalizedWebSearchConfig.mode === 'deep'
+              ? Math.min(8, Math.max(1, normalizedWebSearchConfig.max_results))
+              : Math.max(1, normalizedWebSearchConfig.max_results);
+            const finalSources = searchUtils.enforceResultCap(dedupedSources, finalCap);
+            webSearchMetadata.queryCount = queries.length;
+            webSearchMetadata.sourceCount = finalSources.length;
+            if (finalSources.length > 0) {
+              const sourceContextBlock = buildSourceContextBlock(queries, finalSources);
+              preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Use web_search_context when relevant and cite source URLs in your answer.</web_search_context_note>`;
+            }
+          } catch (error) {
+            webSearchMetadata.warning = {
+              code: 'search_failed',
+              message: error instanceof Error ? error.message : 'Web search failed.',
+            };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        }
         beginNdjson(res);
         writeNdjson(res, { type: 'status', stage: 'started' });
+        if (webSearchMetadata.warning) {
+          writeNdjson(res, { type: 'status', stage: 'web_search_warning', web_search: webSearchMetadata });
+        }
         const result = await providerRegistry[provider].generate({
           model: resolvedModel,
-          inputText,
+          inputText: preparedInputText,
           generationParams: {
             ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
             ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
@@ -815,7 +929,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
         });
-        writeNdjson(res, { type: 'done', ...result });
+        writeNdjson(res, { type: 'done', ...result, web_search: webSearchMetadata });
         res.end();
       } catch (error) {
         const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
