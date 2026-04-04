@@ -162,6 +162,52 @@ test('ollama generate uses unified runtime model and base URL from settings', as
   }
 });
 
+test('ollama generate uses model selected in subsequent defaults save instead of stale llama3.2:latest', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'qwen2.5:14b',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+
+  let capturedModel = '';
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generate = async (request) => {
+    capturedModel = request.model;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'payload-model-should-be-ignored',
+      input_text: 'hello',
+      note_id: 'note-2',
+    });
+    assert.equal(response.status, 200);
+    assert.equal(capturedModel, 'qwen2.5:14b');
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('non-ollama default model does not overwrite saved local_connection.model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
