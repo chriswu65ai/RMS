@@ -32,6 +32,11 @@ export type ModelCatalogReasonCode =
   | 'empty_response'
   | 'ollama_unreachable';
 
+export type WebSearchProvider = 'duckduckgo';
+export type WebSearchMode = 'single' | 'deep';
+export type WebSearchRecency = 'any' | '7d' | '30d' | '365d';
+export type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
+
 export type AgentSettings = {
   default_provider: AgentProvider;
   default_model: string;
@@ -42,6 +47,16 @@ export type AgentSettings = {
       base_url: string;
       model: string;
       B: number;
+    };
+    web_search?: {
+      enabled: boolean;
+      provider: WebSearchProvider;
+      mode: WebSearchMode;
+      max_results: number;
+      timeout_ms: number;
+      safe_search: boolean;
+      recency: WebSearchRecency;
+      domain_policy: WebSearchDomainPolicy;
     };
   } | null;
 };
