@@ -450,6 +450,14 @@ const buildSourceContextBlock = (queries: string[], sources: SearchResult[]): st
   ].join('\n');
 };
 
+const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((source) => ({
+  title: source.title,
+  url: source.url,
+  snippet: source.snippet,
+  provider: source.provider,
+  ...(source.published_at ? { published_at: source.published_at } : {}),
+}));
+
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
   const next = raw as Record<string, unknown>;
@@ -847,6 +855,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           queryCount: 0,
           sourceCount: 0,
         };
+        let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
         let preparedInputText = inputText;
         if (normalizedWebSearchConfig.enabled) {
           const queries = buildWebSearchQueries(inputText, normalizedWebSearchConfig.mode);
@@ -883,6 +892,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               ? Math.min(8, Math.max(1, normalizedWebSearchConfig.max_results))
               : Math.max(1, normalizedWebSearchConfig.max_results);
             const finalSources = searchUtils.enforceResultCap(dedupedSources, finalCap);
+            normalizedSources = normalizeStreamingSources(finalSources);
             webSearchMetadata.queryCount = queries.length;
             webSearchMetadata.sourceCount = finalSources.length;
             if (finalSources.length > 0) {
@@ -900,7 +910,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }
         beginNdjson(res);
         writeNdjson(res, { type: 'status', stage: 'started' });
+        if (normalizedSources.length > 0) {
+          writeNdjson(res, { type: 'sources', sources: normalizedSources });
+        }
         if (webSearchMetadata.warning) {
+          writeNdjson(res, { type: 'search_warning', message: webSearchMetadata.warning.message });
           writeNdjson(res, { type: 'status', stage: 'web_search_warning', web_search: webSearchMetadata });
         }
         const result = await providerRegistry[provider].generate({

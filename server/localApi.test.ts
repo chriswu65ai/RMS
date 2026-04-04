@@ -412,7 +412,11 @@ test('agent generate enriches input with deep web search context and caps source
     });
     assert.equal(response.status, 200);
     assert.match(receivedInput, /<web_search_context>/);
-    const doneFrame = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.type === 'done');
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    const sourcesFrame = frames.find((line) => line.type === 'sources') as { sources?: Array<{ url?: string }> } | undefined;
+    assert.equal(Array.isArray(sourcesFrame?.sources), true);
+    assert.equal((sourcesFrame?.sources?.length ?? 0) <= 8, true);
+    const doneFrame = frames.find((line) => line.type === 'done');
     assert.equal((doneFrame?.web_search as { sourceCount?: number } | undefined)?.sourceCount, 8);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
@@ -452,6 +456,7 @@ test('agent generate fails open when web search errors', async () => {
     });
     assert.equal(response.status, 200);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(frames.some((line) => line.type === 'search_warning' && line.message === 'search is down'), true);
     assert.equal(frames.some((line) => line.type === 'status' && line.stage === 'web_search_warning'), true);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
