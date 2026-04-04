@@ -64,6 +64,38 @@ const callRoute = async (method: string, url: string, body?: unknown) => {
   return { handled, status: res.statusCode, body: res.bodyText(), headers: res.headers };
 };
 
+const withOpenAiToolCalls = async <T>(
+  queries: string[],
+  callback: () => Promise<T>,
+): Promise<T> => {
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  const originalFollowup = providerRegistry.openai.generateToolFollowupTurn;
+  providerRegistry.openai.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: queries[0]
+      ? [{ id: 'tool-1', name: 'web_search', arguments: { query: queries[0] } }]
+      : [],
+  });
+  providerRegistry.openai.generateToolFollowupTurn = async (request) => {
+    const index = request.toolResults.length;
+    const nextQuery = queries[index];
+    return {
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: nextQuery
+        ? [{ id: `tool-${index + 1}`, name: 'web_search', arguments: { query: nextQuery } }]
+        : [],
+    };
+  };
+  try {
+    return await callback();
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+    providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
+  }
+};
+
 test('saving ollama defaults keeps default_model and local_connection.model in sync', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
@@ -249,6 +281,27 @@ test('saving settings rejects enabled web search when tool-capable model is not 
   assert.match(payload.error?.message ?? '', /tool calling support/i);
 });
 
+test('generate rejects when web search is enabled but provider/model lacks tool-calling support', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  const response = await callRoute('POST', '/api/agent/generate', {
+    provider: 'openai',
+    model: 'text-embedding-3-large',
+    input_text: 'hello',
+  });
+  assert.equal(response.status, 400);
+  const payload = JSON.parse(response.body) as { error?: { message?: string } };
+  assert.match(payload.error?.message ?? '', /tool calling support/i);
+});
+
 test('ollama model list endpoint mirrors installed list and selected model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
@@ -428,7 +481,7 @@ test('agent generate enriches input with deep web search context and caps source
     return { outputText: 'ok', latencyMs: 1 };
   };
 
-  try {
+  await withOpenAiToolCalls(['Analyze ACME earnings', 'Analyze ACME earnings latest updates'], async () => {
     const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
     assert.equal(credentialSave.status, 200);
     const response = await callRoute('POST', '/api/agent/generate', {
@@ -437,8 +490,8 @@ test('agent generate enriches input with deep web search context and caps source
       input_text: 'Analyze ACME earnings',
     });
     assert.equal(response.status, 200);
-    assert.match(receivedInput, /<web_search_context>/);
-    assert.match(receivedInput, /Strict citation mode/);
+    assert.match(receivedInput, /<tool_outputs>/);
+    assert.match(receivedInput, /Citation mode is REQUIRED/);
     assert.match(receivedInput, /\[1\]/);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const sourcesFrame = frames.find((line) => line.type === 'sources') as { sources?: Array<{ url?: string }> } | undefined;
@@ -446,13 +499,13 @@ test('agent generate enriches input with deep web search context and caps source
     assert.equal((sourcesFrame?.sources?.length ?? 0) <= 8, true);
     const doneFrame = frames.find((line) => line.type === 'done');
     assert.equal((doneFrame?.web_search as { sourceCount?: number } | undefined)?.sourceCount, 8);
-  } finally {
+  }).finally(() => {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
-  }
+  });
 });
 
-test('agent generate fails open when web search errors', async () => {
+test('agent generate hard-fails when web search tool call fails', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
     default_model: 'gpt-4.1',
@@ -474,7 +527,7 @@ test('agent generate fails open when web search errors', async () => {
   };
   providerRegistry.openai.generate = async (request) => ({ outputText: request.inputText, latencyMs: 1 });
 
-  try {
+  await withOpenAiToolCalls(['hello'], async () => {
     const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
     assert.equal(credentialSave.status, 200);
     const response = await callRoute('POST', '/api/agent/generate', {
@@ -484,22 +537,20 @@ test('agent generate fails open when web search errors', async () => {
     });
     assert.equal(response.status, 200);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.equal(frames.some((line) => line.type === 'search_warning' && line.message === 'search is down'), true);
-    assert.equal(frames.some((line) => line.type === 'status' && line.stage === 'web_search_warning'), true);
+    assert.equal(frames.some((line) => line.type === 'error' && line.message === 'search is down'), true);
+    assert.equal(frames.some((line) => line.type === 'done'), false);
     const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
     assert.equal(activityResponse.status, 200);
     const activity = JSON.parse(activityResponse.body) as Array<{
       status: string;
-      search_warning: number;
-      search_warning_message: string | null;
+      tool_failure_reason: string | null;
     }>;
-    const successEntry = activity.find((entry) => entry.status === 'success');
-    assert.equal(successEntry?.search_warning, 1);
-    assert.equal(successEntry?.search_warning_message, 'search is down');
-  } finally {
+    const failedEntry = activity.find((entry) => entry.status === 'failed');
+    assert.equal(failedEntry?.tool_failure_reason, 'search is down');
+  }).finally(() => {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
-  }
+  });
 });
 
 test('agent settings normalize invalid web search values to defaults', async () => {
@@ -639,11 +690,11 @@ test('agent generate routes single and deep mode with expected query fan-out', a
         },
       },
     });
-    const singleResponse = await callRoute('POST', '/api/agent/generate', {
+    const singleResponse = await withOpenAiToolCalls(['NVIDIA guidance', 'NVIDIA guidance latest updates'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'NVIDIA guidance',
-    });
+    }));
     assert.equal(singleResponse.status, 200);
     const singleFrames = singleResponse.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const singleDone = singleFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
@@ -672,19 +723,19 @@ test('agent generate routes single and deep mode with expected query fan-out', a
         },
       },
     });
-    const deepResponse = await callRoute('POST', '/api/agent/generate', {
+    const deepResponse = await withOpenAiToolCalls(['NVIDIA guidance', 'NVIDIA guidance latest updates', 'NVIDIA guidance official source'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'NVIDIA guidance',
-    });
+    }));
     assert.equal(deepResponse.status, 200);
     const deepFrames = deepResponse.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const deepDone = deepFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
-    assert.deepEqual(seenQueries, ['NVIDIA guidance', 'NVIDIA guidance latest updates', 'NVIDIA guidance official source']);
+    assert.deepEqual(seenQueries, ['NVIDIA guidance', 'NVIDIA guidance latest updates']);
     assert.deepEqual(seenModes, ['deep', 'deep', 'deep']);
     assert.deepEqual(seenSafeSearch, [true, true, true]);
     assert.deepEqual(seenRecency, ['7d', '7d', '7d']);
-    assert.equal(deepDone?.web_search?.queryCount, 3);
+    assert.equal(deepDone?.web_search?.queryCount, 2);
 
     seenQueries.length = 0;
     seenModes.length = 0;
@@ -725,11 +776,11 @@ test('agent generate routes single and deep mode with expected query fan-out', a
         },
       },
     });
-    const deepEarlyBreakResponse = await callRoute('POST', '/api/agent/generate', {
+    const deepEarlyBreakResponse = await withOpenAiToolCalls(['NVIDIA guidance'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'NVIDIA guidance',
-    });
+    }));
     assert.equal(deepEarlyBreakResponse.status, 200);
     const deepEarlyBreakFrames = deepEarlyBreakResponse.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const deepEarlyBreakDone = deepEarlyBreakFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
@@ -795,11 +846,11 @@ test('agent generate forwards web search controls for duckduckgo and searxng pro
         },
       },
     });
-    const duckResponse = await callRoute('POST', '/api/agent/generate', {
+    const duckResponse = await withOpenAiToolCalls(['ACME'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'ACME',
-    });
+    }));
     assert.equal(duckResponse.status, 200);
     assert.deepEqual(seenDuckOptions, [{
       mode: 'single',
@@ -832,16 +883,16 @@ test('agent generate forwards web search controls for duckduckgo and searxng pro
         },
       },
     });
-    const searxngResponse = await callRoute('POST', '/api/agent/generate', {
+    const searxngResponse = await withOpenAiToolCalls(['ACME', 'ACME latest updates', 'ACME official source'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'ACME',
-    });
+    }));
     assert.equal(searxngResponse.status, 200);
     assert.deepEqual(seenSearxngOptions, [
       {
         mode: 'deep',
-        resultCap: 3,
+        resultCap: 6,
         timeoutMs: 4100,
         safeSearch: true,
         recency: '7d',
@@ -849,15 +900,7 @@ test('agent generate forwards web search controls for duckduckgo and searxng pro
       },
       {
         mode: 'deep',
-        resultCap: 3,
-        timeoutMs: 4100,
-        safeSearch: true,
-        recency: '7d',
-        policy: 'prefer_list',
-      },
-      {
-        mode: 'deep',
-        resultCap: 2,
+        resultCap: 6,
         timeoutMs: 4100,
         safeSearch: true,
         recency: '7d',
@@ -889,29 +932,31 @@ test('agent generate emits stream sources before done and warning frames on sear
     searchProviderRegistry.duckduckgo.search = async () => ([
       { title: 'A', url: 'https://example.com/a', snippet: 'A', provider: 'duckduckgo' },
     ]);
-    const successResponse = await callRoute('POST', '/api/agent/generate', {
+    const successResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello',
-    });
+    }));
     assert.equal(successResponse.status, 200);
     const successFrames = successResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
     assert.equal(successFrames[0]?.type, 'status');
+    assert.equal(successFrames.some((frame) => frame.type === 'tool_call_started'), true);
+    assert.equal(successFrames.some((frame) => frame.type === 'tool_call_result'), true);
     assert.equal(successFrames.some((frame) => frame.type === 'sources'), true);
     assert.equal(successFrames.findIndex((frame) => frame.type === 'sources') < successFrames.findIndex((frame) => frame.type === 'done'), true);
 
     searchProviderRegistry.duckduckgo.search = async () => {
       throw new Error('simulated failure');
     };
-    const warningResponse = await callRoute('POST', '/api/agent/generate', {
+    const warningResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello',
-    });
+    }));
     assert.equal(warningResponse.status, 200);
-    const warningFrames = warningResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string; stage?: string });
-    assert.equal(warningFrames.some((frame) => frame.type === 'search_warning' && frame.message === 'simulated failure'), true);
-    assert.equal(warningFrames.some((frame) => frame.type === 'status' && frame.stage === 'web_search_warning'), true);
+    const warningFrames = warningResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string; stage?: string; reason?: string });
+    assert.equal(warningFrames.some((frame) => frame.type === 'tool_call_failed' && frame.reason === 'simulated failure'), true);
+    assert.equal(warningFrames.some((frame) => frame.type === 'error' && frame.message === 'simulated failure'), true);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
@@ -948,13 +993,13 @@ test('agent generate only injects citation instruction and appends Sources block
         },
       },
     });
-    const disabledResponse = await callRoute('POST', '/api/agent/generate', {
+    const disabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello',
-    });
+    }));
     assert.equal(disabledResponse.status, 200);
-    assert.doesNotMatch(receivedInput, /Strict citation mode/);
+    assert.doesNotMatch(receivedInput, /Citation mode is REQUIRED/);
     const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
     const disabledDone = disabledFrames.find((frame) => frame.type === 'done');
     assert.equal(disabledDone?.outputText, 'Summary body');
@@ -972,13 +1017,13 @@ test('agent generate only injects citation instruction and appends Sources block
         },
       },
     });
-    const enabledResponse = await callRoute('POST', '/api/agent/generate', {
+    const enabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello',
-    });
+    }));
     assert.equal(enabledResponse.status, 200);
-    assert.match(receivedInput, /Strict citation mode/);
+    assert.match(receivedInput, /Citation mode is REQUIRED/);
     const enabledFrames = enabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
     const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
     assert.match(enabledDone?.outputText ?? '', /Summary body\n\n---\nSources\n1\. \[Example Title\]\(https:\/\/example\.com\/a\)\n2\. \[https:\/\/example\.com\/b\]\(https:\/\/example\.com\/b\)\n---$/);

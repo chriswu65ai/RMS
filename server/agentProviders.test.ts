@@ -140,3 +140,61 @@ test('supportsToolCalling requires a non-empty model id', () => {
   assert.equal(supportsToolCalling('openai', ''), false);
   assert.equal(supportsToolCalling('openai', 'gpt-4.1-mini'), true);
 });
+
+test('openai tool first turn parses tool call payload and followup forwards tool results', async () => {
+  const seenBodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    seenBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    return jsonResponse(200, {
+      choices: [{
+        message: {
+          tool_calls: [{ id: 'call-1', function: { name: 'web_search', arguments: '{"query":"nvidia earnings"}' } }],
+          content: 'tool requested',
+        },
+      }],
+    });
+  };
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.openai.generateToolFirstTurn({ model: 'gpt-4.1', inputText: 'Find latest', tools: [tool] }, 'test-key');
+  assert.equal(first.toolCalls[0]?.name, 'web_search');
+  assert.deepEqual(first.toolCalls[0]?.arguments, { query: 'nvidia earnings' });
+
+  await providerRegistry.openai.generateToolFollowupTurn({
+    model: 'gpt-4.1',
+    inputText: 'Find latest',
+    tools: [tool],
+    toolCalls: [{ id: 'call-1', name: 'web_search', arguments: { query: 'nvidia earnings' } }],
+    toolResults: [{ tool_call_id: 'call-1', name: 'web_search', result: '[]' }],
+  }, 'test-key');
+
+  const followupMessages = seenBodies[1]?.messages as Array<Record<string, unknown>>;
+  assert.equal(Array.isArray(followupMessages), true);
+  assert.equal(followupMessages.some((entry) => entry.role === 'tool'), true);
+});
+
+test('anthropic tool parsing returns tool_use calls', async () => {
+  globalThis.fetch = async () => jsonResponse(200, {
+    content: [
+      { type: 'text', text: 'checking...' },
+      { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'latest sec filing' } },
+    ],
+  });
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.anthropic.generateToolFirstTurn({ model: 'claude-3-5-sonnet-latest', inputText: 'Find latest', tools: [tool] }, 'test-key');
+  assert.equal(first.toolCalls.length, 1);
+  assert.equal(first.toolCalls[0]?.id, 'toolu_1');
+  assert.deepEqual(first.toolCalls[0]?.arguments, { query: 'latest sec filing' });
+});
+
+test('ollama tool parsing extracts function arguments object', async () => {
+  globalThis.fetch = async () => jsonResponse(200, {
+    message: {
+      content: 'tool request',
+      tool_calls: [{ function: { name: 'web_search', arguments: '{"query":"amd outlook"}' } }],
+    },
+  });
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.ollama.generateToolFirstTurn({ model: 'llama3.1:8b', inputText: 'Find latest', tools: [tool], generationParams: { baseUrl: 'http://localhost:11434' } }, '');
+  assert.equal(first.toolCalls[0]?.name, 'web_search');
+  assert.deepEqual(first.toolCalls[0]?.arguments, { query: 'amd outlook' });
+});

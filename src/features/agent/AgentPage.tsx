@@ -412,6 +412,7 @@ export function AgentPage() {
                   {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                 </select>
                 <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
+                <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Max results</span>

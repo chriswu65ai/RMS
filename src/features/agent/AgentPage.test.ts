@@ -5,6 +5,7 @@ import {
   buildWebSearchSettingsPayload,
   getWebSearchSourceCitationDefault,
   shouldShowSearxngConfigFields,
+  WEB_SEARCH_MODE_OPTIONS,
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
 import { getWebSearchWarningBannerMessage } from './activityWarnings.js';
@@ -145,6 +146,34 @@ test('web search provider dropdown options include SearXNG', () => {
     { value: 'duckduckgo', label: 'DuckDuckGo' },
     { value: 'searxng', label: 'SearXNG' },
   ]);
+});
+
+test('web search mode labels are renamed and helpers clarify pass count behavior', () => {
+  assert.deepEqual(WEB_SEARCH_MODE_OPTIONS, [
+    { value: 'single', label: 'Single search', helper: 'Run one web_search tool call.' },
+    { value: 'deep', label: 'Extended search', helper: 'Allow up to two web_search tool calls for broader coverage.' },
+  ]);
+});
+
+test('web search mode persists across save payload builds', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'duckduckgo',
+    mode: 'deep',
+    maxResults: '5',
+    timeoutMs: '3000',
+    safeSearch: true,
+    recency: '7d',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://localhost:8080',
+    searxngUseJsonApi: true,
+  });
+  assert.equal(payload.generation_params?.web_search?.mode, 'deep');
 });
 
 test('SearXNG config controls show only when provider is searxng', () => {
