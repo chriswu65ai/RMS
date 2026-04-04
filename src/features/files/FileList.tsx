@@ -94,7 +94,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     const fileNameInput = await dialog.prompt(
       title,
       '',
-      'File name (.md optional). YYYY-MM-DD TICKER-type.md auto-appends metadata.',
+      'File name (.md optional).\nYYYY-MM-DD TICKER-type.md auto-appends metadata.',
       {
       validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
       },

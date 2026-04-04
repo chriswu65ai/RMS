@@ -50,7 +50,6 @@ export function EditorPane() {
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
   const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
   const [defaultModel, setDefaultModel] = useState('');
-  const [ollamaRuntimeSummary, setOllamaRuntimeSummary] = useState<{ baseUrl: string; model: string }>({ baseUrl: 'http://localhost:11434', model: '' });
   const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -119,15 +118,10 @@ export function EditorPane() {
         setDefaultProvider(settings.default_provider);
         const canonicalOllamaModel = settings.generation_params?.local_connection?.model?.trim() || settings.default_model;
         setDefaultModel(settings.default_provider === 'ollama' ? canonicalOllamaModel : settings.default_model);
-        setOllamaRuntimeSummary({
-          baseUrl: settings.generation_params?.local_connection?.base_url?.trim() || 'http://localhost:11434',
-          model: canonicalOllamaModel,
-        });
       } catch {
         if (!cancelled) {
           setDefaultProvider('minimax');
           setDefaultModel('');
-          setOllamaRuntimeSummary({ baseUrl: 'http://localhost:11434', model: '' });
         }
       }
     })();
@@ -431,7 +425,7 @@ export function EditorPane() {
     hr: /^\s*---\s*$/.test(currentLine),
   };
 
-  const btn = (on: boolean) => `rounded border px-2 py-1 ${on ? 'border-slate-900 bg-slate-900 text-white' : ''}`;
+  const btn = (on: boolean) => `inline-flex items-center justify-center rounded border px-2 py-1 leading-none ${on ? 'border-slate-900 bg-slate-900 text-white' : ''}`;
 
   const getMarkdownFilename = () => (file.name.toLowerCase().endsWith('.md') ? file.name : `${file.name}.md`);
 
@@ -551,25 +545,25 @@ export function EditorPane() {
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <button className="rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="mr-1 inline" size={14} />Download</button>
-              <button className="rounded-md border px-2 py-1 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="mr-1 inline" size={14} />Share</button>
-              <button className="rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1 inline" size={14} />Copy</button>
+              <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="mr-1" size={14} />Download</button>
+              <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="mr-1" size={14} />Share</button>
+              <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1" size={14} />Copy</button>
               {generateState === 'running' ? (
-                <button className="rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-700" onClick={cancelGenerate}>
-                  <LoaderCircle className="mr-1 inline animate-spin" size={14} />
-                  <X className="mr-1 inline" size={14} />Cancel
+                <button className="inline-flex items-center rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-700" onClick={cancelGenerate}>
+                  <LoaderCircle className="mr-1 animate-spin" size={14} />
+                  <X className="mr-1" size={14} />Cancel
                 </button>
               ) : (
-                <button className="rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
-                  <span className="relative mr-1 inline-flex">
+                <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
+                  <span className="relative mr-1 inline-flex items-center">
                     <Microchip className="inline" size={14} />
-                    <span className="absolute -right-2 -top-1 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
+                    <span className="absolute -right-2 -top-0.5 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
                   </span>
                   Generate
                 </button>
               )}
               <button
-                className="rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
+                className="inline-flex items-center rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
                 disabled={!dirty || generateState === 'running'}
                 onClick={async () => {
                   const { error } = await updateFile(file.id, {
@@ -587,14 +581,10 @@ export function EditorPane() {
                   await refresh();
                 }}
               >
-                <Save className="mr-1 inline" size={14} />Save {dirty ? '*' : ''}
+                <Save className="mr-1" size={14} />Save {dirty ? '*' : ''}
               </button>
             </div>
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">
-            Active runtime: {defaultProvider} / {defaultModel || 'not configured'}
-            {defaultProvider === 'ollama' ? ` (${ollamaRuntimeSummary.baseUrl})` : ''}
-          </p>
           {showGeneratedDraftNotice && (
             <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
               <span>Generated draft available — review and Save.</span>
@@ -611,9 +601,9 @@ export function EditorPane() {
           )}
           {editorTab !== 'preview' && (
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
-            <button className={btn(active.h1)} onClick={() => toggleHeading(1)}>H1</button>
-            <button className={btn(active.h2)} onClick={() => toggleHeading(2)}>H2</button>
-            <button className={btn(active.h3)} onClick={() => toggleHeading(3)}>H3</button>
+            <button className={btn(active.h1)} onClick={() => toggleHeading(1)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h1 ? 'text-white/70' : 'text-slate-500'}`}>1</span></button>
+            <button className={btn(active.h2)} onClick={() => toggleHeading(2)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h2 ? 'text-white/70' : 'text-slate-500'}`}>2</span></button>
+            <button className={btn(active.h3)} onClick={() => toggleHeading(3)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h3 ? 'text-white/70' : 'text-slate-500'}`}>3</span></button>
             <button className={btn(active.bold)} onClick={() => toggleWrap('**', 'bold text')}><strong>Bold</strong></button>
             <button className={btn(active.italic)} onClick={() => toggleWrap('*', 'italic text')}><em>Italic</em></button>
             <button className={btn(active.ul)} onClick={() => toggleLinePrefix('- ')}><List size={14} /></button>
@@ -621,7 +611,7 @@ export function EditorPane() {
             <button className={btn(active.task)} onClick={() => toggleLinePrefix('- [ ] ')}><ListTodo size={14} /></button>
             <button className={btn(active.hr)} onClick={toggleHorizontalRule}><Minus size={14} /></button>
             <button
-              className="rounded border px-2 py-1"
+              className="inline-flex items-center justify-center rounded border px-2 py-1 leading-none"
               title="Table"
               aria-label="Table"
               onClick={async () => {
@@ -637,9 +627,9 @@ export function EditorPane() {
                 insertAndMoveCaretRight(`${header}\n${sep}\n${bodyRows}`);
               }}
             >
-              <Table className="inline" size={12} />
+              <Table className="align-middle" size={14} />
             </button>
-            <button className="rounded border px-2 py-1" onClick={() => setEmojiOpen(true)} title="Emoji" aria-label="Emoji"><Smile className="inline" size={12} /></button>
+            <button className="inline-flex items-center justify-center rounded border px-2 py-1 leading-none" onClick={() => setEmojiOpen(true)} title="Emoji" aria-label="Emoji"><Smile className="align-middle" size={14} /></button>
             </div>
           )}
         </div>
