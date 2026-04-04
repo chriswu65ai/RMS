@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { providerRegistry } from './agentProviders.js';
+import { searchProviderRegistry } from './searchProviders.js';
 
 type RouteHandler = (req: Readable & { method?: string; url?: string; on: (event: string, cb: () => void) => void }, res: MockResponse) => Promise<boolean>;
 
@@ -371,4 +372,89 @@ test('preferred sources patch and delete endpoints update rows', async () => {
   assert.equal(deleteResponse.status, 200);
   const secondDeleteResponse = await callRoute('DELETE', `/api/agent/preferred-sources/${created.id}`);
   assert.equal(secondDeleteResponse.status, 404);
+});
+
+test('agent generate enriches input with deep web search context and caps sources', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'deep',
+        max_results: 12,
+        timeout_ms: 3000,
+        domain_policy: 'open_web',
+      },
+    },
+  });
+
+  let receivedInput = '';
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  searchProviderRegistry.duckduckgo.search = async (query) => ([
+    { title: `${query}-A`, url: 'https://example.com/shared', snippet: 'shared', provider: 'duckduckgo' },
+    { title: `${query}-B`, url: `https://example.com/${encodeURIComponent(query)}`, snippet: 'unique', provider: 'duckduckgo' },
+    { title: `${query}-C`, url: `https://example.org/${encodeURIComponent(query)}`, snippet: 'unique-2', provider: 'duckduckgo' },
+  ]);
+  providerRegistry.openai.generate = async (request) => {
+    receivedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'Analyze ACME earnings',
+    });
+    assert.equal(response.status, 200);
+    assert.match(receivedInput, /<web_search_context>/);
+    const doneFrame = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.type === 'done');
+    assert.equal((doneFrame?.web_search as { sourceCount?: number } | undefined)?.sourceCount, 8);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate fails open when web search errors', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 3000,
+        domain_policy: 'open_web',
+      },
+    },
+  });
+
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  searchProviderRegistry.duckduckgo.search = async () => {
+    throw new Error('search is down');
+  };
+  providerRegistry.openai.generate = async (request) => ({ outputText: request.inputText, latencyMs: 1 });
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(frames.some((line) => line.type === 'status' && line.stage === 'web_search_warning'), true);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
 });
