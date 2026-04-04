@@ -217,6 +217,72 @@ test('searxng adapter applies only_list policy and result cap', async () => {
   }
 });
 
+test('searxng html adapter parses current expected markup', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <article class="result">
+      <h3 class="result_header">
+        <a href="https://example.com/current">Current Theme Result</a>
+      </h3>
+      <p class="content">Current theme snippet text</p>
+    </article>
+  `;
+  globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('query', {
+      providerConfig: { searxng: { use_json_api: false } },
+    });
+    assert.equal(results.length > 0, true);
+    assert.equal(results[0]?.url, 'https://example.com/current');
+    assert.equal(results[0]?.title, 'Current Theme Result');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng html adapter parses slight markup and class variation', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <ul>
+      <li class="result result-default">
+        <h4>
+          <a class="url_header" href="https://example.org/variant">Variant Theme Result</a>
+        </h4>
+        <div class="snippet">Variant snippet text</div>
+      </li>
+    </ul>
+  `;
+  globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('query', {
+      providerConfig: { searxng: { use_json_api: false } },
+    });
+    assert.equal(results.length > 0, true);
+    assert.equal(results[0]?.url, 'https://example.org/variant');
+    assert.equal(results[0]?.title, 'Variant Theme Result');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng html adapter emits explicit parse mismatch error for unknown template', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('<html><body><div>No recognizable result blocks</div></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+
+  try {
+    await assert.rejects(
+      searchProviderRegistry.searxng.search('query', {
+        providerConfig: { searxng: { use_json_api: false } },
+      }),
+      /SearXNG HTML parse mismatch \(theme\/template\)\./,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('searxng and duckduckgo adapters apply prefer_list domain boost parity', async () => {
   const originalFetch = globalThis.fetch;
   const searxPayload = JSON.stringify({
