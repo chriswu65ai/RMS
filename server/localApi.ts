@@ -882,6 +882,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                   mode: normalizedWebSearchConfig.mode,
                   policy: normalizedWebSearchConfig.domain_policy,
                   resultCap: perQueryCap,
+                  safeSearch: normalizedWebSearchConfig.safe_search,
+                  recency: normalizedWebSearchConfig.recency,
                   domainList,
                   domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
                     ? domainBoost

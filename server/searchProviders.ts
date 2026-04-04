@@ -19,6 +19,8 @@ export type SearchOptions = {
   resultCap?: number;
   domainList?: string[];
   domainBoost?: Record<string, number>;
+  safeSearch?: boolean;
+  recency?: 'any' | '7d' | '30d' | '365d';
 };
 
 export interface SearchProviderAdapter {
@@ -125,6 +127,11 @@ class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
   async search(query: string, options: SearchOptions = {}, signal?: AbortSignal): Promise<SearchResult[]> {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) return [];
+    // DuckDuckGo's HTML endpoint does not provide stable, documented controls for
+    // safe-search and recency filtering. We accept these options for cross-provider
+    // parity and intentionally fall back to provider defaults when supplied.
+    void options.safeSearch;
+    void options.recency;
 
     const response = await fetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(trimmedQuery)}`, {
       method: 'GET',

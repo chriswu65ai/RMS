@@ -518,10 +518,14 @@ test('agent generate routes single and deep mode with expected query fan-out', a
   const originalGenerate = providerRegistry.openai.generate;
   const seenQueries: string[] = [];
   const seenModes: string[] = [];
+  const seenSafeSearch: boolean[] = [];
+  const seenRecency: string[] = [];
 
   searchProviderRegistry.duckduckgo.search = async (query, options) => {
     seenQueries.push(query);
     seenModes.push(options?.mode ?? 'single');
+    seenSafeSearch.push(options?.safeSearch ?? true);
+    seenRecency.push(options?.recency ?? 'any');
     return [{
       title: `source for ${query}`,
       url: `https://example.com/${encodeURIComponent(query)}`,
@@ -538,7 +542,16 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     await callRoute('PUT', '/api/agent/settings', {
       default_provider: 'openai',
       default_model: 'gpt-4.1',
-      generation_params: { web_search: { enabled: true, mode: 'single', max_results: 4, timeout_ms: 3000 } },
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'single',
+          max_results: 4,
+          timeout_ms: 3000,
+          safe_search: false,
+          recency: '30d',
+        },
+      },
     });
     const singleResponse = await callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
@@ -550,15 +563,28 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     const singleDone = singleFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
     assert.equal(seenQueries.length, 1);
     assert.deepEqual(seenModes, ['single']);
+    assert.deepEqual(seenSafeSearch, [false]);
+    assert.deepEqual(seenRecency, ['30d']);
     assert.equal(singleDone?.web_search?.queryCount, 1);
 
     seenQueries.length = 0;
     seenModes.length = 0;
+    seenSafeSearch.length = 0;
+    seenRecency.length = 0;
 
     await callRoute('PUT', '/api/agent/settings', {
       default_provider: 'openai',
       default_model: 'gpt-4.1',
-      generation_params: { web_search: { enabled: true, mode: 'deep', max_results: 6, timeout_ms: 3000 } },
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'deep',
+          max_results: 6,
+          timeout_ms: 3000,
+          safe_search: true,
+          recency: '7d',
+        },
+      },
     });
     const deepResponse = await callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
@@ -570,6 +596,8 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     const deepDone = deepFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
     assert.deepEqual(seenQueries, ['NVIDIA guidance', 'NVIDIA guidance latest updates', 'NVIDIA guidance official source']);
     assert.deepEqual(seenModes, ['deep', 'deep', 'deep']);
+    assert.deepEqual(seenSafeSearch, [true, true, true]);
+    assert.deepEqual(seenRecency, ['7d', '7d', '7d']);
     assert.equal(deepDone?.web_search?.queryCount, 3);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
