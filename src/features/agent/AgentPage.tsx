@@ -30,12 +30,14 @@ import { formatLocalDateTime } from '../../lib/time';
 import { fetchOllamaTagsDirect } from './ollamaDirect';
 import { getSavedLocalRuntime } from './runtimeConfig';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync';
+import {
+  buildWebSearchSettingsPayload,
+  WEB_SEARCH_MAX_RESULTS_DEFAULT,
+  WEB_SEARCH_TIMEOUT_MS_DEFAULT,
+} from './webSearchSettings';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
-const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
-const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
-
 const WEB_SEARCH_PROVIDERS = [{ value: 'duckduckgo', label: 'DuckDuckGo' }] as const;
 const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
   { value: 'single', label: 'Single' },
@@ -412,22 +414,16 @@ export function AgentPage() {
                 onClick={async () => {
                   try {
                     const settings = await getAgentSettings();
-                    await saveAgentSettings({
-                      ...settings,
-                      generation_params: {
-                        ...(settings.generation_params ?? {}),
-                        web_search: {
-                          enabled: webSearchEnabled,
-                          provider: webSearchProvider,
-                          mode: webSearchMode,
-                          max_results: Math.max(1, Number(webSearchMaxResults) || WEB_SEARCH_MAX_RESULTS_DEFAULT),
-                          timeout_ms: Math.max(1, Number(webSearchTimeoutMs) || WEB_SEARCH_TIMEOUT_MS_DEFAULT),
-                          safe_search: webSearchSafeSearch,
-                          recency: webSearchRecency,
-                          domain_policy: webSearchDomainPolicy,
-                        },
-                      },
-                    });
+                    await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
+                      enabled: webSearchEnabled,
+                      provider: webSearchProvider,
+                      mode: webSearchMode,
+                      maxResults: webSearchMaxResults,
+                      timeoutMs: webSearchTimeoutMs,
+                      safeSearch: webSearchSafeSearch,
+                      recency: webSearchRecency,
+                      domainPolicy: webSearchDomainPolicy,
+                    }));
                     setWebSearchStatusMessage('Web search settings saved.');
                     setMessage('Web search settings saved.');
                   } catch (error) {
