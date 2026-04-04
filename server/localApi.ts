@@ -871,6 +871,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           try {
             const allResults: SearchResult[] = [];
             let remainingBudget = Math.max(1, normalizedWebSearchConfig.max_results);
+            let executedQueryCount = 0;
             for (const query of queries) {
               if (remainingBudget <= 0) break;
               const perQueryCap = normalizedWebSearchConfig.mode === 'single'
@@ -878,6 +879,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 : Math.max(1, Math.ceil(remainingBudget / 2));
               const searchStartedAt = Date.now();
               try {
+                executedQueryCount += 1;
                 const queryResults = await searchProviderRegistry[normalizedWebSearchConfig.provider].search(query, {
                   mode: normalizedWebSearchConfig.mode,
                   policy: normalizedWebSearchConfig.domain_policy,
@@ -917,7 +919,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               : Math.max(1, normalizedWebSearchConfig.max_results);
             const finalSources = searchUtils.enforceResultCap(dedupedSources, finalCap);
             normalizedSources = normalizeStreamingSources(finalSources);
-            webSearchMetadata.queryCount = queries.length;
+            webSearchMetadata.queryCount = executedQueryCount;
             webSearchMetadata.sourceCount = finalSources.length;
             if (finalSources.length > 0) {
               const sourceContextBlock = buildSourceContextBlock(queries, finalSources);
