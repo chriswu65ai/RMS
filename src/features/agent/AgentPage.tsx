@@ -90,6 +90,7 @@ export function AgentPage() {
   const [statusByProvider, setStatusByProvider] = useState<Record<CloudAgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
   const [message, setMessage] = useState('');
+  const [defaultSaveMessage, setDefaultSaveMessage] = useState('');
   const [localSaveMessage, setLocalSaveMessage] = useState('');
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [webSearchProvider, setWebSearchProvider] = useState<'duckduckgo'>('duckduckgo');
@@ -257,6 +258,7 @@ export function AgentPage() {
                   onChange={(event) => {
                     const nextProvider = event.target.value as AgentProvider;
                     setProvider(nextProvider);
+                    setDefaultSaveMessage('');
                     if (nextProvider === 'ollama') setSelectedProviderModel(ollamaRuntimeModelDraft);
                     void refreshModels(nextProvider, nextProvider !== 'ollama');
                   }}
@@ -272,6 +274,7 @@ export function AgentPage() {
                   onChange={(event) => {
                     const nextModel = event.target.value;
                     setSelectedProviderModel(nextModel);
+                    setDefaultSaveMessage('');
                     setOllamaRuntimeModelDraft((currentDraft) => getMirroredOllamaDraftModel(provider, nextModel, currentDraft));
                     if (provider === 'ollama') setLocalSaveMessage('');
                   }}
@@ -298,6 +301,7 @@ export function AgentPage() {
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 disabled={!canSaveDefaults}
                 onClick={async () => {
+                  setDefaultSaveMessage('');
                   if (provider !== 'ollama' && hasUnsavedLocalChanges) {
                     setMessage('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.');
                     return;
@@ -312,7 +316,7 @@ export function AgentPage() {
                       setSelectedProviderModel(canonicalModel);
                       setOllamaRuntimeModelDraft(canonicalModel);
                     }
-                    setMessage('Default provider/model saved.');
+                    setDefaultSaveMessage('Default provider/model saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
                   }
@@ -320,6 +324,7 @@ export function AgentPage() {
               >
                 Save default agent
               </button>
+              {defaultSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{defaultSaveMessage}</p> : null}
             </div>
           </div>
         </section>
@@ -421,7 +426,6 @@ export function AgentPage() {
                       domainPolicy: webSearchDomainPolicy,
                     }));
                     setWebSearchStatusMessage('Web search settings saved.');
-                    setMessage('Web search settings saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving web search settings.');
                   }
@@ -718,7 +722,6 @@ export function AgentPage() {
                     setOllamaRuntimeModelDraft(canonicalModel);
                     if (provider === 'ollama') setSelectedProviderModel(canonicalModel);
                     setLocalSaveMessage('Local settings saved.');
-                    setMessage('Local model settings saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
                   }
@@ -769,7 +772,7 @@ export function AgentPage() {
           </div>
         </section>
 
-        {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
+        {message ? <p className="text-sm text-rose-700">{message}</p> : null}
       </div>
     </div>
   );
