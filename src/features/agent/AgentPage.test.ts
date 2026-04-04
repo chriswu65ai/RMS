@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync.js';
-import { buildWebSearchSettingsPayload, getWebSearchSourceCitationDefault } from './webSearchSettings.js';
+import {
+  buildWebSearchSettingsPayload,
+  getWebSearchSourceCitationDefault,
+  shouldShowSearxngConfigFields,
+  WEB_SEARCH_PROVIDER_OPTIONS,
+} from './webSearchSettings.js';
 import { getWebSearchWarningBannerMessage } from './activityWarnings.js';
 import type { AgentActivityLog } from './types.js';
 
@@ -123,6 +128,41 @@ test('web search save payload stores searxng provider config under provider_conf
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
   assert.equal(getWebSearchSourceCitationDefault(undefined), false);
   assert.equal(getWebSearchSourceCitationDefault(false), false);
+});
+
+test('web search provider dropdown options include SearXNG', () => {
+  assert.deepEqual(WEB_SEARCH_PROVIDER_OPTIONS, [
+    { value: 'duckduckgo', label: 'DuckDuckGo' },
+    { value: 'searxng', label: 'SearXNG' },
+  ]);
+});
+
+test('SearXNG config controls show only when provider is searxng', () => {
+  assert.equal(shouldShowSearxngConfigFields('duckduckgo'), false);
+  assert.equal(shouldShowSearxngConfigFields('searxng'), true);
+});
+
+test('web search save payload omits searxng provider_config when provider is duckduckgo', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'duckduckgo',
+    mode: 'single',
+    maxResults: '7',
+    timeoutMs: '2500',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://10.11.10.11:2000',
+    searxngUseJsonApi: false,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.provider, 'duckduckgo');
+  assert.equal(payload.generation_params?.web_search?.provider_config, undefined);
 });
 
 const makeActivityEntry = (overrides: Partial<AgentActivityLog>): AgentActivityLog => ({

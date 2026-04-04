@@ -303,6 +303,12 @@ test('agent settings web_search defaults and round-trip persistence', async () =
         recency?: string;
         domain_policy?: string;
         source_citation?: boolean;
+        provider_config?: {
+          searxng?: {
+            base_url?: string;
+            use_json_api?: boolean;
+          };
+        };
       };
     };
   };
@@ -719,6 +725,133 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     assert.equal(deepEarlyBreakDone?.web_search?.queryCount, 1);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate forwards web search controls for duckduckgo and searxng providers', async () => {
+  const originalDuckSearch = searchProviderRegistry.duckduckgo.search;
+  const originalSearxngSearch = searchProviderRegistry.searxng.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  const seenDuckOptions: Array<Record<string, unknown>> = [];
+  const seenSearxngOptions: Array<Record<string, unknown>> = [];
+
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  searchProviderRegistry.duckduckgo.search = async (_query, options) => {
+    seenDuckOptions.push({
+      mode: options?.mode,
+      resultCap: options?.resultCap,
+      timeoutMs: options?.timeoutMs,
+      safeSearch: options?.safeSearch,
+      recency: options?.recency,
+      policy: options?.policy,
+    });
+    return [{ title: 'duck', url: 'https://example.com/duck', snippet: 'duck', provider: 'duckduckgo' }];
+  };
+  searchProviderRegistry.searxng.search = async (_query, options) => {
+    seenSearxngOptions.push({
+      mode: options?.mode,
+      resultCap: options?.resultCap,
+      timeoutMs: options?.timeoutMs,
+      safeSearch: options?.safeSearch,
+      recency: options?.recency,
+      policy: options?.policy,
+    });
+    return [{ title: 'searxng', url: 'https://example.com/searxng', snippet: 'searxng', provider: 'searxng' }];
+  };
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          provider: 'duckduckgo',
+          mode: 'single',
+          max_results: 3,
+          timeout_ms: 2500,
+          safe_search: false,
+          recency: '30d',
+          domain_policy: 'only_list',
+        },
+      },
+    });
+    const duckResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'ACME',
+    });
+    assert.equal(duckResponse.status, 200);
+    assert.deepEqual(seenDuckOptions, [{
+      mode: 'single',
+      resultCap: 3,
+      timeoutMs: 2500,
+      safeSearch: false,
+      recency: '30d',
+      policy: 'only_list',
+    }]);
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          provider: 'searxng',
+          mode: 'deep',
+          max_results: 6,
+          timeout_ms: 4100,
+          safe_search: true,
+          recency: '7d',
+          domain_policy: 'prefer_list',
+          provider_config: {
+            searxng: {
+              base_url: 'http://10.11.10.11:2000',
+              use_json_api: true,
+            },
+          },
+        },
+      },
+    });
+    const searxngResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'ACME',
+    });
+    assert.equal(searxngResponse.status, 200);
+    assert.deepEqual(seenSearxngOptions, [
+      {
+        mode: 'deep',
+        resultCap: 3,
+        timeoutMs: 4100,
+        safeSearch: true,
+        recency: '7d',
+        policy: 'prefer_list',
+      },
+      {
+        mode: 'deep',
+        resultCap: 3,
+        timeoutMs: 4100,
+        safeSearch: true,
+        recency: '7d',
+        policy: 'prefer_list',
+      },
+      {
+        mode: 'deep',
+        resultCap: 2,
+        timeoutMs: 4100,
+        safeSearch: true,
+        recency: '7d',
+        policy: 'prefer_list',
+      },
+    ]);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalDuckSearch;
+    searchProviderRegistry.searxng.search = originalSearxngSearch;
     providerRegistry.openai.generate = originalGenerate;
   }
 });

@@ -35,18 +35,16 @@ import {
   buildWebSearchSettingsPayload,
   getWebSearchSourceCitationDefault,
   WEB_SEARCH_MAX_RESULTS_DEFAULT,
+  WEB_SEARCH_PROVIDER_OPTIONS,
   WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
   WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
+  shouldShowSearxngConfigFields,
 } from './webSearchSettings';
 import { getWebSearchWarningBannerMessage } from './activityWarnings';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
-const WEB_SEARCH_PROVIDERS: Array<{ value: WebSearchProvider; label: string }> = [
-  { value: 'duckduckgo', label: 'DuckDuckGo' },
-  { value: 'searxng', label: 'SearXNG' },
-];
 const WEB_SEARCH_MODES: Array<{ value: WebSearchMode; label: string }> = [
   { value: 'single', label: 'Single' },
   { value: 'deep', label: 'Deep' },
@@ -368,10 +366,10 @@ export function AgentPage() {
                     setWebSearchStatusMessage('');
                   }}
                 >
-                  {WEB_SEARCH_PROVIDERS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  {WEB_SEARCH_PROVIDER_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                 </select>
               </label>
-              {webSearchProvider === 'searxng' ? (
+              {shouldShowSearxngConfigFields(webSearchProvider) ? (
                 <>
                   <label className="space-y-1 text-sm">
                     <span className="text-slate-600">SearXNG base URL</span>

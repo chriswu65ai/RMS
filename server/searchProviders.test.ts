@@ -144,12 +144,49 @@ test('searxng json adapter maps recency and safe search controls', async () => {
     });
 
     assert.equal(requestedUrls.length, 1);
-    assert.match(requestedUrls[0] ?? '', /http:\/\/localhost:7777\/search\?/);
-    assert.match(requestedUrls[0] ?? '', /format=json/);
-    assert.match(requestedUrls[0] ?? '', /safesearch=0/);
-    assert.match(requestedUrls[0] ?? '', /time_range=month/);
+    assert.match(requestedUrls[0] ?? '', /^http:\/\/localhost:7777\/search\?/);
+    assert.match(requestedUrls[0] ?? '', /(?:\?|&)q=earnings(?:&|$)/);
+    assert.match(requestedUrls[0] ?? '', /(?:\?|&)format=json(?:&|$)/);
+    assert.match(requestedUrls[0] ?? '', /(?:\?|&)safesearch=0(?:&|$)/);
+    assert.match(requestedUrls[0] ?? '', /(?:\?|&)time_range=month(?:&|$)/);
     assert.equal(results[0]?.url, 'https://docs.example.com/report');
     assert.equal(results[0]?.published_at, '2026-03-01');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng json adapter parses canonical result shape with title fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    results: [
+      { title: 'Result A', url: 'https://example.com/a', content: 'snippet a', publishedDate: '2026-01-10' },
+      { title: '   ', url: 'https://example.com/b', content: 'snippet b' },
+      { title: 'no-url', content: 'should be filtered out' },
+    ],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('query', {
+      providerConfig: { searxng: { use_json_api: true } },
+    });
+    assert.deepEqual(results, [
+      {
+        title: 'Result A',
+        url: 'https://example.com/a',
+        snippet: 'snippet a',
+        provider: 'searxng',
+        score: 1,
+        published_at: '2026-01-10',
+      },
+      {
+        title: 'https://example.com/b',
+        url: 'https://example.com/b',
+        snippet: 'snippet b',
+        provider: 'searxng',
+        score: 0.99,
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -175,6 +212,52 @@ test('searxng adapter applies only_list policy and result cap', async () => {
 
     assert.equal(results.length, 1);
     assert.equal(results[0]?.url, 'https://docs.example.com/one');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng and duckduckgo adapters apply prefer_list domain boost parity', async () => {
+  const originalFetch = globalThis.fetch;
+  const searxPayload = JSON.stringify({
+    results: [
+      { title: 'General', url: 'https://general.org/insight', content: 'general' },
+      { title: 'Preferred', url: 'https://docs.example.com/filing', content: 'preferred' },
+    ],
+  });
+  const duckHtml = `
+    <a class="result__a" href="https://general.org/insight">General</a>
+    <a class="result__snippet">general</a>
+    <a class="result__a" href="https://docs.example.com/filing">Preferred</a>
+    <a class="result__snippet">preferred</a>
+  `;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/search?')) {
+      return new Response(searxPayload, { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(duckHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+  };
+
+  try {
+    const options = {
+      policy: 'prefer_list' as const,
+      domainList: ['example.com'],
+      domainBoost: { 'example.com': 5 },
+    };
+    const duck = await searchProviderRegistry.duckduckgo.search('earnings', options);
+    const searxng = await searchProviderRegistry.searxng.search('earnings', {
+      ...options,
+      providerConfig: { searxng: { use_json_api: true } },
+    });
+    assert.deepEqual(duck.map((item) => item.url), [
+      'https://docs.example.com/filing',
+      'https://general.org/insight',
+    ]);
+    assert.deepEqual(searxng.map((item) => item.url), [
+      'https://docs.example.com/filing',
+      'https://general.org/insight',
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
