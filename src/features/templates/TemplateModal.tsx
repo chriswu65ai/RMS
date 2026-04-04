@@ -80,7 +80,7 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                 const fileNameInput = await dialog.prompt(
                   'New file',
                   '',
-                  'File name (.md optional).\nYYYY-MM-DD TICKER-type.md auto-appends metadata.',
+                  'YYYY-MM-DD TICKER-type.md auto-appends metadata.',
                   {
                     validate: (value) => (value.trim() ? null : 'Type a file name to continue.'),
                   },
