@@ -122,6 +122,12 @@ type AgentActivityLogRow = {
   error_message_short: string | null;
   search_warning: number;
   search_warning_message: string | null;
+  web_search_enabled: number;
+  tool_calls_attempted: number;
+  tool_calls_succeeded: number;
+  search_query_count: number;
+  source_count: number;
+  tool_failure_reason: string | null;
 };
 
 type PreferredSourceRow = {
@@ -249,7 +255,13 @@ const ensureInitialized = () => {
     cost_estimate_usd real,
     error_message_short text,
     search_warning integer not null default 0,
-    search_warning_message text
+    search_warning_message text,
+    web_search_enabled integer not null default 0,
+    tool_calls_attempted integer not null default 0,
+    tool_calls_succeeded integer not null default 0,
+    search_query_count integer not null default 0,
+    source_count integer not null default 0,
+    tool_failure_reason text
   );
   `);
   execSql(`insert or ignore into agent_settings (id, default_provider, default_model, generation_params_json) values (1, 'minimax', '', null);`);
@@ -263,6 +275,24 @@ const ensureInitialized = () => {
   } catch {
     // existing DBs may already include this column
   }
+  try {
+    execSql(`alter table agent_activity_log add column web_search_enabled integer not null default 0;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column tool_calls_attempted integer not null default 0;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column tool_calls_succeeded integer not null default 0;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column search_query_count integer not null default 0;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column source_count integer not null default 0;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column tool_failure_reason text;`);
+  } catch {}
   try {
     execSql(`alter table new_research_tasks add column note_type text not null default '';`);
   } catch {
@@ -548,7 +578,7 @@ const getAgentSettings = () => {
 
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
   execSql(`insert into agent_activity_log (
-    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short, search_warning, search_warning_message
+    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short, search_warning, search_warning_message, web_search_enabled, tool_calls_attempted, tool_calls_succeeded, search_query_count, source_count, tool_failure_reason
   ) values (
     ${sqlEscape(randomUUID())},
     ${sqlEscape(entry.timestamp)},
@@ -566,7 +596,13 @@ const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
     ${sqlEscape(entry.cost_estimate_usd)},
     ${sqlEscape(entry.error_message_short)},
     ${sqlEscape(entry.search_warning)},
-    ${sqlEscape(entry.search_warning_message)}
+    ${sqlEscape(entry.search_warning_message)},
+    ${sqlEscape(entry.web_search_enabled)},
+    ${sqlEscape(entry.tool_calls_attempted)},
+    ${sqlEscape(entry.tool_calls_succeeded)},
+    ${sqlEscape(entry.search_query_count)},
+    ${sqlEscape(entry.source_count)},
+    ${sqlEscape(entry.tool_failure_reason)}
   )`);
 };
 
@@ -842,6 +878,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         error_message_short: null,
         search_warning: 0,
         search_warning_message: null,
+        web_search_enabled: settings.generation_params?.web_search?.enabled ? 1 : 0,
+        tool_calls_attempted: 0,
+        tool_calls_succeeded: 0,
+        search_query_count: 0,
+        source_count: 0,
+        tool_failure_reason: null,
       });
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
@@ -862,12 +904,50 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           error_message_short: 'Missing API key.',
           search_warning: 0,
           search_warning_message: null,
+          web_search_enabled: settings.generation_params?.web_search?.enabled ? 1 : 0,
+          tool_calls_attempted: 0,
+          tool_calls_succeeded: 0,
+          search_query_count: 0,
+          source_count: 0,
+          tool_failure_reason: 'Missing API key.',
         });
         writeJson(res, 400, { error: { message: 'Missing API key for selected provider.' } });
         return true;
       }
+      const isWebSearchEnabled = Boolean(settings.generation_params?.web_search?.enabled);
+      if (isWebSearchEnabled && !supportsToolCalling(provider, resolvedModel)) {
+        const reason = `Web search requires tool calling support for ${provider}/${resolvedModel}.`;
+        appendAgentActivityLog({
+          timestamp: new Date().toISOString(),
+          note_id: String(payload.note_id ?? ''),
+          action: 'generate',
+          trigger_source: String(payload.trigger_source ?? 'manual'),
+          initiated_by: String(payload.initiated_by ?? 'user'),
+          provider,
+          model: resolvedModel,
+          status: 'failed',
+          duration_ms: Date.now() - startedAt,
+          input_chars: inputText.length,
+          output_chars: 0,
+          token_estimate: null,
+          cost_estimate_usd: null,
+          error_message_short: reason,
+          search_warning: 0,
+          search_warning_message: null,
+          web_search_enabled: 1,
+          tool_calls_attempted: 0,
+          tool_calls_succeeded: 0,
+          search_query_count: 0,
+          source_count: 0,
+          tool_failure_reason: reason,
+        });
+        writeJson(res, 400, { error: { message: reason } });
+        return true;
+      }
       const controller = new AbortController();
       req.on('aborted', () => controller.abort());
+      beginNdjson(res);
+      writeNdjson(res, { type: 'status', stage: 'started' });
       try {
         const preferredSources = queryJson<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
         const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
@@ -896,6 +976,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         };
         let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
         let preparedInputText = inputText;
+        let toolCallsAttempted = 0;
+        let toolCallsSucceeded = 0;
+        let toolFailureReason: string | null = null;
         if (normalizedWebSearchConfig.enabled) {
           const orchestration = await runAgentToolOrchestration({
             provider,
@@ -906,14 +989,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             settings: normalizedWebSearchConfig,
             preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
             signal: controller.signal,
+            onEvent: (event) => writeNdjson(res, { type: event.type, ...event }),
           });
           normalizedSources = normalizeStreamingSources(orchestration.allSources);
           webSearchMetadata.queryCount = orchestration.queryCount;
           webSearchMetadata.sourceCount = orchestration.sourceCount;
+          toolCallsAttempted = orchestration.toolCallsAttempted;
+          toolCallsSucceeded = orchestration.toolCallsSucceeded;
+          toolFailureReason = orchestration.toolFailureReason;
           preparedInputText = orchestration.consumedInputText;
         }
-        beginNdjson(res);
-        writeNdjson(res, { type: 'status', stage: 'started' });
         if (normalizedSources.length > 0) {
           writeNdjson(res, { type: 'sources', sources: normalizedSources });
         }
@@ -953,6 +1038,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           error_message_short: null,
           search_warning: 0,
           search_warning_message: null,
+          web_search_enabled: normalizedWebSearchConfig.enabled ? 1 : 0,
+          tool_calls_attempted: toolCallsAttempted,
+          tool_calls_succeeded: toolCallsSucceeded,
+          search_query_count: webSearchMetadata.queryCount,
+          source_count: webSearchMetadata.sourceCount,
+          tool_failure_reason: toolFailureReason,
         });
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         res.end();
@@ -975,6 +1066,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           error_message_short: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
           search_warning: 0,
           search_warning_message: null,
+          web_search_enabled: settings.generation_params?.web_search?.enabled ? 1 : 0,
+          tool_calls_attempted: 0,
+          tool_calls_succeeded: 0,
+          search_query_count: 0,
+          source_count: 0,
+          tool_failure_reason: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
         });
         if (res.headersSent) {
           writeNdjson(res, { type: 'error', message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.'), aborted });

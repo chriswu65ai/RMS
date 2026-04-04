@@ -59,7 +59,15 @@ export type AgentToolOrchestrationResult = {
   provider: WebSearchProvider;
   citationRequired: boolean;
   consumedInputText: string;
+  toolCallsAttempted: number;
+  toolCallsSucceeded: number;
+  toolFailureReason: string | null;
 };
+
+export type AgentToolLifecycleEvent =
+  | { type: 'tool_call_started'; toolCallId: string; toolName: string; attempt: number; maxAttempts: number; args: WebSearchToolArgs }
+  | { type: 'tool_call_result'; toolCallId: string; toolName: string; attempt: number; sourceCount: number; query: string }
+  | { type: 'tool_call_failed'; toolCallId: string; toolName: string; attempt: number; reason: string };
 
 const WEB_SEARCH_TOOL: AgentToolDefinition = {
   name: 'web_search',
@@ -114,6 +122,7 @@ export const runAgentToolOrchestration = async ({
   settings,
   preferredSources,
   signal,
+  onEvent,
 }: {
   provider: AgentProvider;
   model: string;
@@ -123,6 +132,7 @@ export const runAgentToolOrchestration = async ({
   settings: WebSearchSettings;
   preferredSources: PreferredSource[];
   signal?: AbortSignal;
+  onEvent?: (event: AgentToolLifecycleEvent) => void;
 }): Promise<AgentToolOrchestrationResult> => {
   if (!supportsToolCalling(provider, model)) {
     throw new Error(`Provider/model does not support tool mode: ${provider}/${model}.`);
@@ -134,6 +144,9 @@ export const runAgentToolOrchestration = async ({
     return acc;
   }, {});
   const toolCalls: ToolCallRecord[] = [];
+  let toolCallsAttempted = 0;
+  let toolCallsSucceeded = 0;
+  let toolFailureReason: string | null = null;
   let initialResponse = await providerRegistry[provider].generateToolFirstTurn({
     model,
     inputText,
@@ -145,6 +158,16 @@ export const runAgentToolOrchestration = async ({
     const toolCall = initialResponse.toolCalls.find((call) => call.name === 'web_search');
     if (!toolCall) break;
     const args = normalizeToolArgs(toolCall.arguments, settings, domainList);
+    const toolCallId = toolCall.id || `web-search-${i + 1}`;
+    toolCallsAttempted += 1;
+    onEvent?.({
+      type: 'tool_call_started',
+      toolCallId,
+      toolName: 'web_search',
+      attempt: i + 1,
+      maxAttempts: maxToolCalls,
+      args,
+    });
     const searchTimeoutController = new AbortController();
     const timeoutId = setTimeout(() => searchTimeoutController.abort(), settings.timeout_ms);
     signal?.addEventListener('abort', () => searchTimeoutController.abort(), { once: true });
@@ -164,7 +187,16 @@ export const runAgentToolOrchestration = async ({
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: results.length, latencyMs: Date.now() - startedAt });
       if (results.length === 0) throw new Error('web_search returned no sources.');
       toolCalls.push({ name: 'web_search', arguments: args, sources: results });
-      const followupToolCall: AgentToolCall = { id: toolCall.id || `web-search-${i + 1}`, name: 'web_search', arguments: args };
+      toolCallsSucceeded += 1;
+      onEvent?.({
+        type: 'tool_call_result',
+        toolCallId,
+        toolName: 'web_search',
+        attempt: i + 1,
+        sourceCount: results.length,
+        query: args.query,
+      });
+      const followupToolCall: AgentToolCall = { id: toolCallId, name: 'web_search', arguments: args };
       initialResponse = await providerRegistry[provider].generateToolFollowupTurn({
         model,
         inputText,
@@ -178,6 +210,14 @@ export const runAgentToolOrchestration = async ({
         generationParams: baseUrl ? { baseUrl } : undefined,
       }, apiKey, signal);
     } catch (error) {
+      toolFailureReason = error instanceof Error ? error.message : 'Tool call failed.';
+      onEvent?.({
+        type: 'tool_call_failed',
+        toolCallId,
+        toolName: 'web_search',
+        attempt: i + 1,
+        reason: toolFailureReason,
+      });
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: 0, latencyMs: 0, status: 'error', error });
       throw error;
     } finally {
@@ -216,5 +256,8 @@ export const runAgentToolOrchestration = async ({
     provider: settings.provider,
     citationRequired: settings.source_citation,
     consumedInputText,
+    toolCallsAttempted,
+    toolCallsSucceeded,
+    toolFailureReason,
   };
 };
