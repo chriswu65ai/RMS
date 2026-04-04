@@ -30,7 +30,7 @@ import {
 import { formatLocalDateTime } from '../../lib/time';
 import { fetchOllamaTagsDirect } from './ollamaDirect';
 import { getSavedLocalRuntime } from './runtimeConfig';
-import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync';
+import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync';
 import {
   buildWebSearchSettingsPayload,
   getWebSearchSourceCitationDefault,
@@ -136,6 +136,7 @@ export function AgentPage() {
     try {
       const response = await modelCatalogService.listModels(nextProvider);
       let nextModels = response.models;
+      let nextSelectedModel = response.selectedModel;
       let nextReasonCode = response.reasonCode;
       let nextCatalogStatus = response.catalogStatus;
       let nextSelectionSource = response.selectionSource;
@@ -144,6 +145,12 @@ export function AgentPage() {
           const fallbackModels = await fetchOllamaTagsDirect(runtimeBaseUrl);
           if (fallbackModels.length > 0) {
             nextModels = fallbackModels;
+            nextSelectedModel = resolveOllamaFallbackSelectedModel(
+              ollamaRuntimeModelDraft,
+              savedLocalRuntime.model,
+              fallbackModels.map((model) => model.modelId),
+              response.selectedModel,
+            );
             nextReasonCode = 'ok';
             nextCatalogStatus = 'live';
             nextSelectionSource = 'live_catalog';
@@ -160,8 +167,8 @@ export function AgentPage() {
         reasonCode: nextReasonCode,
       });
       if (applySelection) {
-        setSelectedProviderModel(response.selectedModel);
-        if (nextProvider === 'ollama') setOllamaRuntimeModelDraft(response.selectedModel);
+        setSelectedProviderModel(nextSelectedModel);
+        if (nextProvider === 'ollama') setOllamaRuntimeModelDraft(nextSelectedModel);
       }
     } catch {
       setModels([]);
