@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'n
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-type AgentProvider = 'minimax' | 'openai' | 'anthropic';
+type AgentProvider = 'minimax' | 'openai' | 'anthropic' | 'ollama';
 
 const SERVICE_PREFIX = 'rms.agent';
 const ACCOUNT = 'default';

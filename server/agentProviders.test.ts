@@ -15,8 +15,8 @@ const jsonResponse = (status: number, payload: unknown) => new Response(JSON.str
 
 test('selectBestModel keeps preferred model when present in discovered models', () => {
   const discovered: ModelListEntry[] = [
-    { modelId: 'gpt-4.1', displayName: 'GPT-4.1' },
-    { modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini' },
+    { modelId: 'gpt-4.1', displayName: 'GPT-4.1', B: 1 },
+    { modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', B: 1 },
   ];
   const selected = selectBestModel('openai', discovered, FALLBACK_MODELS.openai, 'gpt-4.1');
   assert.equal(selected.selected_model, 'gpt-4.1');
@@ -25,8 +25,8 @@ test('selectBestModel keeps preferred model when present in discovered models', 
 
 test('selectBestModel chooses provider-ranked live model when preferred is missing', () => {
   const discovered: ModelListEntry[] = [
-    { modelId: 'gpt-4.1', displayName: 'GPT-4.1' },
-    { modelId: 'custom-model', displayName: 'Custom' },
+    { modelId: 'gpt-4.1', displayName: 'GPT-4.1', B: 1 },
+    { modelId: 'custom-model', displayName: 'Custom', B: 1 },
   ];
   const selected = selectBestModel('openai', discovered, FALLBACK_MODELS.openai, 'does-not-exist');
   assert.equal(selected.selected_model, 'gpt-4.1');
@@ -56,6 +56,7 @@ test('openai live discovery success filters non-generation models and selects ra
   assert.equal(result.reason_code, 'ok');
   assert.equal(result.selected_model, 'gpt-4.1-mini');
   assert.deepEqual(result.models.map((m) => m.modelId), ['gpt-4.1-mini', 'gpt-4.1']);
+  assert.ok(result.models.every((m) => m.B === 1));
 });
 
 test('anthropic live discovery success returns claude models', async () => {
@@ -113,4 +114,14 @@ test('selected_model remains populated whenever fallback has a valid entry', asy
   assert.equal(result.catalog_status, 'failed');
   assert.ok(result.selected_model.length > 0);
   assert.equal(result.selected_model, FALLBACK_MODELS.openai[0]?.modelId);
+});
+
+test('ollama returns explicit unreachable reason when local daemon is down', async () => {
+  globalThis.fetch = async () => {
+    throw new Error('connection refused');
+  };
+
+  const result = await providerRegistry.ollama.listModels('', { fallbackModels: FALLBACK_MODELS.ollama, baseUrl: 'http://localhost:11434' });
+  assert.equal(result.catalog_status, 'failed');
+  assert.equal(result.reason_code, 'ollama_unreachable');
 });

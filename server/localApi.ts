@@ -57,6 +57,16 @@ type AgentSettingsRow = {
   generation_params_json: string | null;
 };
 
+type AgentGenerationParams = {
+  temperature?: number;
+  maxTokens?: number;
+  local_connection?: {
+    base_url?: string;
+    model?: string;
+    B?: number;
+  };
+} | null;
+
 type AgentActivityLogRow = {
   id: string;
   timestamp: string;
@@ -307,16 +317,42 @@ function normalizeTaskRow(row: NewResearchTaskRow) {
   };
 }
 
-const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic'];
+const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic', 'ollama'];
 const isAgentProvider = (value: unknown): value is AgentProvider => typeof value === 'string' && VALID_PROVIDERS.includes(value as AgentProvider);
+
+const OLLAMA_BASE_URL_DEFAULT = 'http://localhost:11434';
+
+const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
+  if (!raw || typeof raw !== 'object') return null;
+  const next = raw as Record<string, unknown>;
+  const localConnection = next.local_connection && typeof next.local_connection === 'object'
+    ? (next.local_connection as Record<string, unknown>)
+    : null;
+  return {
+    temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
+    maxTokens: typeof next.maxTokens === 'number' ? next.maxTokens : undefined,
+    local_connection: localConnection ? {
+      base_url: typeof localConnection.base_url === 'string' && localConnection.base_url.trim()
+        ? localConnection.base_url.trim()
+        : OLLAMA_BASE_URL_DEFAULT,
+      model: typeof localConnection.model === 'string' ? localConnection.model.trim() : '',
+      B: typeof localConnection.B === 'number' && Number.isFinite(localConnection.B) ? localConnection.B : 1,
+    } : {
+      base_url: OLLAMA_BASE_URL_DEFAULT,
+      model: '',
+      B: 1,
+    },
+  };
+};
 
 const getAgentSettings = () => {
   const settings = queryJson<AgentSettingsRow>('select default_provider, default_model, generation_params_json from agent_settings where id = 1 limit 1')[0];
   const provider = isAgentProvider(settings?.default_provider) ? settings.default_provider : 'minimax';
+  const generationParams = normalizeAgentGenerationParams(settings?.generation_params_json ? JSON.parse(settings.generation_params_json) : null);
   return {
     default_provider: provider,
     default_model: settings?.default_model ?? '',
-    generation_params: settings?.generation_params_json ? JSON.parse(settings.generation_params_json) : null,
+    generation_params: generationParams,
   };
 };
 
@@ -366,7 +402,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
       const defaultModel = String(payload.default_model ?? '').trim();
-      const generationParams = payload.generation_params && typeof payload.generation_params === 'object' ? payload.generation_params : null;
+      const generationParams = normalizeAgentGenerationParams(payload.generation_params);
       execSql(`update agent_settings set
         default_provider = ${sqlEscape(provider)},
         default_model = ${sqlEscape(defaultModel)},
@@ -425,8 +461,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const settings = getAgentSettings();
       const preferredModel = settings.default_provider === provider ? settings.default_model : undefined;
       const fallbackModels = FALLBACK_MODELS[provider];
+      const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
       const apiKey = secretStore.get(provider);
-      if (!apiKey) {
+      if (provider !== 'ollama' && !apiKey) {
         writeJson(res, 200, {
           models: fallbackModels,
           selected_model: selectBestModel(provider, [], fallbackModels, preferredModel).selected_model,
@@ -437,7 +474,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
 
-      const result = await providerRegistry[provider].listModels(apiKey, { fallbackModels, preferredModel });
+      const result = await providerRegistry[provider].listModels(apiKey ?? '', { fallbackModels, preferredModel, baseUrl });
       if (result.catalog_status !== 'live') {
         console.warn('[agent-models] catalog fallback', { provider, catalog_status: result.catalog_status, reason_code: result.reason_code });
       }
@@ -495,7 +532,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         error_message_short: null,
       });
       const apiKey = secretStore.get(provider);
-      if (!apiKey) {
+      if (provider !== 'ollama' && !apiKey) {
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
@@ -518,11 +555,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const controller = new AbortController();
       req.on('aborted', () => controller.abort());
       try {
+        const settings = getAgentSettings();
+        const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
         const result = await providerRegistry[provider].generate({
           model,
           inputText,
-          generationParams: payload.generation_params as { temperature?: number; maxTokens?: number } | undefined,
-        }, apiKey, controller.signal);
+          generationParams: {
+            ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
+            ...(provider === 'ollama' ? { baseUrl } : {}),
+          },
+        }, apiKey ?? '', controller.signal);
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
