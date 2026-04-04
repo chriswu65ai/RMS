@@ -2,8 +2,10 @@ import type { AgentSettings, WebSearchDomainPolicy, WebSearchMode, WebSearchRece
 
 export const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
 export const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
+export const WEB_SEARCH_SOURCE_CITATION_DEFAULT = false;
 
 const normalizePositiveInteger = (value: string, fallback: number) => Math.max(1, Number(value) || fallback);
+export const getWebSearchSourceCitationDefault = (sourceCitation: boolean | undefined) => sourceCitation ?? WEB_SEARCH_SOURCE_CITATION_DEFAULT;
 
 export const buildWebSearchSettingsPayload = (
   settings: AgentSettings,
@@ -16,6 +18,7 @@ export const buildWebSearchSettingsPayload = (
     safeSearch: boolean;
     recency: WebSearchRecency;
     domainPolicy: WebSearchDomainPolicy;
+    sourceCitation: boolean;
   },
 ): AgentSettings => ({
   ...settings,
@@ -30,7 +33,7 @@ export const buildWebSearchSettingsPayload = (
       safe_search: draft.safeSearch,
       recency: draft.recency,
       domain_policy: draft.domainPolicy,
+      source_citation: draft.sourceCitation,
     },
   },
 });
-

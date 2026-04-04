@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync.js';
-import { buildWebSearchSettingsPayload } from './webSearchSettings.js';
+import { buildWebSearchSettingsPayload, getWebSearchSourceCitationDefault } from './webSearchSettings.js';
 import { getWebSearchWarningBannerMessage } from './activityWarnings.js';
 import type { AgentActivityLog } from './types.js';
 
@@ -51,6 +51,7 @@ test('web search save payload preserves existing params and normalizes numeric c
     safeSearch: false,
     recency: '30d',
     domainPolicy: 'prefer_list',
+    sourceCitation: false,
   });
 
   assert.equal(payload.generation_params?.temperature, 0.2);
@@ -64,7 +65,33 @@ test('web search save payload preserves existing params and normalizes numeric c
     safe_search: false,
     recency: '30d',
     domain_policy: 'prefer_list',
+    source_citation: false,
   });
+});
+
+test('web search save payload includes source_citation when enabled', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'duckduckgo',
+    mode: 'single',
+    maxResults: '5',
+    timeoutMs: '5000',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: true,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.source_citation, true);
+});
+
+test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
+  assert.equal(getWebSearchSourceCitationDefault(undefined), false);
+  assert.equal(getWebSearchSourceCitationDefault(false), false);
 });
 
 const makeActivityEntry = (overrides: Partial<AgentActivityLog>): AgentActivityLog => ({

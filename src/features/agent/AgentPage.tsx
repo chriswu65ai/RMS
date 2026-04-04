@@ -32,6 +32,7 @@ import { getSavedLocalRuntime } from './runtimeConfig';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync';
 import {
   buildWebSearchSettingsPayload,
+  getWebSearchSourceCitationDefault,
   WEB_SEARCH_MAX_RESULTS_DEFAULT,
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
 } from './webSearchSettings';
@@ -99,6 +100,7 @@ export function AgentPage() {
   const [webSearchSafeSearch, setWebSearchSafeSearch] = useState(true);
   const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
+  const [webSearchSourceCitation, setWebSearchSourceCitation] = useState(false);
   const [webSearchStatusMessage, setWebSearchStatusMessage] = useState('');
   const [preferredSources, setPreferredSources] = useState<PreferredSource[]>([]);
   const [preferredSourcesMessage, setPreferredSourcesMessage] = useState('');
@@ -186,6 +188,7 @@ export function AgentPage() {
         setWebSearchSafeSearch(webSearchSettings?.safe_search ?? true);
         setWebSearchRecency(webSearchSettings?.recency ?? 'any');
         setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
+        setWebSearchSourceCitation(getWebSearchSourceCitationDefault(webSearchSettings?.source_citation));
         setPreferredSources(sources);
 
         const shouldRefreshOnMount = !settings.default_model.trim()
@@ -389,6 +392,15 @@ export function AgentPage() {
                 />
               </label>
               <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Source citation</span>
+                <input
+                  className="h-4 w-4"
+                  type="checkbox"
+                  checked={webSearchSourceCitation}
+                  onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Recency</span>
                 <select className="input" value={webSearchRecency} onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}>
                   {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
@@ -419,6 +431,7 @@ export function AgentPage() {
                       safeSearch: webSearchSafeSearch,
                       recency: webSearchRecency,
                       domainPolicy: webSearchDomainPolicy,
+                      sourceCitation: webSearchSourceCitation,
                     }));
                     setWebSearchStatusMessage('Web search settings saved.');
                     setMessage('Web search settings saved.');

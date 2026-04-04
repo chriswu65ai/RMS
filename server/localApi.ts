@@ -81,6 +81,7 @@ type AgentGenerationParams = {
     safe_search: boolean;
     recency: WebSearchRecency;
     domain_policy: WebSearchDomainPolicy;
+    source_citation: boolean;
   };
 } | null;
 
@@ -473,6 +474,15 @@ const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((sour
   ...(source.published_at ? { published_at: source.published_at } : {}),
 }));
 
+const buildWebSearchSourcesAppendix = (sources: SearchResult[]): string => {
+  if (sources.length === 0) return '';
+  const sourceLines = sources.map((source, index) => {
+    const title = source.title.trim() || source.url;
+    return `${index + 1}. [${title}](${source.url})`;
+  });
+  return ['---', 'Sources', ...sourceLines, '---'].join('\n');
+};
+
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
   const next = raw as Record<string, unknown>;
@@ -509,6 +519,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       safe_search: typeof webSearch?.safe_search === 'boolean' ? webSearch.safe_search : WEB_SEARCH_SAFE_SEARCH_DEFAULT,
       recency: isWebSearchRecency(webSearch?.recency) ? webSearch.recency : WEB_SEARCH_RECENCY_DEFAULT,
       domain_policy: isWebSearchDomainPolicy(webSearch?.domain_policy) ? webSearch.domain_policy : WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
+      source_citation: typeof webSearch?.source_citation === 'boolean' ? webSearch.source_citation : false,
     },
   };
 };
@@ -868,6 +879,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           safe_search: WEB_SEARCH_SAFE_SEARCH_DEFAULT,
           recency: WEB_SEARCH_RECENCY_DEFAULT,
           domain_policy: WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
+          source_citation: false,
         };
         const webSearchMetadata: PreparedWebSearchContext = {
           enabled: Boolean(normalizedWebSearchConfig.enabled),
@@ -943,7 +955,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             webSearchMetadata.sourceCount = finalSources.length;
             if (finalSources.length > 0) {
               const sourceContextBlock = buildSourceContextBlock(queries, finalSources);
-              preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Strict citation mode: when using web_search_context sources, cite supporting claims with bracket indices like [1], [2] that map directly to the numbered <sources> list above. Do not invent citations or URLs.</web_search_context_note>`;
+              if (normalizedWebSearchConfig.source_citation) {
+                preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Strict citation mode: when using web_search_context sources, cite supporting claims with bracket indices like [1], [2] that map directly to the numbered <sources> list above. Do not invent citations or URLs.</web_search_context_note>`;
+              } else {
+                preparedInputText = `${sourceContextBlock}\n\n${inputText}`;
+              }
             }
           } catch (error) {
             webSearchMetadata.warning = {
@@ -973,6 +989,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }, apiKey ?? '', controller.signal, {
           onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
         });
+        const outputText = normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
+          ? `${result.outputText}\n\n${buildWebSearchSourcesAppendix(normalizedSources)}`
+          : result.outputText;
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
@@ -984,14 +1003,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           status: 'success',
           duration_ms: Date.now() - startedAt,
           input_chars: inputText.length,
-          output_chars: result.outputText.length,
+          output_chars: outputText.length,
           token_estimate: result.usage?.totalTokens ?? null,
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
           search_warning: webSearchMetadata.warning ? 1 : 0,
           search_warning_message: webSearchMetadata.warning?.message ?? null,
         });
-        writeNdjson(res, { type: 'done', ...result, web_search: webSearchMetadata });
+        writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         res.end();
       } catch (error) {
         const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
