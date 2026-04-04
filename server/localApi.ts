@@ -117,6 +117,8 @@ type AgentActivityLogRow = {
   token_estimate: number | null;
   cost_estimate_usd: number | null;
   error_message_short: string | null;
+  search_warning: number;
+  search_warning_message: string | null;
 };
 
 type PreferredSourceRow = {
@@ -242,10 +244,22 @@ const ensureInitialized = () => {
     output_chars integer not null default 0,
     token_estimate integer,
     cost_estimate_usd real,
-    error_message_short text
+    error_message_short text,
+    search_warning integer not null default 0,
+    search_warning_message text
   );
   `);
   execSql(`insert or ignore into agent_settings (id, default_provider, default_model, generation_params_json) values (1, 'minimax', '', null);`);
+  try {
+    execSql(`alter table agent_activity_log add column search_warning integer not null default 0;`);
+  } catch {
+    // existing DBs may already include this column
+  }
+  try {
+    execSql(`alter table agent_activity_log add column search_warning_message text;`);
+  } catch {
+    // existing DBs may already include this column
+  }
   try {
     execSql(`alter table new_research_tasks add column note_type text not null default '';`);
   } catch {
@@ -531,7 +545,7 @@ const getAgentSettings = () => {
 
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
   execSql(`insert into agent_activity_log (
-    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short
+    id, timestamp, note_id, action, trigger_source, initiated_by, provider, model, status, duration_ms, input_chars, output_chars, token_estimate, cost_estimate_usd, error_message_short, search_warning, search_warning_message
   ) values (
     ${sqlEscape(randomUUID())},
     ${sqlEscape(entry.timestamp)},
@@ -547,7 +561,9 @@ const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
     ${sqlEscape(entry.output_chars)},
     ${sqlEscape(entry.token_estimate)},
     ${sqlEscape(entry.cost_estimate_usd)},
-    ${sqlEscape(entry.error_message_short)}
+    ${sqlEscape(entry.error_message_short)},
+    ${sqlEscape(entry.search_warning)},
+    ${sqlEscape(entry.search_warning_message)}
   )`);
 };
 
@@ -813,6 +829,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         token_estimate: null,
         cost_estimate_usd: null,
         error_message_short: null,
+        search_warning: 0,
+        search_warning_message: null,
       });
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
@@ -831,6 +849,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           token_estimate: null,
           cost_estimate_usd: null,
           error_message_short: 'Missing API key.',
+          search_warning: 0,
+          search_warning_message: null,
         });
         writeJson(res, 400, { error: { message: 'Missing API key for selected provider.' } });
         return true;
@@ -968,6 +988,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           token_estimate: result.usage?.totalTokens ?? null,
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
+          search_warning: webSearchMetadata.warning ? 1 : 0,
+          search_warning_message: webSearchMetadata.warning?.message ?? null,
         });
         writeNdjson(res, { type: 'done', ...result, web_search: webSearchMetadata });
         res.end();
@@ -988,6 +1010,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           token_estimate: null,
           cost_estimate_usd: null,
           error_message_short: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
+          search_warning: 0,
+          search_warning_message: null,
         });
         if (res.headersSent) {
           writeNdjson(res, { type: 'error', message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.'), aborted });

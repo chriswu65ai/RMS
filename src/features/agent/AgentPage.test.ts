@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync.js';
 import { buildWebSearchSettingsPayload } from './webSearchSettings.js';
+import { getWebSearchWarningBannerMessage } from './activityWarnings.js';
+import type { AgentActivityLog } from './types.js';
 
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
@@ -63,4 +65,46 @@ test('web search save payload preserves existing params and normalizes numeric c
     recency: '30d',
     domain_policy: 'prefer_list',
   });
+});
+
+const makeActivityEntry = (overrides: Partial<AgentActivityLog>): AgentActivityLog => ({
+  id: 'log-1',
+  timestamp: '2026-04-04T00:00:00.000Z',
+  note_id: '',
+  action: 'generate',
+  trigger_source: 'manual',
+  initiated_by: 'user',
+  provider: 'openai',
+  model: 'gpt-4.1',
+  status: 'success',
+  duration_ms: 100,
+  input_chars: 10,
+  output_chars: 20,
+  token_estimate: 12,
+  cost_estimate_usd: 0.001,
+  error_message_short: null,
+  search_warning: 0,
+  search_warning_message: null,
+  ...overrides,
+});
+
+test('web search warning banner shows fail-open warning for successful generation entries', () => {
+  const message = getWebSearchWarningBannerMessage([
+    makeActivityEntry({
+      status: 'success',
+      search_warning: 1,
+      search_warning_message: 'DuckDuckGo timed out',
+    }),
+  ], true);
+  assert.equal(message, 'Web search is enabled, but recent runs reported search warnings: DuckDuckGo timed out');
+});
+
+test('web search warning banner is hidden when web search is disabled', () => {
+  const message = getWebSearchWarningBannerMessage([
+    makeActivityEntry({
+      search_warning: 1,
+      search_warning_message: 'DuckDuckGo timed out',
+    }),
+  ], false);
+  assert.equal(message, '');
 });

@@ -35,6 +35,7 @@ import {
   WEB_SEARCH_MAX_RESULTS_DEFAULT,
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
 } from './webSearchSettings';
+import { getWebSearchWarningBannerMessage } from './activityWarnings';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
@@ -207,12 +208,7 @@ export function AgentPage() {
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutMs) > 0;
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const webSearchWarningBanner = useMemo(() => {
-    if (!webSearchEnabled) return '';
-    const latestSearchFailure = activity.find((entry) =>
-      entry.status === 'failed' && Boolean(entry.error_message_short?.toLowerCase().includes('search')));
-    return latestSearchFailure?.error_message_short
-      ? `Web search is enabled, but recent runs reported search failures: ${latestSearchFailure.error_message_short}`
-      : '';
+    return getWebSearchWarningBannerMessage(activity, webSearchEnabled);
   }, [activity, webSearchEnabled]);
   const domainPolicyHelperText = useMemo(() => {
     if (webSearchDomainPolicy === 'open_web') return 'open_web: Search the web normally, with no preferred-source weighting.';
