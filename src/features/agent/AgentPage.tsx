@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { clearActivityLog, getAgentSettings, getCredentialStatus, listActivityLog, saveAgentSettings, saveCredential } from '../../lib/agentApi';
+import {
+  clearActivityLog,
+  deletePreferredSource,
+  getAgentSettings,
+  getCredentialStatus,
+  listActivityLog,
+  loadPreferredSources,
+  saveAgentSettings,
+  saveCredential,
+  savePreferredSource,
+  savePreferredSourceById,
+} from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
 import {
@@ -10,6 +21,7 @@ import {
   type CloudAgentProvider,
   type ModelCatalogReasonCode,
   type ModelListItem,
+  type PreferredSource,
   type WebSearchDomainPolicy,
   type WebSearchMode,
   type WebSearchRecency,
@@ -40,6 +52,7 @@ const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: s
   { value: 'prefer_list', label: 'prefer_list' },
   { value: 'only_list', label: 'only_list' },
 ];
+const DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -84,6 +97,16 @@ export function AgentPage() {
   const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
   const [webSearchStatusMessage, setWebSearchStatusMessage] = useState('');
+  const [preferredSources, setPreferredSources] = useState<PreferredSource[]>([]);
+  const [preferredSourcesMessage, setPreferredSourcesMessage] = useState('');
+  const [newDomain, setNewDomain] = useState('');
+  const [newWeight, setNewWeight] = useState('1');
+  const [newEnabled, setNewEnabled] = useState(true);
+  const [domainInputError, setDomainInputError] = useState('');
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [editingDomain, setEditingDomain] = useState('');
+  const [editingWeight, setEditingWeight] = useState('1');
+  const [editingEnabled, setEditingEnabled] = useState(true);
   const modelOptions = models.length > 0
     ? models
     : (selectedProviderModel.trim()
@@ -143,6 +166,7 @@ export function AgentPage() {
     void (async () => {
       try {
         const [settings, events] = await Promise.all([getAgentSettings(), listActivityLog(12)]);
+        const sources = await loadPreferredSources();
         setProvider(settings.default_provider);
         const savedRuntime = getSavedLocalRuntime(settings);
         setSelectedProviderModel(settings.default_model);
@@ -159,6 +183,7 @@ export function AgentPage() {
         setWebSearchSafeSearch(webSearchSettings?.safe_search ?? true);
         setWebSearchRecency(webSearchSettings?.recency ?? 'any');
         setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
+        setPreferredSources(sources);
 
         const shouldRefreshOnMount = !settings.default_model.trim()
           || (settings.default_provider === 'ollama' && !savedRuntime.model.trim());
@@ -187,6 +212,12 @@ export function AgentPage() {
       ? `Web search is enabled, but recent runs reported search failures: ${latestSearchFailure.error_message_short}`
       : '';
   }, [activity, webSearchEnabled]);
+  const domainPolicyHelperText = useMemo(() => {
+    if (webSearchDomainPolicy === 'open_web') return 'open_web: Search the web normally, with no preferred-source weighting.';
+    if (webSearchDomainPolicy === 'prefer_list') return 'prefer_list (boost): Search broadly, but boost rankings for enabled preferred sources.';
+    return 'only_list (strict filter): Restrict search results to enabled preferred sources only.';
+  }, [webSearchDomainPolicy]);
+  const isValidDomain = (value: string) => DOMAIN_PATTERN.test(value.trim());
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -370,6 +401,7 @@ export function AgentPage() {
                 <select className="input" value={webSearchDomainPolicy} onChange={(event) => setWebSearchDomainPolicy(event.target.value as WebSearchDomainPolicy)}>
                   {WEB_SEARCH_DOMAIN_POLICIES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                 </select>
+                <p className="text-xs text-slate-500">{domainPolicyHelperText}</p>
               </label>
             </div>
             {webSearchStatusMessage ? <p className="mt-2 text-xs text-emerald-700">{webSearchStatusMessage}</p> : null}
@@ -406,6 +438,166 @@ export function AgentPage() {
                 Save web search settings
               </button>
             </div>
+          </div>
+        </section>
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Preferred sources</h2>
+          <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+            <form
+              className="grid gap-4 md:grid-cols-4"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const canonicalDomain = newDomain.trim().toLowerCase();
+                if (!isValidDomain(canonicalDomain)) {
+                  setDomainInputError('Enter a valid domain like example.com (no protocol or path).');
+                  return;
+                }
+                setDomainInputError('');
+                try {
+                  const created = await savePreferredSource({
+                    domain: canonicalDomain,
+                    weight: Math.max(1, Number(newWeight) || 1),
+                    enabled: newEnabled,
+                  });
+                  setPreferredSources((current) => [...current, created]);
+                  setPreferredSourcesMessage(`Added ${created.domain}.`);
+                  setNewDomain('');
+                  setNewWeight('1');
+                  setNewEnabled(true);
+                } catch (error) {
+                  setMessage(error instanceof Error ? error.message : 'Failed creating preferred source.');
+                }
+              }}
+            >
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Domain</span>
+                <input
+                  className="input"
+                  value={newDomain}
+                  placeholder="example.com"
+                  onChange={(event) => {
+                    setNewDomain(event.target.value);
+                    setDomainInputError('');
+                  }}
+                />
+                {domainInputError ? <p className="text-xs text-rose-600">{domainInputError}</p> : null}
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Weight</span>
+                <input className="input" min={1} step={1} type="number" value={newWeight} onChange={(event) => setNewWeight(event.target.value)} />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Enabled</span>
+                <input className="h-4 w-4" type="checkbox" checked={newEnabled} onChange={(event) => setNewEnabled(event.target.checked)} />
+              </label>
+              <div className="flex items-end">
+                <button className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white" type="submit">Add source</button>
+              </div>
+            </form>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-slate-600">
+                    <th className="py-2 pr-3">Domain</th>
+                    <th className="py-2 pr-3">Weight</th>
+                    <th className="py-2 pr-3">Enabled</th>
+                    <th className="py-2 pr-3">Controls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preferredSources.map((source) => {
+                    const isEditing = editingSourceId === source.id;
+                    return (
+                      <tr key={source.id} className="border-b border-slate-100">
+                        <td className="py-2 pr-3">
+                          {isEditing ? (
+                            <input className="input" value={editingDomain} onChange={(event) => setEditingDomain(event.target.value)} />
+                          ) : source.domain}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {isEditing ? (
+                            <input className="input" min={1} step={1} type="number" value={editingWeight} onChange={(event) => setEditingWeight(event.target.value)} />
+                          ) : source.weight}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {isEditing ? (
+                            <input className="h-4 w-4" type="checkbox" checked={editingEnabled} onChange={(event) => setEditingEnabled(event.target.checked)} />
+                          ) : (source.enabled ? 'Yes' : 'No')}
+                        </td>
+                        <td className="py-2 pr-3">
+                          <div className="flex gap-2">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                  onClick={async () => {
+                                    const canonicalDomain = editingDomain.trim().toLowerCase();
+                                    if (!isValidDomain(canonicalDomain)) {
+                                      setMessage('Domain must be valid, such as example.com.');
+                                      return;
+                                    }
+                                    try {
+                                      const updated = await savePreferredSourceById(source.id, {
+                                        domain: canonicalDomain,
+                                        weight: Math.max(1, Number(editingWeight) || 1),
+                                        enabled: editingEnabled,
+                                      });
+                                      setPreferredSources((current) => current.map((entry) => (entry.id === source.id ? updated : entry)));
+                                      setEditingSourceId(null);
+                                      setPreferredSourcesMessage(`Updated ${updated.domain}.`);
+                                    } catch (error) {
+                                      setMessage(error instanceof Error ? error.message : 'Failed updating preferred source.');
+                                    }
+                                  }}
+                                >
+                                  Save
+                                </button>
+                                <button className="rounded-md border border-slate-300 px-2 py-1 text-xs" onClick={() => setEditingSourceId(null)}>Cancel</button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                                  onClick={() => {
+                                    setEditingSourceId(source.id);
+                                    setEditingDomain(source.domain);
+                                    setEditingWeight(String(source.weight));
+                                    setEditingEnabled(source.enabled);
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  className="rounded-md border border-rose-300 px-2 py-1 text-xs text-rose-700"
+                                  onClick={async () => {
+                                    try {
+                                      await deletePreferredSource(source.id);
+                                      setPreferredSources((current) => current.filter((entry) => entry.id !== source.id));
+                                      setPreferredSourcesMessage(`Deleted ${source.domain}.`);
+                                    } catch (error) {
+                                      setMessage(error instanceof Error ? error.message : 'Failed deleting preferred source.');
+                                    }
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {preferredSources.length === 0 ? (
+                    <tr>
+                      <td className="py-2 text-slate-500" colSpan={4}>No preferred sources yet.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            {preferredSourcesMessage ? <p className="text-xs text-emerald-700">{preferredSourcesMessage}</p> : null}
           </div>
         </section>
 
