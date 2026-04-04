@@ -692,7 +692,10 @@ export function EditorPane() {
         </div>
 
         <div className={`grid min-h-0 flex-1 ${editorTab === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-          {(editorTab === 'edit' || editorTab === 'split') && (
+          <div
+            className={`${editorTab === 'preview' ? 'hidden pointer-events-none' : ''} min-h-0 flex-1`}
+            aria-hidden={editorTab === 'preview'}
+          >
             <CodeMirror
               value={editorValue}
               className="editor-scroll min-h-0 flex-1"
@@ -719,9 +722,9 @@ export function EditorPane() {
                 setCanRedo(redoDepth(viewUpdate.state) > 0);
               }}
             />
-          )}
+          </div>
           {(editorTab === 'preview' || editorTab === 'split') && (
-            <div className="markdown-preview max-w-none overflow-y-auto border-l border-slate-200 bg-white px-5 pb-5 pt-2 text-sm">
+            <div className={`markdown-preview max-w-none overflow-y-auto bg-white px-5 pb-5 pt-2 text-sm ${editorTab === 'split' ? 'border-l border-slate-200' : ''}`}>
               {showMetadata && metadataSyntax && (
                 <pre className="mb-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-600">
                   {metadataSyntax}
