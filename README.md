@@ -6,6 +6,9 @@ Stock Research Management System is a Markdown-first app for managing stock rese
 
 - Local-first runtime with SQLite-backed API routes (`/api/bootstrap`, `/api/files`, `/api/folders`, and `/api/agent/*`).
 - Folder/file manager for stock research notes with template-driven note creation.
+- New Research task lifecycle supports both archive and delete actions:
+  - **Archive** keeps the task record and its activity history.
+  - **Delete** permanently removes the task and its associated activity history.
 - Metadata workflow for equity research (`ticker`, `type`, `date`, `sector`, recommendation).
 - Agent settings for provider/model defaults, local Ollama runtime, and web search-assisted generation.
 - Preferred source list for domain weighting/filtering during web search.

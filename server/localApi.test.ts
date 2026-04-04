@@ -1079,6 +1079,38 @@ test('agent generate only injects citation instruction and appends Sources block
   }
 });
 
+test('archiving a research task preserves activity events', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Archive me',
+    ticker: 'ACME',
+    status: 'ideas',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string };
+
+  const updateResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'researching',
+    assignee: 'Analyst',
+  });
+  assert.equal(updateResponse.status, 200);
+
+  const activityBeforeArchive = await callRoute('GET', `/api/research-tasks/${createdTask.id}/activity`);
+  assert.equal(activityBeforeArchive.status, 200);
+  const eventsBeforeArchive = JSON.parse(activityBeforeArchive.body) as Array<{ event_type: string }>;
+  assert.equal(eventsBeforeArchive.length > 0, true);
+
+  const archiveResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    archived: true,
+  });
+  assert.equal(archiveResponse.status, 200);
+
+  const activityAfterArchive = await callRoute('GET', `/api/research-tasks/${createdTask.id}/activity`);
+  assert.equal(activityAfterArchive.status, 200);
+  const eventsAfterArchive = JSON.parse(activityAfterArchive.body) as Array<{ event_type: string }>;
+  assert.equal(eventsAfterArchive.length >= eventsBeforeArchive.length, true);
+  assert.equal(eventsAfterArchive.some((event) => event.event_type === 'archive'), true);
+});
+
 test('deleting a research task also removes activity events', async () => {
   const createResponse = await callRoute('POST', '/api/research-tasks', {
     title: 'Delete me',

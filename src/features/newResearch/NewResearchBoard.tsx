@@ -214,7 +214,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   };
 
   const removeTask = async (taskId: string) => {
-    const confirmed = await dialog.confirm('Delete task', 'Delete this task permanently?');
+    const confirmed = await dialog.confirm('Delete task', 'Permanently delete task and activity history?');
     if (!confirmed) return;
     try { await deleteNewResearchTask(taskId); setTasks((prev) => prev.filter((task) => task.id !== taskId)); }
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete task.'); }
