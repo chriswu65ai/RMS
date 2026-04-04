@@ -58,6 +58,7 @@ export function EditorPane() {
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const originalTextRef = useRef<string | null>(null);
+  const isGeneratingRef = useRef(false);
   const parsed = useMemo(
     () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
     [file?.content, noteTypes, sectors],
@@ -478,8 +479,10 @@ export function EditorPane() {
   };
 
   const runGenerate = async () => {
-    if (generateState === 'running') return;
+    if (isGeneratingRef.current) return;
+    isGeneratingRef.current = true;
     if (!defaultModel.trim()) {
+      isGeneratingRef.current = false;
       await dialog.alert('Generate unavailable', 'Set a default provider/model in Agent settings first.');
       return;
     }
@@ -542,6 +545,7 @@ export function EditorPane() {
     } finally {
       abortControllerRef.current = null;
       originalTextRef.current = null;
+      isGeneratingRef.current = false;
       setGenerateState('idle');
     }
   };
@@ -580,7 +584,7 @@ export function EditorPane() {
                   <X className="mr-1" size={14} />Cancel
                 </button>
               ) : (
-                <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
+                <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim() || generateState === 'running'}>
                   <span className="relative mr-3 inline-flex items-center">
                     <Microchip className="inline" size={14} />
                     <span className="absolute -right-2 -top-0.5 rounded bg-slate-900 px-1 text-[8px] leading-tight text-white">AI</span>
