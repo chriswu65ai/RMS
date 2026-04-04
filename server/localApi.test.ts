@@ -268,3 +268,48 @@ test('ollama model list endpoint mirrors installed list and selected model', asy
     providerRegistry.ollama.listModels = originalListModels;
   }
 });
+
+
+test('agent settings web_search defaults and round-trip persistence', async () => {
+  const saveResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      temperature: 0.2,
+      web_search: {
+        enabled: true,
+        provider: 'duckduckgo',
+        mode: 'deep',
+        safe_search: false,
+        recency: '30d',
+        domain_policy: 'prefer_list',
+      },
+    },
+  });
+  assert.equal(saveResponse.status, 200);
+
+  const settingsResponse = await callRoute('GET', '/api/agent/settings');
+  assert.equal(settingsResponse.status, 200);
+  const payload = JSON.parse(settingsResponse.body) as {
+    generation_params?: {
+      web_search?: {
+        enabled?: boolean;
+        provider?: string;
+        mode?: string;
+        max_results?: number;
+        timeout_ms?: number;
+        safe_search?: boolean;
+        recency?: string;
+        domain_policy?: string;
+      };
+    };
+  };
+  assert.equal(payload.generation_params?.web_search?.enabled, true);
+  assert.equal(payload.generation_params?.web_search?.provider, 'duckduckgo');
+  assert.equal(payload.generation_params?.web_search?.mode, 'deep');
+  assert.equal(payload.generation_params?.web_search?.max_results, 5);
+  assert.equal(payload.generation_params?.web_search?.timeout_ms, 5000);
+  assert.equal(payload.generation_params?.web_search?.safe_search, false);
+  assert.equal(payload.generation_params?.web_search?.recency, '30d');
+  assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
+});

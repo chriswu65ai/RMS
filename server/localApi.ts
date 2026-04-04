@@ -57,6 +57,11 @@ type AgentSettingsRow = {
   generation_params_json: string | null;
 };
 
+type WebSearchProvider = 'duckduckgo';
+type WebSearchMode = 'single' | 'deep';
+type WebSearchRecency = 'any' | '7d' | '30d' | '365d';
+type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
+
 type AgentGenerationParams = {
   temperature?: number;
   maxTokens?: number;
@@ -64,6 +69,16 @@ type AgentGenerationParams = {
     base_url?: string;
     model?: string;
     B?: number;
+  };
+  web_search?: {
+    enabled: boolean;
+    provider: WebSearchProvider;
+    mode: WebSearchMode;
+    max_results: number;
+    timeout_ms: number;
+    safe_search: boolean;
+    recency: WebSearchRecency;
+    domain_policy: WebSearchDomainPolicy;
   };
 } | null;
 
@@ -180,6 +195,15 @@ const ensureInitialized = () => {
     default_provider text not null default 'minimax',
     default_model text not null default '',
     generation_params_json text
+  );
+  create table if not exists preferred_sources (
+    id text primary key,
+    domain text not null,
+    weight real not null default 1,
+    enabled integer not null default 1,
+    created_at text not null,
+    updated_at text not null,
+    unique(domain)
   );
   create table if not exists agent_activity_log (
     id text primary key,
@@ -338,11 +362,26 @@ const isAgentProvider = (value: unknown): value is AgentProvider => typeof value
 
 const OLLAMA_BASE_URL_DEFAULT = 'http://localhost:11434';
 
+const WEB_SEARCH_PROVIDER: WebSearchProvider = 'duckduckgo';
+const WEB_SEARCH_MODE_DEFAULT: WebSearchMode = 'single';
+const WEB_SEARCH_RECENCY_DEFAULT: WebSearchRecency = 'any';
+const WEB_SEARCH_DOMAIN_POLICY_DEFAULT: WebSearchDomainPolicy = 'open_web';
+const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
+const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
+const WEB_SEARCH_SAFE_SEARCH_DEFAULT = true;
+
+const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
+const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
+const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
+
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
   const next = raw as Record<string, unknown>;
   const localConnection = next.local_connection && typeof next.local_connection === 'object'
     ? (next.local_connection as Record<string, unknown>)
+    : null;
+  const webSearch = next.web_search && typeof next.web_search === 'object'
+    ? (next.web_search as Record<string, unknown>)
     : null;
   return {
     temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
@@ -357,6 +396,20 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       base_url: OLLAMA_BASE_URL_DEFAULT,
       model: '',
       B: 1,
+    },
+    web_search: {
+      enabled: typeof webSearch?.enabled === 'boolean' ? webSearch.enabled : false,
+      provider: WEB_SEARCH_PROVIDER,
+      mode: isWebSearchMode(webSearch?.mode) ? webSearch.mode : WEB_SEARCH_MODE_DEFAULT,
+      max_results: typeof webSearch?.max_results === 'number' && Number.isFinite(webSearch.max_results)
+        ? Math.max(1, Math.floor(webSearch.max_results))
+        : WEB_SEARCH_MAX_RESULTS_DEFAULT,
+      timeout_ms: typeof webSearch?.timeout_ms === 'number' && Number.isFinite(webSearch.timeout_ms)
+        ? Math.max(1, Math.floor(webSearch.timeout_ms))
+        : WEB_SEARCH_TIMEOUT_MS_DEFAULT,
+      safe_search: typeof webSearch?.safe_search === 'boolean' ? webSearch.safe_search : WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+      recency: isWebSearchRecency(webSearch?.recency) ? webSearch.recency : WEB_SEARCH_RECENCY_DEFAULT,
+      domain_policy: isWebSearchDomainPolicy(webSearch?.domain_policy) ? webSearch.domain_policy : WEB_SEARCH_DOMAIN_POLICY_DEFAULT,
     },
   };
 };
