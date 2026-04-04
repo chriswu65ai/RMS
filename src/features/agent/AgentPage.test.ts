@@ -249,3 +249,27 @@ test('web search controls render in expected order with checkbox row grouped at 
   assert.ok(checkboxRowIndex > settingsGridIndex);
   assert.ok(safeSearchIndex > checkboxRowIndex);
 });
+
+test('EditorPane thinking stream keeps a max-5 render policy and rotates queue in groups of five', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/editor/EditorPane.tsx'), 'utf-8');
+  assert.equal(source.includes('const THINKING_VISIBLE_LINE_LIMIT = 5;'), true);
+  assert.equal(source.includes('currentQueue.slice(0, THINKING_VISIBLE_LINE_LIMIT)'), true);
+  assert.equal(source.includes('thinkingVisibleLines.slice(0, THINKING_VISIBLE_LINE_LIMIT)'), true);
+});
+
+test('EditorPane thinking bubble lifecycle resets on run start and auto-closes on successful completion', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/editor/EditorPane.tsx'), 'utf-8');
+  assert.equal(source.includes("clearThinkingCloseTimer(file.id);"), true);
+  assert.equal(source.includes("clearThinkingFadeTimer(file.id);"), true);
+  assert.equal(source.includes("setThinkingQueueByFileId((current) => ({ ...current, [file.id]: [] }));"), true);
+  assert.equal(source.includes("setThinkingVisibleLinesByFileId((current) => ({ ...current, [file.id]: [] }));"), true);
+  assert.equal(source.includes("setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));"), true);
+  assert.equal(source.includes("window.setTimeout(() => {\n        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));\n      }, THINKING_SUCCESS_AUTO_CLOSE_MS);"), true);
+});
+
+test('EditorPane closes thinking bubble immediately on cancelled/failed runs and keeps per-note visibility state', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/editor/EditorPane.tsx'), 'utf-8');
+  const closeStateMatches = source.match(/setThinkingBubbleClosedByFileId\(\(current\) => \(\{ \.\.\.current, \[file\.id\]: true \}\)\);/g) ?? [];
+  assert.ok(closeStateMatches.length >= 2);
+  assert.equal(source.includes("const isThinkingBubbleClosed = thinkingBubbleClosedByFileId[file.id] ?? false;"), true);
+});

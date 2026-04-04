@@ -13,6 +13,15 @@ const makeNdjsonResponse = (lines: string[]) => new Response(new ReadableStream(
   headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
 });
 
+const makeChunkedNdjsonResponse = (chunks: string[]) => new Response(new ReadableStream({
+  start(controller) {
+    chunks.forEach((chunk) => controller.enqueue(encoder.encode(chunk)));
+    controller.close();
+  },
+}), {
+  headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+});
+
 test('generateText parses sources events and forwards them to callback', async () => {
   const originalFetch = globalThis.fetch;
   const seenSources: Array<{ title: string; url: string }> = [];
@@ -109,6 +118,36 @@ test('generateText forwards thinking stream events', async () => {
       { type: 'tool_call_failed', toolName: 'web_fetch', summary: undefined },
       { type: 'reasoning', toolName: undefined, summary: 'Compared and synthesized sources.' },
     ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('generateText parses split NDJSON chunks and forwards full thinking stream sequence', async () => {
+  const originalFetch = globalThis.fetch;
+  const seenEvents: string[] = [];
+  const seenProgress: string[] = [];
+
+  globalThis.fetch = async () => makeChunkedNdjsonResponse([
+    '{"type":"tool_call_started","tool_name":"web_search","tool_call_id":"call_1"}\n{"type":"tool_call_result","tool_n',
+    'ame":"web_search","tool_call_id":"call_1"}\n{"type":"reasoning","summary":"Synthesizing findings"}\n{"type":"delta","deltaText":"hello"}\n{"type":"done","outputText":"hello world"}\n',
+  ]);
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-4',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onProgress: (nextOutputText) => seenProgress.push(nextOutputText),
+      onThinkingEvent: (event) => seenEvents.push(event.type),
+    });
+
+    assert.equal(result.outputText, 'hello world');
+    assert.deepEqual(seenEvents, ['tool_call_started', 'tool_call_result', 'reasoning']);
+    assert.deepEqual(seenProgress, ['hello', 'hello world']);
   } finally {
     globalThis.fetch = originalFetch;
   }
