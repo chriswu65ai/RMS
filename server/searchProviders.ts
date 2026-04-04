@@ -132,6 +132,14 @@ const normalizeSearxngBaseUrl = (value?: string): string => {
   const trimmed = value.trim();
   try {
     const parsed = new URL(trimmed);
+    parsed.search = '';
+    parsed.hash = '';
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+    if (parsed.pathname === '/search' || parsed.pathname.endsWith('/search')) {
+      parsed.pathname = parsed.pathname.slice(0, -('/search'.length)) || '/';
+    }
     return parsed.toString().replace(/\/$/, '');
   } catch {
     return SEARXNG_BASE_URL_DEFAULT;
