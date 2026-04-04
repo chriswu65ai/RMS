@@ -452,13 +452,13 @@ class OllamaAdapter implements ProviderAdapter {
         signal,
       });
     } catch {
-      throw new Error('Ollama unavailable/unreachable.');
+      throw new Error(`Ollama unavailable/unreachable at ${baseUrl}.`);
     }
 
     if (!response.ok) {
       const status = response.status;
       if (status >= 500 || status === 404 || status === 503) {
-        throw new Error('Ollama unavailable/unreachable.');
+        throw new Error(`Ollama unavailable/unreachable at ${baseUrl}.`);
       }
       throw new Error('Ollama generate failed.');
     }
