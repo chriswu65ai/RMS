@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider } from './agentProviders';
 import { searchProviderRegistry, searchUtils, type SearchResult } from './searchProviders';
+import { appendSearchDiagnostic } from './searchLogging';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -875,17 +876,38 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               const perQueryCap = normalizedWebSearchConfig.mode === 'single'
                 ? remainingBudget
                 : Math.max(1, Math.ceil(remainingBudget / 2));
-              const queryResults = await searchProviderRegistry[normalizedWebSearchConfig.provider].search(query, {
-                mode: normalizedWebSearchConfig.mode,
-                policy: normalizedWebSearchConfig.domain_policy,
-                resultCap: perQueryCap,
-                domainList,
-                domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
-                  ? domainBoost
-                  : undefined,
-              }, searchTimeoutController.signal);
-              allResults.push(...queryResults);
-              remainingBudget = Math.max(0, remainingBudget - queryResults.length);
+              const searchStartedAt = Date.now();
+              try {
+                const queryResults = await searchProviderRegistry[normalizedWebSearchConfig.provider].search(query, {
+                  mode: normalizedWebSearchConfig.mode,
+                  policy: normalizedWebSearchConfig.domain_policy,
+                  resultCap: perQueryCap,
+                  domainList,
+                  domainBoost: normalizedWebSearchConfig.domain_policy === 'open_web' || normalizedWebSearchConfig.domain_policy === 'prefer_list'
+                    ? domainBoost
+                    : undefined,
+                }, searchTimeoutController.signal);
+                appendSearchDiagnostic({
+                  provider: normalizedWebSearchConfig.provider,
+                  mode: normalizedWebSearchConfig.mode,
+                  query,
+                  resultCount: queryResults.length,
+                  latencyMs: Date.now() - searchStartedAt,
+                });
+                allResults.push(...queryResults);
+                remainingBudget = Math.max(0, remainingBudget - queryResults.length);
+              } catch (searchError) {
+                appendSearchDiagnostic({
+                  provider: normalizedWebSearchConfig.provider,
+                  mode: normalizedWebSearchConfig.mode,
+                  query,
+                  resultCount: 0,
+                  latencyMs: Date.now() - searchStartedAt,
+                  status: 'error',
+                  error: searchError,
+                });
+                throw searchError;
+              }
             }
             const dedupedSources = searchUtils.dedupeByCanonicalUrl(allResults);
             const finalCap = normalizedWebSearchConfig.mode === 'deep'
