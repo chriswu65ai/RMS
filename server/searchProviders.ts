@@ -173,7 +173,8 @@ const extractSearxngHtmlResultBlocks = (html: string): string[] => {
     /<article\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/article>/gi,
     /<li\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/li>/gi,
     /<div\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi,
-    /<h[2-4]\b[^>]*>[\s\S]*?<\/h[2-4]>(?:[\s\S]{0,1000}?)(?=<h[2-4]\b|<\/section>|<\/main>|<\/body>)/gi,
+    /<section\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/section>/gi,
+    /<h[2-4]\b[^>]*>[\s\S]*?<\/h[2-4]>(?:[\s\S]{0,1200}?)(?=<h[2-4]\b|<\/section>|<\/main>|<\/body>)/gi,
   ];
 
   const unique = new Set<string>();
@@ -186,9 +187,25 @@ const extractSearxngHtmlResultBlocks = (html: string): string[] => {
   return Array.from(unique);
 };
 
+const extractAnchorFromSearxngHtmlBlock = (block: string): { href: string; labelHtml: string } | null => {
+  const anchorPatterns = [
+    /<h[1-6]\b[^>]*>[\s\S]*?<a\b[^>]*href=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h[1-6]>/i,
+    /<a\b[^>]*class="[^"]*(?:result_header|url_header|result-title|result_link)[^"]*"[^>]*href=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>/i,
+    /<a\b[^>]*href=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>/i,
+  ];
+
+  for (const pattern of anchorPatterns) {
+    const match = block.match(pattern);
+    const href = decodeHtml((match?.[1] ?? match?.[2] ?? '').trim());
+    if (!href) continue;
+    return { href, labelHtml: match?.[3] ?? '' };
+  }
+  return null;
+};
+
 const parseSearxngHtmlBlock = (block: string, index: number): SearchResult | null => {
-  const anchorMatch = block.match(/<a\b[^>]*href=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>/i);
-  const href = decodeHtml((anchorMatch?.[1] ?? anchorMatch?.[2] ?? '').trim());
+  const anchor = extractAnchorFromSearxngHtmlBlock(block);
+  const href = anchor?.href ?? '';
   if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return null;
 
   let parsedHref: URL;
@@ -200,10 +217,11 @@ const parseSearxngHtmlBlock = (block: string, index: number): SearchResult | nul
   if (parsedHref.protocol !== 'http:' && parsedHref.protocol !== 'https:') return null;
 
   const headingTitle = block.match(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/i)?.[1] ?? '';
-  const title = decodeHtml(stripHtmlTags(anchorMatch?.[3] ?? headingTitle)).trim() || href;
+  const title = decodeHtml(stripHtmlTags(anchor?.labelHtml ?? headingTitle)).trim() || href;
 
   const snippetMatches = [
     block.match(/<(?:p|div|span)\b[^>]*class="[^"]*(?:content|snippet|description|result-content|result_snippet)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i),
+    block.match(/<(?:p|div)\b[^>]*data-testid="result-snippet"[^>]*>([\s\S]*?)<\/(?:p|div)>/i),
     block.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i),
     block.match(/<(?:div|span)\b[^>]*>([\s\S]*?)<\/(?:div|span)>/i),
   ];
@@ -310,7 +328,7 @@ class SearxngSearchAdapter implements SearchProviderAdapter {
         .map((block, index) => parseSearxngHtmlBlock(block, index))
         .filter((result): result is SearchResult => Boolean(result));
       if (rawResults.length === 0) {
-        throw new Error('SearXNG HTML parse mismatch (theme/template).');
+        throw new Error('SearXNG HTML extraction empty despite HTTP 200 (template mismatch: expected result containers or heading+snippet pairs).');
       }
     }
 

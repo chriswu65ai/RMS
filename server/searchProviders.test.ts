@@ -341,6 +341,29 @@ test('searxng html adapter parses slight markup and class variation', async () =
   }
 });
 
+test('searxng html adapter parses heading+snippet fallback without result container', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <main>
+      <h3 class="result_header"><a href="https://fallback.example.net/story">Fallback Heading Result</a></h3>
+      <p class="content">Fallback snippet text</p>
+    </main>
+  `;
+  globalThis.fetch = async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html' } });
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('query', {
+      providerConfig: { searxng: { use_json_api: false } },
+    });
+    assert.equal(results.length > 0, true);
+    assert.equal(results[0]?.url, 'https://fallback.example.net/story');
+    assert.equal(results[0]?.title, 'Fallback Heading Result');
+    assert.equal(results[0]?.snippet, 'Fallback snippet text');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('searxng html adapter emits explicit parse mismatch error for unknown template', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response('<html><body><div>No recognizable result blocks</div></body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
@@ -350,7 +373,7 @@ test('searxng html adapter emits explicit parse mismatch error for unknown templ
       searchProviderRegistry.searxng.search('query', {
         providerConfig: { searxng: { use_json_api: false } },
       }),
-      /SearXNG HTML parse mismatch \(theme\/template\)\./,
+      /SearXNG HTML extraction empty despite HTTP 200 \(template mismatch: expected result containers or heading\+snippet pairs\)\./,
     );
   } finally {
     globalThis.fetch = originalFetch;
