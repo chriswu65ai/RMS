@@ -1,7 +1,8 @@
+import { redo, undo } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Save, Share2, Smile, Table, X } from 'lucide-react';
+import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
@@ -402,6 +403,20 @@ export function EditorPane() {
     view.focus();
   };
 
+  const onUndo = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    undo(view);
+    view.focus();
+  };
+
+  const onRedo = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    redo(view);
+    view.focus();
+  };
+
   const currentLine = getLineText();
   const currentSelection = getSelectedText();
 
@@ -601,6 +616,8 @@ export function EditorPane() {
           )}
           {editorTab !== 'preview' && (
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
+            <button className={btn(false)} onClick={onUndo} title="Undo" aria-label="Undo"><Undo2 size={14} /></button>
+            <button className={btn(false)} onClick={onRedo} title="Redo" aria-label="Redo"><Redo2 size={14} /></button>
             <button className={btn(active.h1)} onClick={() => toggleHeading(1)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h1 ? 'text-white/70' : 'text-slate-500'}`}>1</span></button>
             <button className={btn(active.h2)} onClick={() => toggleHeading(2)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h2 ? 'text-white/70' : 'text-slate-500'}`}>2</span></button>
             <button className={btn(active.h3)} onClick={() => toggleHeading(3)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h3 ? 'text-white/70' : 'text-slate-500'}`}>3</span></button>
