@@ -1,4 +1,4 @@
-import { generateText } from '../../lib/agentApi';
+import { generateText, type ThinkingEvent } from '../../lib/agentApi';
 import { SaveMode, TriggerSource, type AgentProvider } from './types';
 
 export class GenerateUseCase {
@@ -11,6 +11,7 @@ export class GenerateUseCase {
     onProgress?: (nextOutputText: string) => void;
     onSources?: (sources: Array<{ title: string; url: string; snippet: string; provider: string; published_at?: string }>) => void;
     onSearchWarning?: (message: string) => void;
+    onThinkingEvent?: (event: ThinkingEvent) => void;
   }): Promise<{ outputText: string }> {
     return generateText({
       noteId: params.noteId,
@@ -23,6 +24,7 @@ export class GenerateUseCase {
       onProgress: params.onProgress,
       onSources: params.onSources,
       onSearchWarning: params.onSearchWarning,
+      onThinkingEvent: params.onThinkingEvent,
     });
   }
 }

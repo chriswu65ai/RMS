@@ -20,6 +20,50 @@ export type StreamSource = {
   published_at?: string;
 };
 
+export type ThinkingEvent =
+  | {
+    type: 'tool_call_started';
+    toolName?: string;
+    toolCallId?: string;
+    message?: string;
+    raw: Record<string, unknown>;
+  }
+  | {
+    type: 'tool_call_result';
+    toolName?: string;
+    toolCallId?: string;
+    message?: string;
+    raw: Record<string, unknown>;
+  }
+  | {
+    type: 'tool_call_failed';
+    toolName?: string;
+    toolCallId?: string;
+    message?: string;
+    raw: Record<string, unknown>;
+  }
+  | {
+    type: 'reasoning';
+    summary?: string;
+    message?: string;
+    raw: Record<string, unknown>;
+  };
+
+type StreamPayload = {
+  type?: string;
+  deltaText?: string;
+  message?: string;
+  outputText?: string;
+  sources?: StreamSource[];
+  toolName?: string;
+  tool_name?: string;
+  toolCallId?: string;
+  tool_call_id?: string;
+  summary?: string;
+  reasoning?: string;
+  text?: string;
+} & Record<string, unknown>;
+
 const asErrorMessage = async (response: Response) => {
   try {
     const payload = await response.json() as ApiError;
@@ -142,6 +186,7 @@ export async function generateText(params: {
   onProgress?: (nextOutputText: string) => void;
   onSources?: (sources: StreamSource[]) => void;
   onSearchWarning?: (message: string) => void;
+  onThinkingEvent?: (event: ThinkingEvent) => void;
 }): Promise<{ outputText: string }> {
   const response = await fetch('/api/agent/generate', {
     method: 'POST',
@@ -176,7 +221,7 @@ export async function generateText(params: {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const payload = JSON.parse(trimmed) as { type?: string; deltaText?: string; message?: string; outputText?: string; sources?: StreamSource[] };
+      const payload = JSON.parse(trimmed) as StreamPayload;
       if (payload.type === 'delta') {
         outputText += payload.deltaText ?? '';
         params.onProgress?.(outputText);
@@ -186,6 +231,43 @@ export async function generateText(params: {
       }
       if (payload.type === 'search_warning') {
         params.onSearchWarning?.(payload.message ?? 'Web search failed.');
+      }
+      if (payload.type === 'tool_call_started') {
+        params.onThinkingEvent?.({
+          type: 'tool_call_started',
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
+          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
+          message: payload.message,
+          raw: payload,
+        });
+      }
+      if (payload.type === 'tool_call_result') {
+        params.onThinkingEvent?.({
+          type: 'tool_call_result',
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
+          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
+          message: payload.message,
+          raw: payload,
+        });
+      }
+      if (payload.type === 'tool_call_failed') {
+        params.onThinkingEvent?.({
+          type: 'tool_call_failed',
+          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
+          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
+          message: payload.message,
+          raw: payload,
+        });
+      }
+      if (payload.type === 'reasoning' || payload.type === 'provider_summary') {
+        params.onThinkingEvent?.({
+          type: 'reasoning',
+          summary: typeof payload.summary === 'string'
+            ? payload.summary
+            : (typeof payload.reasoning === 'string' ? payload.reasoning : (typeof payload.text === 'string' ? payload.text : undefined)),
+          message: payload.message,
+          raw: payload,
+        });
       }
       if (payload.type === 'done') {
         outputText = payload.outputText ?? outputText;

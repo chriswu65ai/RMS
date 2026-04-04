@@ -72,3 +72,44 @@ test('generateText surfaces search_warning events', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('generateText forwards thinking stream events', async () => {
+  const originalFetch = globalThis.fetch;
+  const seenEvents: Array<{ type: string; toolName?: string; summary?: string }> = [];
+
+  globalThis.fetch = async () => makeNdjsonResponse([
+    JSON.stringify({ type: 'tool_call_started', tool_name: 'web_search', tool_call_id: 'call_1', message: 'Searching...' }),
+    JSON.stringify({ type: 'tool_call_result', tool_name: 'web_search', tool_call_id: 'call_1', message: 'Found results' }),
+    JSON.stringify({ type: 'tool_call_failed', tool_name: 'web_fetch', tool_call_id: 'call_2', message: 'Timeout' }),
+    JSON.stringify({ type: 'provider_summary', text: 'Compared and synthesized sources.' }),
+    JSON.stringify({ type: 'done', outputText: 'ok' }),
+  ]);
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-3',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onThinkingEvent: (event) => {
+        seenEvents.push({
+          type: event.type,
+          toolName: 'toolName' in event ? event.toolName : undefined,
+          summary: event.type === 'reasoning' ? event.summary : undefined,
+        });
+      },
+    });
+
+    assert.equal(result.outputText, 'ok');
+    assert.deepEqual(seenEvents, [
+      { type: 'tool_call_started', toolName: 'web_search', summary: undefined },
+      { type: 'tool_call_result', toolName: 'web_search', summary: undefined },
+      { type: 'tool_call_failed', toolName: 'web_fetch', summary: undefined },
+      { type: 'reasoning', toolName: undefined, summary: 'Compared and synthesized sources.' },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
