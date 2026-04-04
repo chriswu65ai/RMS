@@ -55,6 +55,8 @@ const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: s
   { value: 'only_list', label: 'only_list' },
 ];
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+const CHECKBOX_WITH_LABEL_CLASS = 'inline-flex items-center gap-2 text-sm text-slate-700';
+const CHECKBOX_INPUT_CLASS = 'h-4 w-4';
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -351,11 +353,10 @@ export function AgentPage() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Web Search</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Enable web search</span>
+            <div className="space-y-4">
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
                 <input
-                  className="h-4 w-4"
+                  className={CHECKBOX_INPUT_CLASS}
                   type="checkbox"
                   checked={webSearchEnabled}
                   onChange={(event) => {
@@ -363,22 +364,23 @@ export function AgentPage() {
                     setWebSearchStatusMessage('');
                   }}
                 />
+                <span>Enable web search</span>
               </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Provider</span>
-                <select
-                  className="input"
-                  value={webSearchProvider}
-                  onChange={(event) => {
-                    setWebSearchProvider(event.target.value as WebSearchProvider);
-                    setWebSearchStatusMessage('');
-                  }}
-                >
-                  {WEB_SEARCH_PROVIDER_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
-                </select>
-              </label>
-              {shouldShowSearxngConfigFields(webSearchProvider) ? (
-                <>
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Provider</span>
+                  <select
+                    className="input"
+                    value={webSearchProvider}
+                    onChange={(event) => {
+                      setWebSearchProvider(event.target.value as WebSearchProvider);
+                      setWebSearchStatusMessage('');
+                    }}
+                  >
+                    {WEB_SEARCH_PROVIDER_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                </label>
+                {shouldShowSearxngConfigFields(webSearchProvider) ? (
                   <label className="space-y-1 text-sm">
                     <span className="text-slate-600">SearXNG base URL</span>
                     <input
@@ -392,10 +394,54 @@ export function AgentPage() {
                       }}
                     />
                   </label>
-                  <label className="space-y-1 text-sm">
-                    <span className="text-slate-600">HTML instead of JSON API</span>
+                ) : null}
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Mode</span>
+                  <select className="input" value={webSearchMode} onChange={(event) => setWebSearchMode(event.target.value as WebSearchMode)}>
+                    {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                  <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
+                  <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Max results</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={webSearchMaxResults}
+                    onChange={(event) => setWebSearchMaxResults(event.target.value)}
+                  />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Timeout (ms)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={webSearchTimeoutMs}
+                    onChange={(event) => setWebSearchTimeoutMs(event.target.value)}
+                  />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Recency</span>
+                  <select className="input" value={webSearchRecency} onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}>
+                    {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Domain policy</span>
+                  <select className="input" value={webSearchDomainPolicy} onChange={(event) => setWebSearchDomainPolicy(event.target.value as WebSearchDomainPolicy)}>
+                    {WEB_SEARCH_DOMAIN_POLICIES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                  <p className="text-xs text-slate-500">{domainPolicyHelperText}</p>
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                {shouldShowSearxngConfigFields(webSearchProvider) ? (
+                  <label className={CHECKBOX_WITH_LABEL_CLASS}>
                     <input
-                      className="h-4 w-4"
+                      className={CHECKBOX_INPUT_CLASS}
                       type="checkbox"
                       checked={webSearchSearxngUseHtmlMode}
                       onChange={(event) => {
@@ -403,68 +449,28 @@ export function AgentPage() {
                         setWebSearchStatusMessage('');
                       }}
                     />
+                    <span>HTML instead of JSON API</span>
                   </label>
-                </>
-              ) : null}
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Mode</span>
-                <select className="input" value={webSearchMode} onChange={(event) => setWebSearchMode(event.target.value as WebSearchMode)}>
-                  {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
-                </select>
-                <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
-                <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Max results</span>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={webSearchMaxResults}
-                  onChange={(event) => setWebSearchMaxResults(event.target.value)}
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Timeout (ms)</span>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={webSearchTimeoutMs}
-                  onChange={(event) => setWebSearchTimeoutMs(event.target.value)}
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Safe search</span>
-                <input
-                  className="h-4 w-4"
-                  type="checkbox"
-                  checked={webSearchSafeSearch}
-                  onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Source citation</span>
-                <input
-                  className="h-4 w-4"
-                  type="checkbox"
-                  checked={webSearchSourceCitation}
-                  onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Recency</span>
-                <select className="input" value={webSearchRecency} onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}>
-                  {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
-                </select>
-              </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Domain policy</span>
-                <select className="input" value={webSearchDomainPolicy} onChange={(event) => setWebSearchDomainPolicy(event.target.value as WebSearchDomainPolicy)}>
-                  {WEB_SEARCH_DOMAIN_POLICIES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
-                </select>
-                <p className="text-xs text-slate-500">{domainPolicyHelperText}</p>
-              </label>
+                ) : null}
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchSafeSearch}
+                    onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
+                  />
+                  <span>Safe search</span>
+                </label>
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchSourceCitation}
+                    onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
+                  />
+                  <span>Source citation</span>
+                </label>
+              </div>
             </div>
             <div className="mt-2 min-h-[1.25rem]">
               {webSearchStatusMessage
@@ -508,13 +514,16 @@ export function AgentPage() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Preferred sources</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+            <p className="text-xs text-slate-500">
+              Weight boosts ranking when domain policy is <code>open_web</code> or <code>prefer_list</code>. Under <code>only_list</code>, sources still filter results but weight does not affect ranking.
+            </p>
             <form
               className="grid gap-4 md:grid-cols-4"
               onSubmit={async (event) => {
                 event.preventDefault();
                 const canonicalDomain = newDomain.trim().toLowerCase();
                 if (!isValidDomain(canonicalDomain)) {
-                  setDomainInputError('Enter a valid domain like example.com (no protocol or path).');
+                  setDomainInputError('Enter a valid domain like google.com (no protocol or path).');
                   return;
                 }
                 setDomainInputError('');
@@ -539,7 +548,7 @@ export function AgentPage() {
                 <input
                   className="input"
                   value={newDomain}
-                  placeholder="example.com"
+                  placeholder="google.com"
                   onChange={(event) => {
                     setNewDomain(event.target.value);
                     setDomainInputError('');
@@ -551,10 +560,12 @@ export function AgentPage() {
                 <span className="text-slate-600">Weight</span>
                 <input className="input" min={1} step={1} type="number" value={newWeight} onChange={(event) => setNewWeight(event.target.value)} />
               </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Enabled</span>
-                <input className="h-4 w-4" type="checkbox" checked={newEnabled} onChange={(event) => setNewEnabled(event.target.checked)} />
-              </label>
+              <div className="flex items-end">
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input className={CHECKBOX_INPUT_CLASS} type="checkbox" checked={newEnabled} onChange={(event) => setNewEnabled(event.target.checked)} />
+                  <span>Enabled</span>
+                </label>
+              </div>
               <div className="flex items-end">
                 <button className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white" type="submit">Add source</button>
               </div>
@@ -599,7 +610,7 @@ export function AgentPage() {
                                   onClick={async () => {
                                     const canonicalDomain = editingDomain.trim().toLowerCase();
                                     if (!isValidDomain(canonicalDomain)) {
-                                      setMessage('Domain must be valid, such as example.com.');
+                                      setMessage('Domain must be valid, such as google.com.');
                                       return;
                                     }
                                     try {

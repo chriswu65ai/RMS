@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync.js';
 import {
   buildWebSearchSettingsPayload,
@@ -8,8 +10,6 @@ import {
   WEB_SEARCH_MODE_OPTIONS,
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
-import { getWebSearchWarningBannerMessage } from './activityWarnings.js';
-import type { AgentActivityLog } from './types.js';
 
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
@@ -226,44 +226,26 @@ test('web search save payload omits searxng provider_config when provider is duc
   assert.equal(payload.generation_params?.web_search?.provider_config, undefined);
 });
 
-const makeActivityEntry = (overrides: Partial<AgentActivityLog>): AgentActivityLog => ({
-  id: 'log-1',
-  timestamp: '2026-04-04T00:00:00.000Z',
-  note_id: '',
-  action: 'generate',
-  trigger_source: 'manual',
-  initiated_by: 'user',
-  provider: 'openai',
-  model: 'gpt-4.1',
-  status: 'success',
-  duration_ms: 100,
-  input_chars: 10,
-  output_chars: 20,
-  token_estimate: 12,
-  cost_estimate_usd: 0.001,
-  error_message_short: null,
-  search_warning: 0,
-  search_warning_message: null,
-  ...overrides,
+test('AgentPage UI no longer references the top web-search warning banner message', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);
 });
 
-test('web search warning banner shows fail-open warning for successful generation entries', () => {
-  const message = getWebSearchWarningBannerMessage([
-    makeActivityEntry({
-      status: 'success',
-      search_warning: 1,
-      search_warning_message: 'DuckDuckGo timed out',
-    }),
-  ], true);
-  assert.equal(message, 'Web search is enabled, but recent runs reported search warnings: DuckDuckGo timed out');
+test('preferred source domain placeholder and validation copy use google.com examples', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('placeholder="google.com"'), true);
+  assert.equal(source.includes('Enter a valid domain like google.com (no protocol or path).'), true);
+  assert.equal(source.includes('Domain must be valid, such as google.com.'), true);
 });
 
-test('web search warning banner is hidden when web search is disabled', () => {
-  const message = getWebSearchWarningBannerMessage([
-    makeActivityEntry({
-      search_warning: 1,
-      search_warning_message: 'DuckDuckGo timed out',
-    }),
-  ], false);
-  assert.equal(message, '');
+test('web search controls render in expected order with checkbox row grouped at the bottom', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  const enableIndex = source.indexOf('<span>Enable web search</span>');
+  const settingsGridIndex = source.indexOf('md:grid-cols-3');
+  const checkboxRowIndex = source.indexOf('flex flex-wrap items-center gap-x-6 gap-y-3');
+  const safeSearchIndex = source.indexOf('<span>Safe search</span>');
+  assert.ok(enableIndex >= 0);
+  assert.ok(settingsGridIndex > enableIndex);
+  assert.ok(checkboxRowIndex > settingsGridIndex);
+  assert.ok(safeSearchIndex > checkboxRowIndex);
 });
