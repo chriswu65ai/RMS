@@ -313,3 +313,62 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.recency, '30d');
   assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
 });
+
+test('preferred sources create normalizes domain and supports listing', async () => {
+  const createResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'HTTPS://WWW.Example.COM/path?q=1',
+    weight: 25,
+  });
+  assert.equal(createResponse.status, 200);
+  const created = JSON.parse(createResponse.body) as { domain: string; weight: number; enabled: boolean };
+  assert.equal(created.domain, 'www.example.com');
+  assert.equal(created.weight, 25);
+  assert.equal(created.enabled, true);
+
+  const listResponse = await callRoute('GET', '/api/agent/preferred-sources');
+  assert.equal(listResponse.status, 200);
+  const listPayload = JSON.parse(listResponse.body) as Array<{ domain: string }>;
+  assert.equal(listPayload.some((item) => item.domain === 'www.example.com'), true);
+});
+
+test('preferred sources validate domain, weight, and uniqueness', async () => {
+  const invalidDomainResponse = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'not a domain' });
+  assert.equal(invalidDomainResponse.status, 400);
+
+  const invalidWeightResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'valid-example.com',
+    weight: 0,
+  });
+  assert.equal(invalidWeightResponse.status, 400);
+
+  const firstCreate = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'duplicate.example.com' });
+  assert.equal(firstCreate.status, 200);
+  const duplicateCreate = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'DUPLICATE.EXAMPLE.COM' });
+  assert.equal(duplicateCreate.status, 409);
+});
+
+test('preferred sources patch and delete endpoints update rows', async () => {
+  const createResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'before-update.example.com',
+    weight: 10,
+    enabled: false,
+  });
+  assert.equal(createResponse.status, 200);
+  const created = JSON.parse(createResponse.body) as { id: string };
+
+  const patchResponse = await callRoute('PATCH', `/api/agent/preferred-sources/${created.id}`, {
+    domain: 'after-update.example.com/path',
+    weight: 75,
+    enabled: true,
+  });
+  assert.equal(patchResponse.status, 200);
+  const patched = JSON.parse(patchResponse.body) as { domain: string; weight: number; enabled: boolean };
+  assert.equal(patched.domain, 'after-update.example.com');
+  assert.equal(patched.weight, 75);
+  assert.equal(patched.enabled, true);
+
+  const deleteResponse = await callRoute('DELETE', `/api/agent/preferred-sources/${created.id}`);
+  assert.equal(deleteResponse.status, 200);
+  const secondDeleteResponse = await callRoute('DELETE', `/api/agent/preferred-sources/${created.id}`);
+  assert.equal(secondDeleteResponse.status, 404);
+});

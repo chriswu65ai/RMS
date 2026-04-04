@@ -2,10 +2,13 @@ import type {
   AgentActivityLog,
   AgentProvider,
   AgentSettings,
+  CreatePreferredSourceInput,
   ModelCatalogReasonCode,
   ModelListItem,
+  PreferredSource,
   SaveMode,
   TriggerSource,
+  UpdatePreferredSourceInput,
 } from '../features/agent/types';
 
 type ApiError = { error?: { message?: string } | null };
@@ -57,6 +60,37 @@ export async function listActivityLog(limit = 10): Promise<AgentActivityLog[]> {
 
 export async function clearActivityLog(): Promise<void> {
   const response = await fetch('/api/agent/activity-log', { method: 'DELETE' });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+}
+
+export async function listPreferredSources(): Promise<PreferredSource[]> {
+  const response = await fetch('/api/agent/preferred-sources');
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<PreferredSource[]>;
+}
+
+export async function createPreferredSource(input: CreatePreferredSourceInput): Promise<PreferredSource> {
+  const response = await fetch('/api/agent/preferred-sources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<PreferredSource>;
+}
+
+export async function updatePreferredSource(id: string, input: UpdatePreferredSourceInput): Promise<PreferredSource> {
+  const response = await fetch(`/api/agent/preferred-sources/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<PreferredSource>;
+}
+
+export async function deletePreferredSource(id: string): Promise<void> {
+  const response = await fetch(`/api/agent/preferred-sources/${id}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(await asErrorMessage(response));
 }
 
