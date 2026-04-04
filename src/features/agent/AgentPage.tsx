@@ -6,8 +6,10 @@ import { AGENT_PROVIDERS, CLOUD_AGENT_PROVIDERS, type AgentActivityLog, type Age
 import { formatLocalDateTime } from '../../lib/time';
 import { fetchOllamaTagsDirect } from './ollamaDirect';
 import { getSavedLocalRuntime } from './runtimeConfig';
+import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync';
 
 const modelCatalogService = new ModelCatalogService();
+const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
 
 const providerLabel = (provider: AgentProvider) => provider.charAt(0).toUpperCase() + provider.slice(1);
 const statusLabel = (status: AgentActivityLog['status']) => status.charAt(0).toUpperCase() + status.slice(1);
@@ -21,7 +23,6 @@ const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'fai
 };
 
 export function AgentPage() {
-  const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
   const files = useResearchStore((state) => state.files);
   const [provider, setProvider] = useState<AgentProvider>('minimax');
   const [selectedProviderModel, setSelectedProviderModel] = useState('');
@@ -81,6 +82,7 @@ export function AgentPage() {
       });
       if (applySelection) {
         setSelectedProviderModel(response.selectedModel);
+        if (nextProvider === 'ollama') setOllamaRuntimeModelDraft(response.selectedModel);
       }
     } catch {
       setModels([]);
@@ -163,7 +165,16 @@ export function AgentPage() {
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Model</span>
-                <select className="input" value={selectedProviderModel} onChange={(event) => setSelectedProviderModel(event.target.value)} disabled={modelState.loading || modelOptions.length === 0}>
+                <select
+                  className="input"
+                  value={selectedProviderModel}
+                  onChange={(event) => {
+                    const nextModel = event.target.value;
+                    setSelectedProviderModel(nextModel);
+                    setOllamaRuntimeModelDraft((currentDraft) => getMirroredOllamaDraftModel(provider, nextModel, currentDraft));
+                  }}
+                  disabled={modelState.loading || modelOptions.length === 0}
+                >
                   {modelOptions.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.displayName}</option>)}
                 </select>
               </label>
@@ -188,11 +199,14 @@ export function AgentPage() {
                   }
                   try {
                     const settings = await getAgentSettings();
-                    await saveAgentSettings({
-                      ...settings,
-                      default_provider: provider,
-                      default_model: selectedProviderModel,
-                    });
+                    const canonicalBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT;
+                    const canonicalModel = selectedProviderModel.trim();
+                    await saveAgentSettings(buildSaveDefaultsPayload(settings, provider, selectedProviderModel, localBaseUrl));
+                    if (provider === 'ollama') {
+                      setSavedLocalRuntime({ baseUrl: canonicalBaseUrl, model: canonicalModel });
+                      setSelectedProviderModel(canonicalModel);
+                      setOllamaRuntimeModelDraft(canonicalModel);
+                    }
                     setMessage('Default provider/model saved.');
                   } catch (error) {
                     setMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
