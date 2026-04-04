@@ -153,6 +153,64 @@ const decodeHtml = (value: string): string => value
   .replace(/&#39;/g, "'")
   .replace(/&#x2F;/g, '/');
 
+const stripHtmlTags = (value: string): string => value
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const extractSearxngHtmlResultBlocks = (html: string): string[] => {
+  const blockPatterns = [
+    /<article\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/article>/gi,
+    /<li\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/li>/gi,
+    /<div\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi,
+    /<h[2-4]\b[^>]*>[\s\S]*?<\/h[2-4]>(?:[\s\S]{0,1000}?)(?=<h[2-4]\b|<\/section>|<\/main>|<\/body>)/gi,
+  ];
+
+  const unique = new Set<string>();
+  for (const pattern of blockPatterns) {
+    for (const match of Array.from(html.matchAll(pattern))) {
+      const block = (match[0] ?? '').trim();
+      if (block) unique.add(block);
+    }
+  }
+  return Array.from(unique);
+};
+
+const parseSearxngHtmlBlock = (block: string, index: number): SearchResult | null => {
+  const anchorMatch = block.match(/<a\b[^>]*href=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>/i);
+  const href = decodeHtml((anchorMatch?.[1] ?? anchorMatch?.[2] ?? '').trim());
+  if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return null;
+
+  let parsedHref: URL;
+  try {
+    parsedHref = new URL(href);
+  } catch {
+    return null;
+  }
+  if (parsedHref.protocol !== 'http:' && parsedHref.protocol !== 'https:') return null;
+
+  const headingTitle = block.match(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/i)?.[1] ?? '';
+  const title = decodeHtml(stripHtmlTags(anchorMatch?.[3] ?? headingTitle)).trim() || href;
+
+  const snippetMatches = [
+    block.match(/<(?:p|div|span)\b[^>]*class="[^"]*(?:content|snippet|description|result-content|result_snippet)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/i),
+    block.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i),
+    block.match(/<(?:div|span)\b[^>]*>([\s\S]*?)<\/(?:div|span)>/i),
+  ];
+  const snippetCandidate = snippetMatches.find(Boolean)?.[1] ?? '';
+  const snippet = decodeHtml(stripHtmlTags(snippetCandidate)).trim();
+
+  return {
+    title,
+    url: href,
+    snippet,
+    provider: 'searxng',
+    score: Math.max(0, 1 - (index * 0.01)),
+  };
+};
+
 class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
   async search(query: string, options: SearchOptions = {}, signal?: AbortSignal): Promise<SearchResult[]> {
     const trimmedQuery = query.trim();
@@ -239,14 +297,13 @@ class SearxngSearchAdapter implements SearchProviderAdapter {
       })).filter((result) => Boolean(result.url));
     } else {
       const html = await response.text();
-      const matches = Array.from(html.matchAll(/<h3[^>]*class="[^"]*result_header[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<p[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/p>/g));
-      rawResults = matches.map((match, index) => ({
-        title: decodeHtml(match[2].replace(/<[^>]+>/g, '').trim()),
-        url: decodeHtml(match[1].trim()),
-        snippet: decodeHtml(match[3].replace(/<[^>]+>/g, '').trim()),
-        provider: 'searxng' as const,
-        score: Math.max(0, 1 - (index * 0.01)),
-      }));
+      const candidateBlocks = extractSearxngHtmlResultBlocks(html);
+      rawResults = candidateBlocks
+        .map((block, index) => parseSearxngHtmlBlock(block, index))
+        .filter((result): result is SearchResult => Boolean(result));
+      if (rawResults.length === 0) {
+        throw new Error('SearXNG HTML parse mismatch (theme/template).');
+      }
     }
 
     const policy = options.policy ?? 'open_web';
