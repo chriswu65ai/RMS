@@ -360,6 +360,7 @@ class MinimaxAdapter implements ProviderAdapter {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffered = '';
+    let sawDelta = false;
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -381,19 +382,23 @@ class MinimaxAdapter implements ProviderAdapter {
           };
           const deltaText = extractTextFromUnknown(parsed.choices?.[0]?.delta?.content);
           if (deltaText) {
+            sawDelta = true;
             chunks.push(deltaText);
             emitTextDelta(callbacks, deltaText);
+            if (parsed.usage) usage = parsed.usage;
             continue;
           }
-          const fallbackText = [
-            extractTextFromUnknown(parsed.choices?.[0]?.message?.content),
-            extractTextFromUnknown(parsed.reply),
-            extractTextFromUnknown(parsed.output_text),
-            extractTextFromUnknown(parsed.text),
-          ].find((item) => item.trim()) ?? '';
-          if (fallbackText) {
-            chunks.push(fallbackText);
-            emitTextDelta(callbacks, fallbackText);
+          if (!sawDelta) {
+            const fallbackText = [
+              extractTextFromUnknown(parsed.choices?.[0]?.message?.content),
+              extractTextFromUnknown(parsed.reply),
+              extractTextFromUnknown(parsed.output_text),
+              extractTextFromUnknown(parsed.text),
+            ].find((item) => item.trim()) ?? '';
+            if (fallbackText) {
+              chunks.push(fallbackText);
+              emitTextDelta(callbacks, fallbackText);
+            }
           }
           if (parsed.usage) usage = parsed.usage;
         } catch {
@@ -402,7 +407,7 @@ class MinimaxAdapter implements ProviderAdapter {
       }
     }
     buffered += decoder.decode();
-    if (chunks.length === 0 && buffered.trim()) {
+    if (!sawDelta && chunks.length === 0 && buffered.trim()) {
       try {
         const parsed = JSON.parse(buffered.trim()) as {
           choices?: Array<{ message?: { content?: string } }>;
