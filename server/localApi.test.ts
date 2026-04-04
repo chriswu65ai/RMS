@@ -234,6 +234,21 @@ test('non-ollama default model does not overwrite saved local_connection.model',
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.1:8b');
 });
 
+test('saving settings rejects enabled web search when tool-capable model is not selected', async () => {
+  const response = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: '',
+    generation_params: {
+      web_search: {
+        enabled: true,
+      },
+    },
+  });
+  assert.equal(response.status, 400);
+  const payload = JSON.parse(response.body) as { error?: { message?: string } };
+  assert.match(payload.error?.message ?? '', /tool calling support/i);
+});
+
 test('ollama model list endpoint mirrors installed list and selected model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

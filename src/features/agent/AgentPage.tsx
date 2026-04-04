@@ -465,13 +465,16 @@ export function AgentPage() {
                 <p className="text-xs text-slate-500">{domainPolicyHelperText}</p>
               </label>
             </div>
-            {webSearchStatusMessage ? <p className="mt-2 text-xs text-emerald-700">{webSearchStatusMessage}</p> : null}
+            {webSearchStatusMessage
+              ? <p className={`mt-2 text-xs ${webSearchStatusMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}>{webSearchStatusMessage}</p>
+              : null}
             <div className="mt-3">
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 disabled={!canSaveWebSearch}
                 onClick={async () => {
                   try {
+                    setWebSearchStatusMessage('');
                     const settings = await getAgentSettings();
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
                       enabled: webSearchEnabled,
@@ -488,7 +491,9 @@ export function AgentPage() {
                     }));
                     setWebSearchStatusMessage('Web search settings saved.');
                   } catch (error) {
-                    setMessage(error instanceof Error ? error.message : 'Failed saving web search settings.');
+                    const message = error instanceof Error ? error.message : 'Failed saving web search settings.';
+                    setWebSearchStatusMessage(message);
+                    setMessage(message);
                   }
                 }}
               >
