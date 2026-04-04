@@ -460,6 +460,16 @@ test('agent generate fails open when web search errors', async () => {
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(frames.some((line) => line.type === 'search_warning' && line.message === 'search is down'), true);
     assert.equal(frames.some((line) => line.type === 'status' && line.stage === 'web_search_warning'), true);
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{
+      status: string;
+      search_warning: number;
+      search_warning_message: string | null;
+    }>;
+    const successEntry = activity.find((entry) => entry.status === 'success');
+    assert.equal(successEntry?.search_warning, 1);
+    assert.equal(successEntry?.search_warning_message, 'search is down');
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;

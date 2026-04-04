@@ -77,6 +77,8 @@ export type AgentActivityLog = {
   token_estimate: number | null;
   cost_estimate_usd: number | null;
   error_message_short: string | null;
+  search_warning: number;
+  search_warning_message: string | null;
 };
 
 export type PreferredSource = {
