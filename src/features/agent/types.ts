@@ -32,10 +32,14 @@ export type ModelCatalogReasonCode =
   | 'empty_response'
   | 'ollama_unreachable';
 
-export type WebSearchProvider = 'duckduckgo';
+export type WebSearchProvider = 'duckduckgo' | 'searxng';
 export type WebSearchMode = 'single' | 'deep';
 export type WebSearchRecency = 'any' | '7d' | '30d' | '365d';
 export type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
+export type SearxngProviderConfig = {
+  base_url: string;
+  use_json_api: boolean;
+};
 
 export type AgentSettings = {
   default_provider: AgentProvider;
@@ -51,6 +55,9 @@ export type AgentSettings = {
     web_search?: {
       enabled: boolean;
       provider: WebSearchProvider;
+      provider_config?: {
+        searxng?: SearxngProviderConfig;
+      };
       mode: WebSearchMode;
       max_results: number;
       timeout_ms: number;
