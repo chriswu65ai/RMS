@@ -1,6 +1,6 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { FALLBACK_MODELS, providerRegistry, selectBestModel, type ModelListEntry } from './agentProviders.js';
+import { FALLBACK_MODELS, providerRegistry, selectBestModel, supportsToolCalling, type ModelListEntry } from './agentProviders.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -134,4 +134,9 @@ test('selectBestModel keeps ollama preferred model stable when live list contain
   const selected = selectBestModel('ollama', discovered, FALLBACK_MODELS.ollama, 'qwen2.5:14b');
   assert.equal(selected.selected_model, 'qwen2.5:14b');
   assert.equal(selected.selection_source, 'live_catalog');
+});
+
+test('supportsToolCalling requires a non-empty model id', () => {
+  assert.equal(supportsToolCalling('openai', ''), false);
+  assert.equal(supportsToolCalling('openai', 'gpt-4.1-mini'), true);
 });

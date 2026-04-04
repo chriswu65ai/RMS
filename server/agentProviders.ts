@@ -17,6 +17,55 @@ export type AgentGenerateResponse = {
   costEstimate?: number;
 };
 
+export type AgentToolDefinition = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
+
+export type AgentToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type AgentToolResult = {
+  tool_call_id: string;
+  name: string;
+  result: string;
+};
+
+export type AgentToolTurnRequest = {
+  model: string;
+  inputText: string;
+  tools: AgentToolDefinition[];
+  generationParams?: {
+    temperature?: number;
+    maxTokens?: number;
+    baseUrl?: string;
+  };
+};
+
+export type AgentToolContinueRequest = {
+  model: string;
+  inputText: string;
+  tools: AgentToolDefinition[];
+  toolCalls: AgentToolCall[];
+  toolResults: AgentToolResult[];
+  generationParams?: {
+    temperature?: number;
+    maxTokens?: number;
+    baseUrl?: string;
+  };
+};
+
+export type AgentToolTurnResponse = {
+  outputText: string;
+  toolCalls: AgentToolCall[];
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+  latencyMs: number;
+};
+
 export type AgentGenerateCallbacks = {
   onTextDelta?: (deltaText: string) => void;
 };
@@ -46,6 +95,8 @@ export type ListModelsResult = {
 
 export interface ProviderAdapter {
   generate(request: AgentGenerateRequest, apiKey: string, signal?: AbortSignal, callbacks?: AgentGenerateCallbacks): Promise<AgentGenerateResponse>;
+  generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse>;
+  generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse>;
   listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult>;
 }
 
@@ -82,6 +133,25 @@ const emitTextDelta = (callbacks: AgentGenerateCallbacks | undefined, deltaText:
   if (!deltaText) return;
   callbacks?.onTextDelta?.(deltaText);
 };
+
+const parseToolArguments = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const toolResponseUsage = (usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }) => ({
+  inputTokens: usage?.prompt_tokens,
+  outputTokens: usage?.completion_tokens,
+  totalTokens: usage?.total_tokens,
+});
 
 const normalizeModelList = (raw: Array<{ id?: string; model?: string; name?: string }>): ModelListEntry[] => raw
   .map((entry) => {
@@ -193,6 +263,60 @@ const getMiniMaxBaseUrls = (apiKey: string): string[] => {
 };
 
 class MinimaxAdapter implements ProviderAdapter {
+  private async callToolChat(
+    requestBody: Record<string, unknown>,
+    apiKey: string,
+    signal?: AbortSignal,
+  ): Promise<AgentToolTurnResponse> {
+    const startedAt = Date.now();
+    let response: Response | null = null;
+    for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
+      try {
+        const candidate = await fetch(`${baseUrl}/v1/text/chatcompletion_v2`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
+          signal,
+        });
+        if (candidate.ok) {
+          response = candidate;
+          break;
+        }
+      } catch {
+        // try next endpoint
+      }
+    }
+    if (!response?.ok) throw new Error('MiniMax tool generation failed.');
+    const payload = await response.json() as {
+      choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: unknown } }> } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      reply?: string;
+      output_text?: string;
+      text?: string;
+    };
+    const choice = payload.choices?.[0]?.message;
+    const toolCalls = (choice?.tool_calls ?? []).map((entry, index) => ({
+      id: String(entry.id ?? `minimax-tool-${index + 1}`),
+      name: String(entry.function?.name ?? '').trim(),
+      arguments: parseToolArguments(entry.function?.arguments),
+    })).filter((entry) => entry.name.length > 0);
+    const outputText = [
+      extractTextFromUnknown(choice?.content),
+      extractTextFromUnknown(payload.reply),
+      extractTextFromUnknown(payload.output_text),
+      extractTextFromUnknown(payload.text),
+    ].find((text) => text.trim()) ?? '';
+    return {
+      outputText: outputText.trim(),
+      toolCalls,
+      usage: toolResponseUsage(payload.usage),
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
   async generate(
     request: AgentGenerateRequest,
     apiKey: string,
@@ -315,6 +439,62 @@ class MinimaxAdapter implements ProviderAdapter {
     };
   }
 
+  async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callToolChat({
+      model: request.model,
+      messages: [{ role: 'user', content: request.inputText }],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      tool_choice: 'auto',
+      temperature: request.generationParams?.temperature ?? 0.2,
+      max_tokens: request.generationParams?.maxTokens,
+      stream: false,
+    }, apiKey, signal);
+  }
+
+  async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callToolChat({
+      model: request.model,
+      messages: [
+        { role: 'user', content: request.inputText },
+        {
+          role: 'assistant',
+          tool_calls: request.toolCalls.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: {
+              name: call.name,
+              arguments: JSON.stringify(call.arguments),
+            },
+          })),
+        },
+        ...request.toolResults.map((result) => ({
+          role: 'tool',
+          tool_call_id: result.tool_call_id,
+          content: result.result,
+        })),
+      ],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      tool_choice: 'auto',
+      temperature: request.generationParams?.temperature ?? 0.2,
+      max_tokens: request.generationParams?.maxTokens,
+      stream: false,
+    }, apiKey, signal);
+  }
+
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
     const paths = ['/v1/models', '/v1/text/models'];
     let unsupportedOnly = true;
@@ -384,13 +564,110 @@ class MinimaxAdapter implements ProviderAdapter {
 }
 
 class OpenAIAdapter implements ProviderAdapter {
+  private async callChatCompletions(
+    body: Record<string, unknown>,
+    apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentToolTurnResponse> {
+    const startedAt = Date.now();
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) throw new Error('OpenAI generate failed.');
+    const payload = await response.json() as {
+      choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: unknown } }> } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
+    const message = payload.choices?.[0]?.message;
+    const outputText = extractTextFromUnknown(message?.content).trim();
+    if (outputText) emitTextDelta(callbacks, outputText);
+    return {
+      outputText,
+      toolCalls: (message?.tool_calls ?? []).map((entry, index) => ({
+        id: String(entry.id ?? `openai-tool-${index + 1}`),
+        name: String(entry.function?.name ?? '').trim(),
+        arguments: parseToolArguments(entry.function?.arguments),
+      })).filter((entry) => entry.name.length > 0),
+      usage: toolResponseUsage(payload.usage),
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
   async generate(
-    _request: AgentGenerateRequest,
-    _apiKey: string,
-    _signal?: AbortSignal,
-    _callbacks?: AgentGenerateCallbacks,
+    request: AgentGenerateRequest,
+    apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    throw new Error('OpenAI adapter is not implemented yet.');
+    const result = await this.callChatCompletions({
+      model: request.model,
+      messages: [{ role: 'user', content: request.inputText }],
+      temperature: request.generationParams?.temperature,
+      max_tokens: request.generationParams?.maxTokens,
+    }, apiKey, signal, callbacks);
+    if (!result.outputText) throw new Error('OpenAI returned empty output.');
+    return result;
+  }
+
+  async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callChatCompletions({
+      model: request.model,
+      messages: [{ role: 'user', content: request.inputText }],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      tool_choice: 'auto',
+      temperature: request.generationParams?.temperature,
+      max_tokens: request.generationParams?.maxTokens,
+    }, apiKey, signal);
+  }
+
+  async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callChatCompletions({
+      model: request.model,
+      messages: [
+        { role: 'user', content: request.inputText },
+        {
+          role: 'assistant',
+          tool_calls: request.toolCalls.map((call) => ({
+            id: call.id,
+            type: 'function',
+            function: {
+              name: call.name,
+              arguments: JSON.stringify(call.arguments),
+            },
+          })),
+        },
+        ...request.toolResults.map((result) => ({
+          role: 'tool',
+          tool_call_id: result.tool_call_id,
+          content: result.result,
+        })),
+      ],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      tool_choice: 'auto',
+      temperature: request.generationParams?.temperature,
+      max_tokens: request.generationParams?.maxTokens,
+    }, apiKey, signal);
   }
 
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
@@ -447,13 +724,115 @@ class OpenAIAdapter implements ProviderAdapter {
 }
 
 class AnthropicAdapter implements ProviderAdapter {
+  private async callMessages(
+    body: Record<string, unknown>,
+    apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentToolTurnResponse> {
+    const startedAt = Date.now();
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) throw new Error('Anthropic generate failed.');
+    const payload = await response.json() as {
+      content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: unknown }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
+    const outputText = (payload.content ?? [])
+      .filter((item) => item.type === 'text' && typeof item.text === 'string')
+      .map((item) => item.text ?? '')
+      .join('')
+      .trim();
+    if (outputText) emitTextDelta(callbacks, outputText);
+    const toolCalls = (payload.content ?? [])
+      .filter((item) => item.type === 'tool_use' && typeof item.name === 'string')
+      .map((item, index) => ({
+        id: String(item.id ?? `anthropic-tool-${index + 1}`),
+        name: String(item.name ?? '').trim(),
+        arguments: parseToolArguments(item.input),
+      }))
+      .filter((item) => item.name.length > 0);
+    return {
+      outputText,
+      toolCalls,
+      usage: {
+        inputTokens: payload.usage?.input_tokens,
+        outputTokens: payload.usage?.output_tokens,
+        totalTokens: (payload.usage?.input_tokens ?? 0) + (payload.usage?.output_tokens ?? 0),
+      },
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
   async generate(
-    _request: AgentGenerateRequest,
-    _apiKey: string,
-    _signal?: AbortSignal,
-    _callbacks?: AgentGenerateCallbacks,
+    request: AgentGenerateRequest,
+    apiKey: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    throw new Error('Anthropic adapter is not implemented yet.');
+    const result = await this.callMessages({
+      model: request.model,
+      max_tokens: request.generationParams?.maxTokens ?? 1024,
+      temperature: request.generationParams?.temperature,
+      messages: [{ role: 'user', content: request.inputText }],
+    }, apiKey, signal, callbacks);
+    if (!result.outputText) throw new Error('Anthropic returned empty output.');
+    return result;
+  }
+
+  async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callMessages({
+      model: request.model,
+      max_tokens: request.generationParams?.maxTokens ?? 1024,
+      temperature: request.generationParams?.temperature,
+      messages: [{ role: 'user', content: request.inputText }],
+      tools: request.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.input_schema,
+      })),
+    }, apiKey, signal);
+  }
+
+  async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    return this.callMessages({
+      model: request.model,
+      max_tokens: request.generationParams?.maxTokens ?? 1024,
+      temperature: request.generationParams?.temperature,
+      messages: [
+        { role: 'user', content: request.inputText },
+        {
+          role: 'assistant',
+          content: request.toolCalls.map((call) => ({
+            type: 'tool_use',
+            id: call.id,
+            name: call.name,
+            input: call.arguments,
+          })),
+        },
+        {
+          role: 'user',
+          content: request.toolResults.map((result) => ({
+            type: 'tool_result',
+            tool_use_id: result.tool_call_id,
+            content: result.result,
+          })),
+        },
+      ],
+      tools: request.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.input_schema,
+      })),
+    }, apiKey, signal);
   }
 
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
@@ -518,6 +897,50 @@ const normalizeOllamaBaseUrl = (baseUrl?: string) => {
 };
 
 class OllamaAdapter implements ProviderAdapter {
+  private async callChat(
+    requestBody: Record<string, unknown>,
+    baseUrl: string,
+    signal?: AbortSignal,
+    callbacks?: AgentGenerateCallbacks,
+  ): Promise<AgentToolTurnResponse> {
+    const startedAt = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+    } catch {
+      throw new Error(`Ollama unavailable/unreachable at ${baseUrl}.`);
+    }
+    if (!response.ok) throw new Error('Ollama generate failed.');
+    const payload = await response.json() as {
+      message?: { content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: unknown } }> };
+      prompt_eval_count?: number;
+      eval_count?: number;
+    };
+    const outputText = String(payload.message?.content ?? '').trim();
+    if (outputText) emitTextDelta(callbacks, outputText);
+    const inputTokens = payload.prompt_eval_count;
+    const outputTokens = payload.eval_count;
+    return {
+      outputText,
+      toolCalls: (payload.message?.tool_calls ?? []).map((call, index) => ({
+        id: `ollama-tool-${index + 1}`,
+        name: String(call.function?.name ?? '').trim(),
+        arguments: parseToolArguments(call.function?.arguments),
+      })).filter((call) => call.name.length > 0),
+      usage: {
+        inputTokens,
+        outputTokens,
+        totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0),
+      },
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
   async generate(
     request: AgentGenerateRequest,
     _apiKey: string,
@@ -601,6 +1024,64 @@ class OllamaAdapter implements ProviderAdapter {
     };
   }
 
+  async generateToolFirstTurn(request: AgentToolTurnRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
+    return this.callChat({
+      model: request.model,
+      stream: false,
+      messages: [{ role: 'user', content: request.inputText }],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      options: {
+        temperature: request.generationParams?.temperature,
+        num_predict: request.generationParams?.maxTokens,
+      },
+    }, baseUrl, signal);
+  }
+
+  async generateToolFollowupTurn(request: AgentToolContinueRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
+    const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
+    return this.callChat({
+      model: request.model,
+      stream: false,
+      messages: [
+        { role: 'user', content: request.inputText },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: request.toolCalls.map((call) => ({
+            function: {
+              name: call.name,
+              arguments: call.arguments,
+            },
+          })),
+        },
+        ...request.toolResults.map((result) => ({
+          role: 'tool',
+          content: result.result,
+        })),
+      ],
+      tools: request.tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.input_schema,
+        },
+      })),
+      options: {
+        temperature: request.generationParams?.temperature,
+        num_predict: request.generationParams?.maxTokens,
+      },
+    }, baseUrl, signal);
+  }
+
   async listModels(_apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
     const baseUrl = normalizeOllamaBaseUrl(options.baseUrl);
     try {
@@ -665,6 +1146,24 @@ export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
   openai: [{ modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', B: 1 }],
   anthropic: [{ modelId: 'claude-3-5-sonnet-latest', displayName: 'Claude 3.5 Sonnet', B: 1 }],
   ollama: [{ modelId: 'llama3.2:latest', displayName: 'Llama 3.2', B: 1 }],
+};
+
+export const PROVIDER_CAPABILITIES: Record<AgentProvider, {
+  supports_tool_calling: boolean;
+  model_overrides?: Record<string, { supports_tool_calling: boolean }>;
+}> = {
+  minimax: { supports_tool_calling: true },
+  openai: { supports_tool_calling: true },
+  anthropic: { supports_tool_calling: true },
+  ollama: { supports_tool_calling: true },
+};
+
+export const supportsToolCalling = (provider: AgentProvider, model: string): boolean => {
+  const modelId = model.trim();
+  if (!modelId) return false;
+  const capabilities = PROVIDER_CAPABILITIES[provider];
+  const override = capabilities.model_overrides?.[modelId];
+  return override?.supports_tool_calling ?? capabilities.supports_tool_calling;
 };
 
 const MODEL_PRIORITY: Record<AgentProvider, string[]> = {

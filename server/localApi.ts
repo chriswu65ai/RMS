@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { FALLBACK_MODELS, providerRegistry, selectBestModel, type AgentProvider } from './agentProviders';
+import { FALLBACK_MODELS, providerRegistry, selectBestModel, supportsToolCalling, type AgentProvider } from './agentProviders';
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { secretStore } from './secretStore';
@@ -612,6 +612,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       if (provider === 'ollama') {
         defaultModel = ollamaRuntime.model;
+      }
+      if (generationParams?.web_search?.enabled && !supportsToolCalling(provider, defaultModel)) {
+        writeJson(res, 400, {
+          error: {
+            message: `Web search requires tool calling support. Select a tool-capable model for ${provider} (current: ${defaultModel || 'not selected'}), or disable web search.`,
+          },
+        });
+        return true;
       }
       execSql(`update agent_settings set
         default_provider = ${sqlEscape(provider)},

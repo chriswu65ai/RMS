@@ -1,5 +1,5 @@
 import { appendSearchDiagnostic } from './searchLogging';
-import { providerRegistry, type AgentProvider } from './agentProviders';
+import { providerRegistry, supportsToolCalling, type AgentProvider, type AgentToolCall, type AgentToolDefinition } from './agentProviders';
 import { searchProviderRegistry, searchUtils, type SearchResult } from './searchProviders';
 
 type WebSearchProvider = 'duckduckgo' | 'searxng';
@@ -61,20 +61,23 @@ export type AgentToolOrchestrationResult = {
   consumedInputText: string;
 };
 
-const supportsToolOrchestration = (provider: AgentProvider, _model: string) => provider !== 'ollama';
-
-const extractJsonObject = (text: string): Record<string, unknown> | null => {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] ?? trimmed;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+const WEB_SEARCH_TOOL: AgentToolDefinition = {
+  name: 'web_search',
+  description: 'Search the web and return source snippets for grounding.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+      mode: { type: 'string', enum: ['single', 'deep'] },
+      max_results: { type: 'number' },
+      recency: { type: 'string', enum: ['any', '7d', '30d', '365d'] },
+      safe_search: { type: 'boolean' },
+      domain_policy: { type: 'string', enum: ['open_web', 'prefer_list', 'only_list'] },
+      domain_list: { type: 'array', items: { type: 'string' } },
+      provider: { type: 'string', enum: ['duckduckgo', 'searxng'] },
+    },
+    required: ['query'],
+  },
 };
 
 const toPositiveInt = (value: unknown, fallback: number) => {
@@ -121,7 +124,7 @@ export const runAgentToolOrchestration = async ({
   preferredSources: PreferredSource[];
   signal?: AbortSignal;
 }): Promise<AgentToolOrchestrationResult> => {
-  if (!supportsToolOrchestration(provider, model)) {
+  if (!supportsToolCalling(provider, model)) {
     throw new Error(`Provider/model does not support tool mode: ${provider}/${model}.`);
   }
   const maxToolCalls = settings.mode === 'deep' ? 2 : 1;
@@ -131,30 +134,17 @@ export const runAgentToolOrchestration = async ({
     return acc;
   }, {});
   const toolCalls: ToolCallRecord[] = [];
-  const transcript: string[] = [];
+  let initialResponse = await providerRegistry[provider].generateToolFirstTurn({
+    model,
+    inputText,
+    tools: [WEB_SEARCH_TOOL],
+    generationParams: baseUrl ? { baseUrl } : undefined,
+  }, apiKey, signal);
 
   for (let i = 0; i < maxToolCalls; i += 1) {
-    const plannerPrompt = [
-      'You may call exactly one tool named web_search before answering.',
-      'Return ONLY JSON with one of these shapes:',
-      '{"type":"tool_call","name":"web_search","arguments":{"query":"...","mode":"single|deep","max_results":number,"recency":"any|7d|30d|365d","safe_search":boolean,"domain_policy":"open_web|prefer_list|only_list","domain_list":["..."],"provider":"duckduckgo|searxng","provider_config":{}}}',
-      '{"type":"final","answer":"..."}',
-      `User request:\n${inputText}`,
-      transcript.length > 0 ? `Prior tool transcript:\n${transcript.join('\n\n')}` : '',
-    ].filter(Boolean).join('\n\n');
-
-    const plannerResult = await providerRegistry[provider].generate({
-      model,
-      inputText: plannerPrompt,
-      generationParams: baseUrl ? { baseUrl } : undefined,
-    }, apiKey, signal);
-    const parsed = extractJsonObject(plannerResult.outputText);
-    if (!parsed) throw new Error('Tool orchestration failed: model did not return valid JSON.');
-    if (parsed.type === 'final') break;
-    if (parsed.type !== 'tool_call' || parsed.name !== 'web_search' || !parsed.arguments || typeof parsed.arguments !== 'object') {
-      throw new Error('Tool orchestration failed: model returned an invalid tool request.');
-    }
-    const args = normalizeToolArgs(parsed.arguments as Record<string, unknown>, settings, domainList);
+    const toolCall = initialResponse.toolCalls.find((call) => call.name === 'web_search');
+    if (!toolCall) break;
+    const args = normalizeToolArgs(toolCall.arguments, settings, domainList);
     const searchTimeoutController = new AbortController();
     const timeoutId = setTimeout(() => searchTimeoutController.abort(), settings.timeout_ms);
     signal?.addEventListener('abort', () => searchTimeoutController.abort(), { once: true });
@@ -174,7 +164,19 @@ export const runAgentToolOrchestration = async ({
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: results.length, latencyMs: Date.now() - startedAt });
       if (results.length === 0) throw new Error('web_search returned no sources.');
       toolCalls.push({ name: 'web_search', arguments: args, sources: results });
-      transcript.push(`tool_call_${i + 1}: query="${args.query}" returned ${results.length} results.`);
+      const followupToolCall: AgentToolCall = { id: toolCall.id || `web-search-${i + 1}`, name: 'web_search', arguments: args };
+      initialResponse = await providerRegistry[provider].generateToolFollowupTurn({
+        model,
+        inputText,
+        tools: [WEB_SEARCH_TOOL],
+        toolCalls: [followupToolCall],
+        toolResults: [{
+          tool_call_id: followupToolCall.id,
+          name: 'web_search',
+          result: JSON.stringify(results),
+        }],
+        generationParams: baseUrl ? { baseUrl } : undefined,
+      }, apiKey, signal);
     } catch (error) {
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: 0, latencyMs: 0, status: 'error', error });
       throw error;
