@@ -83,6 +83,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     };
   };
 
+  const getDisplayTitle = (frontmatterTitle: unknown, fileName: string) => {
+    const title = typeof frontmatterTitle === 'string' ? frontmatterTitle.trim() : '';
+    if (title.length > 0) return title;
+    return fileName.replace(/\.md$/i, '');
+  };
+
   const normalizeFileNameInput = (input: string) => {
     const trimmed = input.trim();
     const baseName = trimmed.replace(/\.md$/i, '').trim();
@@ -152,7 +158,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 onClick={() => selectFile(file.id)}
               >
                 <p className="flex items-center gap-1 text-sm font-medium">
-                  <span>{frontmatter.title || file.name}</span>
+                  <span>{getDisplayTitle(frontmatter.title, file.name)}</span>
                   {getFileTitleIndicators({ isStarred: frontmatter.starred === true, isUnsaved: unsavedFileIds.includes(file.id) }).map((indicator) => (
                     indicator === 'starred'
                       ? <span key={`${file.id}-starred`} title="Starred note" aria-label="Starred note"><Star size={12} className="text-amber-500" fill="currentColor" /></span>

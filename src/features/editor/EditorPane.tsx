@@ -1,4 +1,4 @@
-import { redo, undo } from '@codemirror/commands';
+import { redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
@@ -56,6 +56,8 @@ export function EditorPane() {
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const [generatedSources, setGeneratedSources] = useState<StreamSource[]>([]);
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const originalTextRef = useRef<string | null>(null);
   const isGeneratingRef = useRef(false);
@@ -409,15 +411,19 @@ export function EditorPane() {
 
   const onUndo = () => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view || !canUndo) return;
     undo(view);
+    setCanUndo(undoDepth(view.state) > 0);
+    setCanRedo(redoDepth(view.state) > 0);
     view.focus();
   };
 
   const onRedo = () => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view || !canRedo) return;
     redo(view);
+    setCanUndo(undoDepth(view.state) > 0);
+    setCanRedo(redoDepth(view.state) > 0);
     view.focus();
   };
 
@@ -650,8 +656,8 @@ export function EditorPane() {
           )}
           {editorTab !== 'preview' && (
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
-            <button className={btn(false)} onClick={onUndo} title="Undo" aria-label="Undo"><Undo2 size={14} /></button>
-            <button className={btn(false)} onClick={onRedo} title="Redo" aria-label="Redo"><Redo2 size={14} /></button>
+            <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onUndo} title="Undo" aria-label="Undo" disabled={!canUndo}><Undo2 size={14} /></button>
+            <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onRedo} title="Redo" aria-label="Redo" disabled={!canRedo}><Redo2 size={14} /></button>
             <button className={btn(active.h1)} onClick={() => toggleHeading(1)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h1 ? 'text-white/70' : 'text-slate-500'}`}>1</span></button>
             <button className={btn(active.h2)} onClick={() => toggleHeading(2)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h2 ? 'text-white/70' : 'text-slate-500'}`}>2</span></button>
             <button className={btn(active.h3)} onClick={() => toggleHeading(3)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h3 ? 'text-white/70' : 'text-slate-500'}`}>3</span></button>
@@ -694,6 +700,8 @@ export function EditorPane() {
               extensions={[markdown({ extensions: [{ remove: ['SetextHeading'] }] })]}
               onCreateEditor={(view) => {
                 viewRef.current = view;
+                setCanUndo(undoDepth(view.state) > 0);
+                setCanRedo(redoDepth(view.state) > 0);
               }}
               onChange={(v) => {
                 if (showMetadata) {
@@ -705,6 +713,10 @@ export function EditorPane() {
                 }
                 setBody(v);
                 updateDraftCache(v, frontmatter, 'manual');
+              }}
+              onUpdate={(viewUpdate) => {
+                setCanUndo(undoDepth(viewUpdate.state) > 0);
+                setCanRedo(redoDepth(viewUpdate.state) > 0);
               }}
             />
           )}
