@@ -1,5 +1,6 @@
-import { redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
+import { isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import CodeMirror from '@uiw/react-codemirror';
 import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
@@ -61,6 +62,8 @@ export function EditorPane() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const originalTextRef = useRef<string | null>(null);
   const isGeneratingRef = useRef(false);
+  const suppressOnChangeRef = useRef(0);
+  const pendingHistoryBaselineRef = useRef<{ fileId: string; before: string; after: string } | null>(null);
   const parsed = useMemo(
     () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
     [file?.content, noteTypes, sectors],
@@ -96,6 +99,24 @@ export function EditorPane() {
       source,
       updatedAt: Date.now(),
     });
+  };
+
+  const dispatchEditorContent = (nextText: string, addToHistory: boolean, isolate = false) => {
+    const view = viewRef.current;
+    if (!view) return false;
+    const currentText = view.state.doc.toString();
+    if (currentText === nextText) return true;
+    suppressOnChangeRef.current += 1;
+    const nextAnchor = Math.min(view.state.selection.main.anchor, nextText.length);
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: nextText },
+      selection: { anchor: nextAnchor },
+      annotations: [Transaction.addToHistory.of(addToHistory), ...(isolate ? [isolateHistory.of('full')] : [])],
+      scrollIntoView: true,
+    });
+    setCanUndo(undoDepth(view.state) > 0);
+    setCanRedo(redoDepth(view.state) > 0);
+    return true;
   };
 
   useEffect(() => {
@@ -495,6 +516,7 @@ export function EditorPane() {
 
     const originalText = merged;
     originalTextRef.current = originalText;
+    pendingHistoryBaselineRef.current = null;
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setGeneratedSources([]);
@@ -510,6 +532,7 @@ export function EditorPane() {
         signal: controller.signal,
         onProgress: (nextOutputText) => {
           const nextParsed = splitFrontmatter(nextOutputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          dispatchEditorContent(nextOutputText, false);
           setFrontmatter(nextParsed.frontmatter);
           setBody(nextParsed.body);
           updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'generate');
@@ -521,6 +544,14 @@ export function EditorPane() {
           setSearchWarningMessage(message);
         },
       });
+      if (originalTextRef.current) {
+        const didApplyInEditor = dispatchEditorContent(originalTextRef.current, false);
+        if (didApplyInEditor) {
+          dispatchEditorContent(result.outputText, true, true);
+        } else {
+          pendingHistoryBaselineRef.current = { fileId: file.id, before: originalTextRef.current, after: result.outputText };
+        }
+      }
       const generatedDraft = completeGenerate(file.id, result.outputText);
       if (generatedDraft) {
         setFrontmatter(generatedDraft.frontmatter);
@@ -531,6 +562,7 @@ export function EditorPane() {
       const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
       if (isCancelled) {
         if (originalTextRef.current) {
+          dispatchEditorContent(originalTextRef.current, false);
           const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
           setFrontmatter(restored.frontmatter);
           setBody(restored.body);
@@ -540,6 +572,7 @@ export function EditorPane() {
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
         if (originalTextRef.current) {
+          dispatchEditorContent(originalTextRef.current, false);
           const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
           setFrontmatter(restored.frontmatter);
           setBody(restored.body);
@@ -703,10 +736,20 @@ export function EditorPane() {
               extensions={[markdown({ extensions: [{ remove: ['SetextHeading'] }] })]}
               onCreateEditor={(view) => {
                 viewRef.current = view;
+                const pendingBaseline = pendingHistoryBaselineRef.current;
+                if (pendingBaseline && pendingBaseline.fileId === file.id) {
+                  dispatchEditorContent(pendingBaseline.before, false);
+                  dispatchEditorContent(pendingBaseline.after, true, true);
+                  pendingHistoryBaselineRef.current = null;
+                }
                 setCanUndo(undoDepth(view.state) > 0);
                 setCanRedo(redoDepth(view.state) > 0);
               }}
               onChange={(v) => {
+                if (suppressOnChangeRef.current > 0) {
+                  suppressOnChangeRef.current -= 1;
+                  return;
+                }
                 if (showMetadata) {
                   const nextParsed = splitFrontmatter(v, { knownSectors: sectors, knownNoteTypes: noteTypes });
                   setFrontmatter(nextParsed.frontmatter);
