@@ -125,6 +125,31 @@ test('ollama generate uses unified runtime model and base URL from settings', as
   }
 });
 
+test('non-ollama default model does not overwrite saved local_connection.model', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.1:8b',
+        B: 1,
+      },
+    },
+  });
+
+  const settingsResponse = await callRoute('GET', '/api/agent/settings');
+  assert.equal(settingsResponse.status, 200);
+  const payload = JSON.parse(settingsResponse.body) as {
+    default_provider: string;
+    default_model: string;
+    generation_params?: { local_connection?: { model?: string } };
+  };
+  assert.equal(payload.default_provider, 'openai');
+  assert.equal(payload.default_model, 'gpt-4.1');
+  assert.equal(payload.generation_params?.local_connection?.model, 'llama3.1:8b');
+});
+
 test('ollama model list endpoint mirrors installed list and selected model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

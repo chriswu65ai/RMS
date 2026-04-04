@@ -364,10 +364,10 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
 const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider; default_model: string; generation_params?: AgentGenerationParams }): OllamaRuntimeConfig => {
   const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
   const localModel = settings.generation_params?.local_connection?.model?.trim() || '';
-  const defaultModel = settings.default_provider === 'ollama' ? settings.default_model.trim() : '';
+  const defaultModel = settings.default_provider === 'ollama' && !localModel ? settings.default_model.trim() : '';
   return {
     baseUrl,
-    model: defaultModel || localModel,
+    model: localModel || defaultModel,
   };
 };
 
