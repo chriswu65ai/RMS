@@ -412,6 +412,8 @@ test('agent generate enriches input with deep web search context and caps source
     });
     assert.equal(response.status, 200);
     assert.match(receivedInput, /<web_search_context>/);
+    assert.match(receivedInput, /Strict citation mode/);
+    assert.match(receivedInput, /\[1\]/);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const sourcesFrame = frames.find((line) => line.type === 'sources') as { sources?: Array<{ url?: string }> } | undefined;
     assert.equal(Array.isArray(sourcesFrame?.sources), true);

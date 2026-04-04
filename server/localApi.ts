@@ -919,7 +919,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             webSearchMetadata.sourceCount = finalSources.length;
             if (finalSources.length > 0) {
               const sourceContextBlock = buildSourceContextBlock(queries, finalSources);
-              preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Use web_search_context when relevant and cite source URLs in your answer.</web_search_context_note>`;
+              preparedInputText = `${sourceContextBlock}\n\n${inputText}\n\n<web_search_context_note>Strict citation mode: when using web_search_context sources, cite supporting claims with bracket indices like [1], [2] that map directly to the numbered <sources> list above. Do not invent citations or URLs.</web_search_context_note>`;
             }
           } catch (error) {
             webSearchMetadata.warning = {

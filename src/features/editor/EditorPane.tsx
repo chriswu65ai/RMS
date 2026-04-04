@@ -16,6 +16,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 import { GenerateUseCase } from '../agent/GenerateUseCase';
 import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
+import type { StreamSource } from '../../lib/agentApi';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 const generateUseCase = new GenerateUseCase();
@@ -53,6 +54,8 @@ export function EditorPane() {
   const [defaultModel, setDefaultModel] = useState('');
   const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
+  const [generatedSources, setGeneratedSources] = useState<StreamSource[]>([]);
+  const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const originalTextRef = useRef<string | null>(null);
   const parsed = useMemo(
@@ -485,6 +488,8 @@ export function EditorPane() {
     originalTextRef.current = originalText;
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    setGeneratedSources([]);
+    setSearchWarningMessage(null);
     markGenerateRunning(file.id);
     setGenerateState('running');
     try {
@@ -499,6 +504,12 @@ export function EditorPane() {
           setFrontmatter(nextParsed.frontmatter);
           setBody(nextParsed.body);
           updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'generate');
+        },
+        onSources: (sources) => {
+          setGeneratedSources(sources);
+        },
+        onSearchWarning: (message) => {
+          setSearchWarningMessage(message);
         },
       });
       const generatedDraft = completeGenerate(file.id, result.outputText);
@@ -612,6 +623,25 @@ export function EditorPane() {
               >
                 Dismiss
               </button>
+            </div>
+          )}
+          {searchWarningMessage && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Warning</span>
+              <span>{searchWarningMessage}</span>
+            </div>
+          )}
+          {generatedSources.length > 0 && (
+            <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+              <p className="font-semibold text-slate-900">Web sources</p>
+              <ul className="mt-1 space-y-1">
+                {generatedSources.map((source, index) => (
+                  <li key={`${source.url}-${index}`}>
+                    <span className="mr-1 font-mono text-[10px] text-slate-500">[{index + 1}]</span>
+                    <a className="text-blue-700 hover:underline" href={source.url} target="_blank" rel="noreferrer">{source.title || source.url}</a>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {editorTab !== 'preview' && (
