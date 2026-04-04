@@ -9,6 +9,10 @@ export const WEB_SEARCH_PROVIDER_OPTIONS: Array<{ value: WebSearchProvider; labe
   { value: 'duckduckgo', label: 'DuckDuckGo' },
   { value: 'searxng', label: 'SearXNG' },
 ];
+export const WEB_SEARCH_MODE_OPTIONS: Array<{ value: WebSearchMode; label: string; helper: string }> = [
+  { value: 'single', label: 'Single search', helper: 'Run one web_search tool call.' },
+  { value: 'deep', label: 'Extended search', helper: 'Allow up to two web_search tool calls for broader coverage.' },
+];
 
 const normalizePositiveInteger = (value: string, fallback: number) => Math.max(1, Number(value) || fallback);
 export const getWebSearchSourceCitationDefault = (sourceCitation: boolean | undefined) => sourceCitation ?? WEB_SEARCH_SOURCE_CITATION_DEFAULT;
