@@ -735,6 +735,11 @@ export function EditorPane() {
         }
         clearGenerateJob(file.id);
         setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
+        clearThinkingCloseTimer(file.id);
+        clearThinkingFadeTimer(file.id);
+        thinkingSwapInFlightByFileIdRef.current[file.id] = false;
+        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
+        setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
         if (originalTextRef.current) {
@@ -746,6 +751,11 @@ export function EditorPane() {
         }
         markGenerateFailed(file.id, error instanceof Error ? error.message : 'Generation failed.');
         setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
+        clearThinkingCloseTimer(file.id);
+        clearThinkingFadeTimer(file.id);
+        thinkingSwapInFlightByFileIdRef.current[file.id] = false;
+        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
+        setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
