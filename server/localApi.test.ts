@@ -599,6 +599,59 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     assert.deepEqual(seenSafeSearch, [true, true, true]);
     assert.deepEqual(seenRecency, ['7d', '7d', '7d']);
     assert.equal(deepDone?.web_search?.queryCount, 3);
+
+    seenQueries.length = 0;
+    seenModes.length = 0;
+    seenSafeSearch.length = 0;
+    seenRecency.length = 0;
+    searchProviderRegistry.duckduckgo.search = async (query, options) => {
+      seenQueries.push(query);
+      seenModes.push(options?.mode ?? 'single');
+      seenSafeSearch.push(options?.safeSearch ?? true);
+      seenRecency.push(options?.recency ?? 'any');
+      return [
+        {
+          title: `source for ${query} a`,
+          url: `https://example.com/${encodeURIComponent(query)}/a`,
+          snippet: 'snippet a',
+          provider: 'duckduckgo',
+        },
+        {
+          title: `source for ${query} b`,
+          url: `https://example.com/${encodeURIComponent(query)}/b`,
+          snippet: 'snippet b',
+          provider: 'duckduckgo',
+        },
+      ];
+    };
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'deep',
+          max_results: 1,
+          timeout_ms: 3000,
+          safe_search: true,
+          recency: '7d',
+        },
+      },
+    });
+    const deepEarlyBreakResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'NVIDIA guidance',
+    });
+    assert.equal(deepEarlyBreakResponse.status, 200);
+    const deepEarlyBreakFrames = deepEarlyBreakResponse.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    const deepEarlyBreakDone = deepEarlyBreakFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
+    assert.deepEqual(seenQueries, ['NVIDIA guidance']);
+    assert.deepEqual(seenModes, ['deep']);
+    assert.deepEqual(seenSafeSearch, [true]);
+    assert.deepEqual(seenRecency, ['7d']);
+    assert.equal(deepEarlyBreakDone?.web_search?.queryCount, 1);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
