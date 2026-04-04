@@ -70,6 +70,32 @@ test('duckduckgo prefer_list applies domain boosts without filtering open-web re
   }
 });
 
+test('duckduckgo adapter accepts safeSearch and recency options with explicit fallback to provider defaults', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <a class="result__a" href="https://example.com/news">Example result</a>
+    <a class="result__snippet">Example snippet</a>
+  `;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    return new Response(html, { status: 200 });
+  };
+
+  try {
+    const results = await searchProviderRegistry.duckduckgo.search('earnings', {
+      safeSearch: false,
+      recency: '7d',
+    });
+
+    assert.equal(results.length, 1);
+    assert.equal(requestedUrls.length, 1);
+    assert.match(requestedUrls[0] ?? '', /duckduckgo\.com\/html\/\?q=earnings$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('dedupe canonical URL strips UTM params and trailing slash', () => {
   const deduped = searchUtils.dedupeByCanonicalUrl([
     { title: 'A', url: 'https://example.com/path/?utm_source=x', snippet: '1', provider: 'duckduckgo' },
