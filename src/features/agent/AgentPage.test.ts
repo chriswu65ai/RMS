@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel } from './ollamaModelSync.js';
+import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync.js';
 import {
   buildWebSearchSettingsPayload,
   getWebSearchSourceCitationDefault,
@@ -13,6 +13,16 @@ import type { AgentActivityLog } from './types.js';
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
   assert.equal(getMirroredOllamaDraftModel('openai', 'gpt-4.1', 'llama3.2:latest'), 'llama3.2:latest');
+});
+
+test('ollama unreachable fallback chooses selected model from fetched tags instead of stale placeholder', () => {
+  const selectedModel = resolveOllamaFallbackSelectedModel(
+    'llama3.2:latest',
+    'mistral:7b',
+    ['mistral:7b', 'qwen2.5:14b'],
+    'placeholder-model',
+  );
+  assert.equal(selectedModel, 'mistral:7b');
 });
 
 test('save defaults payload for ollama uses selected model and current base URL as source of truth', () => {

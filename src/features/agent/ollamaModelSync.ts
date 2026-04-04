@@ -7,6 +7,18 @@ export const getMirroredOllamaDraftModel = (currentProvider: AgentProvider, next
   currentProvider === 'ollama' ? nextModel : currentDraft
 );
 
+export const resolveOllamaFallbackSelectedModel = (
+  currentDraftModel: string,
+  savedRuntimeModel: string,
+  fallbackModelIds: string[],
+  defaultSelectedModel: string,
+) => {
+  if (fallbackModelIds.length === 0) return defaultSelectedModel;
+  if (currentDraftModel && fallbackModelIds.includes(currentDraftModel)) return currentDraftModel;
+  if (savedRuntimeModel && fallbackModelIds.includes(savedRuntimeModel)) return savedRuntimeModel;
+  return fallbackModelIds[0];
+};
+
 export const buildSaveDefaultsPayload = (
   settings: Awaited<ReturnType<typeof getAgentSettings>>,
   currentProvider: AgentProvider,
