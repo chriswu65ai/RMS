@@ -76,6 +76,10 @@ export async function listPreferredSources(): Promise<PreferredSource[]> {
   return response.json() as Promise<PreferredSource[]>;
 }
 
+export async function loadPreferredSources(): Promise<PreferredSource[]> {
+  return listPreferredSources();
+}
+
 export async function createPreferredSource(input: CreatePreferredSourceInput): Promise<PreferredSource> {
   const response = await fetch('/api/agent/preferred-sources', {
     method: 'POST',
@@ -86,6 +90,10 @@ export async function createPreferredSource(input: CreatePreferredSourceInput): 
   return response.json() as Promise<PreferredSource>;
 }
 
+export async function savePreferredSource(input: CreatePreferredSourceInput): Promise<PreferredSource> {
+  return createPreferredSource(input);
+}
+
 export async function updatePreferredSource(id: string, input: UpdatePreferredSourceInput): Promise<PreferredSource> {
   const response = await fetch(`/api/agent/preferred-sources/${id}`, {
     method: 'PATCH',
@@ -94,6 +102,10 @@ export async function updatePreferredSource(id: string, input: UpdatePreferredSo
   });
   if (!response.ok) throw new Error(await asErrorMessage(response));
   return response.json() as Promise<PreferredSource>;
+}
+
+export async function savePreferredSourceById(id: string, input: UpdatePreferredSourceInput): Promise<PreferredSource> {
+  return updatePreferredSource(id, input);
 }
 
 export async function deletePreferredSource(id: string): Promise<void> {
