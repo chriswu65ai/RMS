@@ -40,6 +40,7 @@ import {
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
   shouldShowSearxngConfigFields,
 } from './webSearchSettings';
+import { normalizeEndpointUrl } from './urlNormalization';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
@@ -57,6 +58,8 @@ const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: s
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const CHECKBOX_WITH_LABEL_CLASS = 'inline-flex items-center gap-2 text-sm text-slate-700';
 const CHECKBOX_INPUT_CLASS = 'h-4 w-4';
+const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
+const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -133,7 +136,7 @@ export function AgentPage() {
       ? [{ modelId: localModelValue, displayName: localModelValue }]
       : []);
 
-  const refreshModels = async (nextProvider: AgentProvider, applySelection = true, runtimeBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT) => {
+  const refreshModels = async (nextProvider: AgentProvider, applySelection = true, runtimeBaseUrl = normalizeLocalBaseUrl(localBaseUrl)) => {
     setModelLoadingByProvider((current) => ({ ...current, [nextProvider]: true }));
     try {
       const response = await modelCatalogService.listModels(nextProvider);
@@ -199,7 +202,7 @@ export function AgentPage() {
         const webSearchSettings = settings.generation_params?.web_search;
         setWebSearchEnabled(Boolean(webSearchSettings?.enabled));
         setWebSearchProvider(webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo');
-        setWebSearchSearxngBaseUrl(webSearchSettings?.provider_config?.searxng?.base_url ?? WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
+        setWebSearchSearxngBaseUrl(normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''));
         setWebSearchSearxngUseHtmlMode(!(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true));
         setWebSearchMode(webSearchSettings?.mode === 'deep' ? 'deep' : 'single');
         setWebSearchMaxResults(String(webSearchSettings?.max_results ?? WEB_SEARCH_MAX_RESULTS_DEFAULT));
@@ -391,6 +394,10 @@ export function AgentPage() {
                       onChange={(event) => {
                         setWebSearchSearxngBaseUrl(event.target.value);
                         setWebSearchStatusMessage('');
+                      }}
+                      onBlur={(event) => {
+                        const normalized = normalizeSearxngBaseUrlInput(event.target.value);
+                        setWebSearchSearxngBaseUrl(normalized);
                       }}
                     />
                   </label>
@@ -734,6 +741,11 @@ export function AgentPage() {
                     setLocalSaveMessage('');
                     invalidateAgentOllamaModelsForBaseUrl(event.target.value.trim() || LOCAL_BASE_URL_DEFAULT);
                   }}
+                  onBlur={(event) => {
+                    const normalized = normalizeLocalBaseUrl(event.target.value);
+                    setLocalBaseUrl(normalized);
+                    invalidateAgentOllamaModelsForBaseUrl(normalized);
+                  }}
                 />
                 {localBaseUrl.trim() === LOCAL_BASE_URL_DEFAULT && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                   ? <p className="text-xs text-amber-700">If Ollama runs on host, use http://host.docker.internal:11434.</p>
@@ -775,7 +787,7 @@ export function AgentPage() {
                 className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
                 onClick={() => {
                   if (provider !== 'ollama') setProvider('ollama');
-                  void refreshModels('ollama', true, localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT);
+                  void refreshModels('ollama', true, normalizeLocalBaseUrl(localBaseUrl));
                 }}
               >
                 Refresh models
@@ -786,7 +798,7 @@ export function AgentPage() {
                 onClick={async () => {
                   try {
                     const settings = await getAgentSettings();
-                    const canonicalBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT;
+                    const canonicalBaseUrl = normalizeLocalBaseUrl(localBaseUrl);
                     const canonicalModel = localModelValue.trim();
                     await saveAgentSettings({
                       ...settings,

@@ -448,6 +448,12 @@ const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 's
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const normalizeEndpointUrl = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  return trimmed.replace(/\/+$/, '') || fallback;
+};
 
 const normalizeDomain = (value: unknown): string => {
   if (typeof value !== 'string') return '';
@@ -510,9 +516,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
     temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
     maxTokens: typeof next.maxTokens === 'number' ? next.maxTokens : undefined,
     local_connection: localConnection ? {
-      base_url: typeof localConnection.base_url === 'string' && localConnection.base_url.trim()
-        ? localConnection.base_url.trim()
-        : OLLAMA_BASE_URL_DEFAULT,
+      base_url: normalizeEndpointUrl(localConnection.base_url, OLLAMA_BASE_URL_DEFAULT),
       model: typeof localConnection.model === 'string' ? localConnection.model.trim() : '',
       B: typeof localConnection.B === 'number' && Number.isFinite(localConnection.B) ? localConnection.B : 1,
     } : {
@@ -536,9 +540,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       source_citation: typeof webSearch?.source_citation === 'boolean' ? webSearch.source_citation : false,
       provider_config: {
         searxng: {
-          base_url: typeof searxngConfig?.base_url === 'string' && searxngConfig.base_url.trim()
-            ? searxngConfig.base_url.trim()
-            : WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+          base_url: normalizeEndpointUrl(searxngConfig?.base_url, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT),
           use_json_api: typeof searxngConfig?.use_json_api === 'boolean'
             ? searxngConfig.use_json_api
             : WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
@@ -549,7 +551,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
 };
 
 const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider; default_model: string; generation_params?: AgentGenerationParams }): OllamaRuntimeConfig => {
-  const baseUrl = settings.generation_params?.local_connection?.base_url?.trim() || OLLAMA_BASE_URL_DEFAULT;
+  const baseUrl = normalizeEndpointUrl(settings.generation_params?.local_connection?.base_url, OLLAMA_BASE_URL_DEFAULT);
   const localModel = settings.generation_params?.local_connection?.model?.trim() || '';
   const defaultModel = settings.default_provider === 'ollama' && !localModel ? settings.default_model.trim() : '';
   return {
