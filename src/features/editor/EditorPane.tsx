@@ -1,7 +1,7 @@
 import { isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
 import { Transaction } from '@codemirror/state';
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
+import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck';
 import CodeMirror from '@uiw/react-codemirror';
 import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -893,7 +893,7 @@ export function EditorPane() {
               </ul>
             </div>
           )}
-          {editorTab !== 'preview' && (
+          {shouldRenderEditableEditor(editorTab) && (
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
             <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onUndo} title="Undo" aria-label="Undo" disabled={!canUndo}><Undo2 size={14} /></button>
             <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onRedo} title="Redo" aria-label="Redo" disabled={!canRedo}><Redo2 size={14} /></button>
@@ -932,15 +932,15 @@ export function EditorPane() {
 
         <div className={`grid min-h-0 flex-1 ${editorTab === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
           <div
-            className={`${editorTab === 'preview' ? 'hidden pointer-events-none' : ''} min-h-0 flex-1`}
-            aria-hidden={editorTab === 'preview'}
+            className={`${shouldRenderEditableEditor(editorTab) ? '' : 'hidden pointer-events-none'} min-h-0 flex-1`}
+            aria-hidden={!shouldRenderEditableEditor(editorTab)}
           >
             <CodeMirror
               key={file.id}
               value={editorValue}
               className="editor-scroll min-h-0 flex-1"
               height="100%"
-              extensions={[markdown({ extensions: [{ remove: ['SetextHeading'] }] })]}
+              extensions={editorExtensions}
               onCreateEditor={(view) => {
                 viewRef.current = view;
                 const pendingBaseline = pendingHistoryBaselineRef.current;
