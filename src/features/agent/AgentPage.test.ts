@@ -340,6 +340,51 @@ test('preferred source domain placeholder and validation copy use google.com exa
   assert.equal(source.includes('Domain must be valid, such as google.com.'), true);
 });
 
+test('domain policy labels and helper text are user-friendly and do not expose internal policy keys', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("{ value: 'open_web', label: 'Use entire web' }"), true);
+  assert.equal(source.includes("{ value: 'prefer_list', label: 'Use entire web + prioritize listed domains' }"), true);
+  assert.equal(source.includes("{ value: 'only_list', label: 'Use only listed domains' }"), true);
+  assert.equal(source.includes('open_web: Search the web normally'), false);
+  assert.equal(source.includes('prefer_list (boost)'), false);
+  assert.equal(source.includes('only_list (strict filter)'), false);
+});
+
+test('custom domain source section uses renamed source importance terminology and ranking explanation', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Custom domain sources'), true);
+  assert.equal(source.includes('Source importance'), true);
+  assert.equal(source.includes('Source importance helps ranking when domain policy is set to “Use entire web”'), true);
+  assert.equal(source.includes('In “Use only listed domains,” source importance does not change rank; it only filters by domain.'), true);
+});
+
+test('source importance controls use constrained 1-5 sliders with label mapping and intensity color', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {'), true);
+  assert.equal(source.includes("1: 'Low'"), true);
+  assert.equal(source.includes("5: 'Critical'"), true);
+  assert.equal(source.includes('type="range"'), true);
+  assert.equal(source.includes('min={1}'), true);
+  assert.equal(source.includes('max={5}'), true);
+  assert.equal(source.includes('step={1}'), true);
+  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}'), true);
+  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
+});
+
+test('preferred source table displays source importance labels with optional numeric helper text', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('getSourceImportanceLabel(source.weight)'), true);
+  assert.equal(source.includes('title={`Importance level ${source.weight}`}'), true);
+  assert.equal(source.includes('<span className="ml-1 text-xs text-slate-400">({source.weight})</span>'), true);
+});
+
+test('preferred source payload keeps weight numeric after slider inputs', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || 1);'), true);
+  assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
+  assert.equal(source.includes('weight: normalizedWeight,'), true);
+});
+
 test('web search controls render in expected order with checkbox row grouped at the bottom', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   const enableIndex = source.indexOf('<span>Enable web search</span>');
