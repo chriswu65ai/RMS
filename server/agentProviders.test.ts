@@ -99,6 +99,7 @@ test('minimax unsupported listing returns fallback with unsupported status', asy
   const result = await providerRegistry.minimax.listModels('test-key', { fallbackModels: FALLBACK_MODELS.minimax });
   assert.equal(result.catalog_status, 'unsupported');
   assert.equal(result.reason_code, 'unsupported_endpoint');
+  assert.deepEqual(result.models.map((model) => model.modelId), ['MiniMax-M2.5', 'MiniMax-M2.7']);
   assert.equal(result.selection_source, 'provider_fallback');
   assert.equal(result.selected_model, FALLBACK_MODELS.minimax[0]?.modelId);
 });

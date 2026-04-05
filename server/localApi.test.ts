@@ -425,6 +425,21 @@ test('ollama model refresh maps runtime_base_url override and strips trailing sl
   }
 });
 
+test('minimax model list falls back to static model ids when API key is missing', async () => {
+  const response = await callRoute('GET', '/api/agent/models?provider=minimax');
+  assert.equal(response.status, 200);
+  const payload = JSON.parse(response.body) as {
+    models: Array<{ modelId: string }>;
+    selected_model: string;
+    selection_source: string;
+    reason_code: string;
+  };
+  assert.deepEqual(payload.models.map((entry) => entry.modelId), ['MiniMax-M2.5', 'MiniMax-M2.7']);
+  assert.equal(payload.selected_model, 'MiniMax-M2.5');
+  assert.equal(payload.selection_source, 'provider_fallback');
+  assert.equal(payload.reason_code, 'missing_api_key');
+});
+
 
 test('agent settings web_search defaults and round-trip persistence', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {

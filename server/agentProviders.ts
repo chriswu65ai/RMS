@@ -1147,7 +1147,10 @@ export const providerRegistry: Record<AgentProvider, ProviderAdapter> = {
 };
 
 export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
-  minimax: [{ modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5', B: 1 }],
+  minimax: [
+    { modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5', B: 1 },
+    { modelId: 'MiniMax-M2.7', displayName: 'MiniMax M2.7', B: 1 },
+  ],
   openai: [],
   anthropic: [],
   ollama: [],
