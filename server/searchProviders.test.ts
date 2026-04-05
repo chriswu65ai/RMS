@@ -96,6 +96,41 @@ test('duckduckgo adapter accepts safeSearch and recency options with explicit fa
   }
 });
 
+test('duckduckgo adapter normalizes DDG redirect wrapper urls and preserves non-wrapper urls', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <a class="result__a" href="/l/?uddg=https%253A%252F%252Fexample.com%252Fwrapped%253Futm_source%253Dddg">Wrapped result</a>
+    <a class="result__snippet">Wrapped snippet</a>
+    <a class="result__a" href="https://another.example.com/direct">Direct result</a>
+    <a class="result__snippet">Direct snippet</a>
+  `;
+  globalThis.fetch = async () => new Response(html, { status: 200 });
+
+  try {
+    const results = await searchProviderRegistry.duckduckgo.search('earnings');
+    assert.equal(results[0]?.url, 'https://example.com/wrapped');
+    assert.equal(results[1]?.url, 'https://another.example.com/direct');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('duckduckgo adapter falls back to decoded href for malformed uddg redirect urls', async () => {
+  const originalFetch = globalThis.fetch;
+  const html = `
+    <a class="result__a" href="/l/?uddg=%E0%A4%A">Malformed wrapped result</a>
+    <a class="result__snippet">Malformed wrapped snippet</a>
+  `;
+  globalThis.fetch = async () => new Response(html, { status: 200 });
+
+  try {
+    const results = await searchProviderRegistry.duckduckgo.search('earnings');
+    assert.equal(results[0]?.url, '/l/?uddg=%E0%A4%A');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('dedupe canonical URL strips UTM params and trailing slash', () => {
   const deduped = searchUtils.dedupeByCanonicalUrl([
     { title: 'A', url: 'https://example.com/path/?utm_source=x', snippet: '1', provider: 'duckduckgo' },

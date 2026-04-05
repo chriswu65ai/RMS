@@ -161,6 +161,43 @@ const decodeHtml = (value: string): string => value
   .replace(/&#39;/g, "'")
   .replace(/&#x2F;/g, '/');
 
+const normalizeDuckDuckGoResultUrl = (rawHref: string): string => {
+  const decodedHref = decodeHtml(rawHref).trim();
+  if (!decodedHref) return decodedHref;
+
+  let parsedHref: URL;
+  try {
+    parsedHref = new URL(decodedHref, 'https://duckduckgo.com');
+  } catch {
+    return decodedHref;
+  }
+
+  if (parsedHref.hostname !== 'duckduckgo.com' || !parsedHref.pathname.startsWith('/l/')) {
+    return decodedHref;
+  }
+
+  const encodedDestination = parsedHref.searchParams.get('uddg');
+  if (!encodedDestination) return decodedHref;
+
+  let decodedDestination: string;
+  try {
+    decodedDestination = decodeURIComponent(encodedDestination);
+  } catch {
+    return decodedHref;
+  }
+
+  try {
+    const destinationUrl = new URL(decodedDestination);
+    if (destinationUrl.protocol === 'http:' || destinationUrl.protocol === 'https:') {
+      return destinationUrl.toString();
+    }
+  } catch {
+    return decodedHref;
+  }
+
+  return decodedHref;
+};
+
 const stripHtmlTags = (value: string): string => value
   .replace(/<script[\s\S]*?<\/script>/gi, ' ')
   .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -262,7 +299,7 @@ class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
 
     const rawResults: SearchResult[] = matches.map((match, index) => ({
       title: decodeHtml(match[2].replace(/<[^>]+>/g, '').trim()),
-      url: decodeHtml(match[1].trim()),
+      url: normalizeDuckDuckGoResultUrl(match[1]),
       snippet: decodeHtml(match[3].replace(/<[^>]+>/g, '').trim()),
       provider: 'duckduckgo',
       score: Math.max(0, 1 - (index * 0.01)),
