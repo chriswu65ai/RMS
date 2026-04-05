@@ -3,11 +3,25 @@ import assert from 'node:assert/strict';
 import { useChatStore } from '../../hooks/useChatStore.js';
 
 const flushMicrotasks = async () => new Promise((resolve) => setImmediate(resolve));
+const encoder = new TextEncoder();
+
+const jsonResponse = (payload: unknown, init?: ResponseInit) => new Response(JSON.stringify(payload), {
+  status: init?.status ?? 200,
+  headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+});
+
+const ndjsonResponse = (lines: Array<Record<string, unknown>>) => new Response(new ReadableStream({
+  start(controller) {
+    lines.forEach((line) => controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`)));
+    controller.close();
+  },
+}), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
 
 test('chat store streaming resilience keeps retry flow when a stream fails', async () => {
   const originalWindow = (globalThis as { window?: unknown }).window;
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
+  const originalFetch = globalThis.fetch;
 
   const fakeWindow = {
     setTimeout: ((cb: () => void) => {
@@ -20,6 +34,26 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
   (globalThis as { window?: unknown }).window = fakeWindow;
   globalThis.setTimeout = fakeWindow.setTimeout;
   globalThis.clearTimeout = fakeWindow.clearTimeout;
+  let callCount = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/api/chat/session/current/messages?')) {
+      return jsonResponse({ messages: [] });
+    }
+    if (url === '/api/chat/session/current/messages') {
+      callCount += 1;
+      if (callCount === 1) {
+        return ndjsonResponse([
+          { type: 'tool_call_started', tool_call_id: 'tool-1', tool_name: 'create_task', narration_before: 'planning' },
+          { type: 'error', message: 'The stream failed before completion. You can retry.' },
+        ]);
+      }
+      return ndjsonResponse([
+        { type: 'done', outputText: 'retry completed', latencyMs: 1 },
+      ]);
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
 
   try {
     useChatStore.setState({ messages: [], running: false, lastError: null });
@@ -41,7 +75,8 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
 
     const retried = useChatStore.getState();
     assert.equal(retried.messages.at(-1)?.role, 'assistant');
-    assert.equal(retried.messages.at(-1)?.status, 'error');
+    assert.equal(retried.messages.at(-1)?.status, 'idle');
+    assert.equal(retried.messages.at(-1)?.text, 'retry completed');
   } finally {
     if (originalWindow === undefined) {
       delete (globalThis as { window?: unknown }).window;
@@ -50,5 +85,91 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
     }
     globalThis.setTimeout = originalSetTimeout;
     globalThis.clearTimeout = originalClearTimeout;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('chat store cancel marks in-flight assistant message as cancelled', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes('/api/chat/session/current/messages?')) return jsonResponse({ messages: [] });
+    if (url === '/api/chat/session/current/messages') {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectOnAbort = () => reject(new Error('aborted'));
+        if (signal?.aborted) {
+          rejectOnAbort();
+          return;
+        }
+        signal?.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    useChatStore.setState({ messages: [], running: false, lastError: null });
+    const sendPromise = useChatStore.getState().sendMessage('cancel me');
+    await flushMicrotasks();
+    useChatStore.getState().cancelActive();
+    await sendPromise;
+    const assistant = useChatStore.getState().messages.find((entry) => entry.role === 'assistant');
+    assert.equal(useChatStore.getState().running, false);
+    assert.equal(assistant?.status, 'error');
+    assert.equal(assistant?.errorMessage, 'Cancelled before any output.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('chat store history/export/reset-context helpers call expected endpoints', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${url}`);
+    if (url.includes('/api/chat/session/current/messages?')) {
+      return jsonResponse({
+        messages: [{
+          id: 'message-1',
+          role: 'assistant',
+          content: 'loaded',
+          created_at: new Date().toISOString(),
+        }],
+      });
+    }
+    if (url.startsWith('/api/chat/session/current/history?range=all')) return jsonResponse({ deletedMessages: 2 });
+    if (url === '/api/chat/session/current/reset-context') return jsonResponse({ ok: true });
+    if (url === '/api/chat/session/current/export?format=json') return jsonResponse({ messages: [{ id: 'm1' }] });
+    if (url === '/api/chat/session/current/export?format=markdown') return new Response('# transcript', { status: 200 });
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    useChatStore.setState({
+      messages: [{ id: 'temp', role: 'assistant', text: 'stale', createdAt: Date.now(), status: 'idle', traces: [] }],
+      running: false,
+      lastError: null,
+      initialized: true,
+      initializing: false,
+      hasOlderMessages: true,
+    });
+    await useChatStore.getState().clearHistory('all');
+    assert.equal(useChatStore.getState().messages.length, 0);
+
+    await useChatStore.getState().resetContext();
+    assert.equal(useChatStore.getState().messages.some((message) => message.text === 'loaded'), true);
+
+    const exportedJson = await useChatStore.getState().exportSession('json') as { messages?: Array<{ id: string }> };
+    const exportedMarkdown = await useChatStore.getState().exportSession('markdown');
+    assert.equal(exportedJson.messages?.[0]?.id, 'm1');
+    assert.equal(exportedMarkdown, '# transcript');
+    assert.equal(calls.some((call) => call === 'DELETE /api/chat/session/current/history?range=all'), true);
+    assert.equal(calls.some((call) => call === 'POST /api/chat/session/current/reset-context'), true);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
