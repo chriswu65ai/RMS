@@ -174,11 +174,66 @@ export function EditorPane() {
     };
   }, []);
 
+  const clearThinkingCloseTimer = (fileId: string) => {
+    const timer = thinkingCloseTimerByFileIdRef.current[fileId];
+    if (timer) {
+      window.clearTimeout(timer);
+      thinkingCloseTimerByFileIdRef.current[fileId] = null;
+    }
+  };
+
+  const clearThinkingFadeTimer = (fileId: string) => {
+    const timer = thinkingFadeTimerByFileIdRef.current[fileId];
+    if (timer) {
+      window.clearTimeout(timer);
+      thinkingFadeTimerByFileIdRef.current[fileId] = null;
+    }
+  };
+
   const metadataSyntax = useMemo(() => {
     const withFrontmatterOnly = composeMarkdown(frontmatter, '');
     const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
     return match ? match[1] : '';
   }, [frontmatter]);
+
+  const processThinkingQueue = (fileId: string) => {
+    if (thinkingSwapInFlightByFileIdRef.current[fileId]) return;
+    const queue = thinkingQueueByFileId[fileId] ?? [];
+    if (queue.length === 0) return;
+    const visible = thinkingVisibleLinesByFileId[fileId] ?? [];
+    const swapVisible = () => {
+      setThinkingQueueByFileId((current) => {
+        const currentQueue = current[fileId] ?? [];
+        if (currentQueue.length === 0) return current;
+        const nextLines = currentQueue.slice(0, THINKING_VISIBLE_LINE_LIMIT);
+        const remaining = currentQueue.slice(THINKING_VISIBLE_LINE_LIMIT);
+        setThinkingVisibleLinesByFileId((lines) => ({ ...lines, [fileId]: nextLines }));
+        return { ...current, [fileId]: remaining };
+      });
+    };
+    if (visible.length === 0) {
+      swapVisible();
+      return;
+    }
+    thinkingSwapInFlightByFileIdRef.current[fileId] = true;
+    setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: true }));
+    clearThinkingFadeTimer(fileId);
+    thinkingFadeTimerByFileIdRef.current[fileId] = window.setTimeout(() => {
+      swapVisible();
+      setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: false }));
+      thinkingSwapInFlightByFileIdRef.current[fileId] = false;
+    }, THINKING_FADE_MS);
+  };
+
+  useEffect(() => {
+    if (!file?.id) return;
+    processThinkingQueue(file.id);
+  }, [file?.id, thinkingQueueByFileId, thinkingVisibleLinesByFileId]);
+
+  useEffect(() => () => {
+    Object.keys(thinkingCloseTimerByFileIdRef.current).forEach(clearThinkingCloseTimer);
+    Object.keys(thinkingFadeTimerByFileIdRef.current).forEach(clearThinkingFadeTimer);
+  }, []);
 
 
   if (!file) return <div className="flex h-full items-center justify-center text-slate-400">Select a note to view</div>;
@@ -195,22 +250,6 @@ export function EditorPane() {
   const thinkingStatus = thinkingStatusByFileId[file.id] ?? 'idle';
   const thinkingIsFading = thinkingIsFadingByFileId[file.id] ?? false;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
-
-  const clearThinkingCloseTimer = (fileId: string) => {
-    const timer = thinkingCloseTimerByFileIdRef.current[fileId];
-    if (timer) {
-      window.clearTimeout(timer);
-      thinkingCloseTimerByFileIdRef.current[fileId] = null;
-    }
-  };
-
-  const clearThinkingFadeTimer = (fileId: string) => {
-    const timer = thinkingFadeTimerByFileIdRef.current[fileId];
-    if (timer) {
-      window.clearTimeout(timer);
-      thinkingFadeTimerByFileIdRef.current[fileId] = null;
-    }
-  };
 
   const extractDomainsFromUnknown = (value: unknown, output: Set<string>) => {
     if (typeof value === 'string') {
@@ -256,44 +295,6 @@ export function EditorPane() {
     }
     return null;
   };
-
-  const processThinkingQueue = (fileId: string) => {
-    if (thinkingSwapInFlightByFileIdRef.current[fileId]) return;
-    const queue = thinkingQueueByFileId[fileId] ?? [];
-    if (queue.length === 0) return;
-    const visible = thinkingVisibleLinesByFileId[fileId] ?? [];
-    const swapVisible = () => {
-      setThinkingQueueByFileId((current) => {
-        const currentQueue = current[fileId] ?? [];
-        if (currentQueue.length === 0) return current;
-        const nextLines = currentQueue.slice(0, THINKING_VISIBLE_LINE_LIMIT);
-        const remaining = currentQueue.slice(THINKING_VISIBLE_LINE_LIMIT);
-        setThinkingVisibleLinesByFileId((lines) => ({ ...lines, [fileId]: nextLines }));
-        return { ...current, [fileId]: remaining };
-      });
-    };
-    if (visible.length === 0) {
-      swapVisible();
-      return;
-    }
-    thinkingSwapInFlightByFileIdRef.current[fileId] = true;
-    setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: true }));
-    clearThinkingFadeTimer(fileId);
-    thinkingFadeTimerByFileIdRef.current[fileId] = window.setTimeout(() => {
-      swapVisible();
-      setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: false }));
-      thinkingSwapInFlightByFileIdRef.current[fileId] = false;
-    }, THINKING_FADE_MS);
-  };
-
-  useEffect(() => {
-    processThinkingQueue(file.id);
-  }, [file.id, thinkingQueueByFileId, thinkingVisibleLinesByFileId]);
-
-  useEffect(() => () => {
-    Object.keys(thinkingCloseTimerByFileIdRef.current).forEach(clearThinkingCloseTimer);
-    Object.keys(thinkingFadeTimerByFileIdRef.current).forEach(clearThinkingFadeTimer);
-  }, []);
 
   const getLineText = () => {
     const view = viewRef.current;
