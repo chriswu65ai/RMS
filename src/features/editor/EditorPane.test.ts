@@ -3,7 +3,16 @@ import assert from 'node:assert/strict';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck.js';
-import { pushHistorySnapshot, redoHistorySnapshot, undoHistorySnapshot } from './EditorPane.js';
+import {
+  buildMarkdownTable,
+  deriveLinkLabelFromUrl,
+  EDITOR_SHORTCUT_KEYS,
+  getTableSizeError,
+  isUrlLikeSelection,
+  pushHistorySnapshot,
+  redoHistorySnapshot,
+  undoHistorySnapshot,
+} from './EditorPane.js';
 
 test('editor stays mounted in edit and split tabs', () => {
   assert.equal(shouldRenderEditableEditor('edit'), true);
@@ -69,4 +78,38 @@ test('toolbar and keyboard parity use identical undo/redo state transitions', ()
   const toolbarUndo = undoHistorySnapshot(history);
   const keyboardUndo = undoHistorySnapshot(history);
   assert.deepEqual(toolbarUndo, keyboardUndo);
+});
+
+test('shortcut map includes required bindings and excludes list shortcuts', () => {
+  assert.deepEqual(EDITOR_SHORTCUT_KEYS.redo, ['Mod-Shift-z', 'Ctrl-y']);
+  assert.deepEqual(EDITOR_SHORTCUT_KEYS.find, ['Mod-f']);
+  assert.deepEqual(EDITOR_SHORTCUT_KEYS.replace, ['Mod-h']);
+  assert.deepEqual(EDITOR_SHORTCUT_KEYS.link, ['Mod-k']);
+  assert.equal((Object.values(EDITOR_SHORTCUT_KEYS).flat() as string[]).includes('Mod-Shift-8'), false);
+});
+
+test('link helper detects url-like selections and creates label defaults', () => {
+  assert.equal(isUrlLikeSelection('https://example.com/report'), true);
+  assert.equal(isUrlLikeSelection('www.example.com/path'), true);
+  assert.equal(isUrlLikeSelection('Quarterly outlook'), false);
+  assert.equal(deriveLinkLabelFromUrl('https://example.com/research/report/'), 'example.com/report');
+});
+
+test('table validation enforces integer range 1..20', () => {
+  assert.equal(getTableSizeError('0', 'Rows'), 'Rows must be between 1 and 20.');
+  assert.equal(getTableSizeError('abc', 'Columns'), 'Columns must be an integer from 1 to 20.');
+  assert.equal(getTableSizeError('20', 'Rows'), null);
+});
+
+test('table generator creates expected 3x3 markdown output', () => {
+  assert.equal(
+    buildMarkdownTable(3, 3),
+    [
+      '| Col 1 | Col 2 | Col 3 |',
+      '| --- | --- | --- |',
+      '|   |   |   |',
+      '|   |   |   |',
+      '|   |   |   |',
+    ].join('\n'),
+  );
 });
