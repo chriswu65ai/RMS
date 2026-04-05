@@ -221,12 +221,6 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete task.'); }
   };
 
-  const openLinkedNote = (task: NewResearchTask) => {
-    const transition = transitionTaskToNote(task);
-    if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
-    navigate('/research.html');
-  };
-
   const createNoteFromTask = async (task: NewResearchTask) => {
     if (!workspace) return setError('Workspace is not ready yet.');
     const preview = resolveDestinationPreview(task);
