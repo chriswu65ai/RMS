@@ -228,7 +228,7 @@ export const runAgentToolOrchestration = async ({
   if (!supportsToolCalling(provider, model)) {
     throw new Error(`Provider/model does not support tool mode: ${provider}/${model}.`);
   }
-  const maxToolCalls = settings.mode === 'deep' ? 2 : 1;
+  const maxToolCalls = settings.mode === 'deep' ? 3 : 1;
   const domainList = preferredSources.map((item) => item.domain.toLowerCase());
   const domainBoost = preferredSources.reduce<Record<string, number>>((acc, item) => {
     acc[item.domain.toLowerCase()] = item.weight;

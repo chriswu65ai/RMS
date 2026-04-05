@@ -5,9 +5,13 @@ import path from 'node:path';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync.js';
 import {
   buildWebSearchSettingsPayload,
+  convertTimeoutMsToSeconds,
+  getRecommendedPresetForMode,
   getWebSearchSourceCitationDefault,
   shouldShowSearxngConfigFields,
+  WEB_SEARCH_MODE_RECOMMENDED_PRESETS,
   WEB_SEARCH_MODE_OPTIONS,
+  WEB_SEARCH_PROVIDER_CAPABILITIES,
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
 
@@ -63,7 +67,7 @@ test('web search save payload preserves existing params and normalizes numeric c
     provider: 'duckduckgo',
     mode: 'deep',
     maxResults: '0',
-    timeoutMs: '',
+    timeoutSeconds: '',
     safeSearch: false,
     recency: '30d',
     domainPolicy: 'prefer_list',
@@ -78,8 +82,8 @@ test('web search save payload preserves existing params and normalizes numeric c
     enabled: true,
     provider: 'duckduckgo',
     mode: 'deep',
-    max_results: 5,
-    timeout_ms: 5000,
+    max_results: 6,
+    timeout_ms: 10000,
     safe_search: false,
     recency: '30d',
     domain_policy: 'prefer_list',
@@ -97,8 +101,8 @@ test('web search save payload includes source_citation when enabled', () => {
     provider: 'duckduckgo',
     mode: 'single',
     maxResults: '5',
-    timeoutMs: '5000',
-    safeSearch: true,
+    timeoutSeconds: '5',
+    safeSearch: false,
     recency: 'any',
     domainPolicy: 'open_web',
     sourceCitation: true,
@@ -119,7 +123,7 @@ test('web search save payload maps HTML toggle to inverted searxng use_json_api 
     provider: 'searxng',
     mode: 'single',
     maxResults: '5',
-    timeoutMs: '5000',
+    timeoutSeconds: '5',
     safeSearch: true,
     recency: 'any',
     domainPolicy: 'open_web',
@@ -146,7 +150,7 @@ test('web search save payload keeps JSON API enabled when HTML toggle is uncheck
     provider: 'searxng',
     mode: 'single',
     maxResults: '5',
-    timeoutMs: '5000',
+    timeoutSeconds: '5',
     safeSearch: true,
     recency: 'any',
     domainPolicy: 'open_web',
@@ -168,7 +172,7 @@ test('web search save payload normalizes searxng base URL by removing trailing s
     provider: 'searxng',
     mode: 'single',
     maxResults: '5',
-    timeoutMs: '5000',
+    timeoutSeconds: '5',
     safeSearch: true,
     recency: 'any',
     domainPolicy: 'open_web',
@@ -195,8 +199,44 @@ test('web search provider dropdown options include SearXNG', () => {
 test('web search mode labels are renamed and helpers clarify pass count behavior', () => {
   assert.deepEqual(WEB_SEARCH_MODE_OPTIONS, [
     { value: 'single', label: 'Single search', helper: 'Run one web_search tool call.' },
-    { value: 'deep', label: 'Extended search', helper: 'Allow up to two web_search tool calls for broader coverage.' },
+    { value: 'deep', label: 'Extended search', helper: 'Allow up to three web_search tool calls for broader coverage.' },
   ]);
+});
+
+test('web search mode recommended presets expose single and extended defaults', () => {
+  assert.deepEqual(WEB_SEARCH_MODE_RECOMMENDED_PRESETS, {
+    single: { maxResults: 6, timeoutSeconds: 10 },
+    deep: { maxResults: 10, timeoutSeconds: 18 },
+  });
+  assert.deepEqual(getRecommendedPresetForMode('single'), { maxResults: 6, timeoutSeconds: 10 });
+  assert.deepEqual(getRecommendedPresetForMode('deep'), { maxResults: 10, timeoutSeconds: 18 });
+});
+
+test('timeout conversion helpers map seconds to milliseconds and back', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'duckduckgo',
+    mode: 'single',
+    maxResults: '6',
+    timeoutSeconds: '18',
+    safeSearch: false,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://localhost:8080',
+    searxngUseHtmlMode: false,
+  });
+  assert.equal(payload.generation_params?.web_search?.timeout_ms, 18000);
+  assert.equal(convertTimeoutMsToSeconds(18000), 18);
+});
+
+test('web search provider capabilities mark duckduckgo controls as unsupported', () => {
+  assert.deepEqual(WEB_SEARCH_PROVIDER_CAPABILITIES.duckduckgo, { recency: false, safeSearch: false });
+  assert.deepEqual(WEB_SEARCH_PROVIDER_CAPABILITIES.searxng, { recency: true, safeSearch: true });
 });
 
 test('web search mode persists across save payload builds', () => {
@@ -209,7 +249,7 @@ test('web search mode persists across save payload builds', () => {
     provider: 'duckduckgo',
     mode: 'deep',
     maxResults: '5',
-    timeoutMs: '3000',
+    timeoutSeconds: '3',
     safeSearch: true,
     recency: '7d',
     domainPolicy: 'open_web',
@@ -235,7 +275,7 @@ test('web search save payload omits searxng provider_config when provider is duc
     provider: 'duckduckgo',
     mode: 'single',
     maxResults: '7',
-    timeoutMs: '2500',
+    timeoutSeconds: '3',
     safeSearch: true,
     recency: 'any',
     domainPolicy: 'open_web',
@@ -310,6 +350,16 @@ test('web search controls render in expected order with checkbox row grouped at 
   assert.ok(settingsGridIndex > enableIndex);
   assert.ok(checkboxRowIndex > settingsGridIndex);
   assert.ok(safeSearchIndex > checkboxRowIndex);
+});
+
+test('AgentPage web search UI includes recommended action, timeout seconds label, helper copy, and provider capability notices', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Use recommended'), true);
+  assert.equal(source.includes('Timeout (seconds)'), true);
+  assert.equal(source.includes('Maximum results requested per search pass before deduplication.'), true);
+  assert.equal(source.includes('Maximum wait time per provider request; timed-out passes may return no web evidence.'), true);
+  assert.equal(source.includes('Not supported by DuckDuckGo adapter.'), true);
+  assert.equal(source.includes('Safe search is not supported by DuckDuckGo adapter.'), true);
 });
 
 test('EditorPane thinking stream keeps a max-5 render policy and rotates queue in groups of five', () => {
