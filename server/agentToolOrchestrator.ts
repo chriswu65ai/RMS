@@ -100,15 +100,16 @@ const normalizeToolArgs = (raw: Record<string, unknown>, settings: WebSearchSett
     query,
     mode: raw.mode === 'deep' ? 'deep' : settings.mode,
     max_results: toPositiveInt(raw.max_results, settings.max_results),
-    recency: raw.recency === '7d' || raw.recency === '30d' || raw.recency === '365d' || raw.recency === 'any' ? raw.recency : settings.recency,
-    safe_search: typeof raw.safe_search === 'boolean' ? raw.safe_search : settings.safe_search,
-    domain_policy: raw.domain_policy === 'prefer_list' || raw.domain_policy === 'only_list' || raw.domain_policy === 'open_web'
-      ? raw.domain_policy
-      : settings.domain_policy,
-    domain_list: Array.isArray(raw.domain_list)
-      ? raw.domain_list.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim().toLowerCase())
-      : domainList,
-    provider: raw.provider === 'searxng' ? 'searxng' : settings.provider,
+    recency: settings.recency,
+    safe_search: settings.safe_search,
+    // Server-enforced guardrail: domain policy comes from persisted settings,
+    // never from model-emitted tool-call arguments.
+    domain_policy: settings.domain_policy,
+    // Server-enforced guardrail: allowed domains come from persisted preferredSources,
+    // never from model-emitted tool-call arguments.
+    domain_list: domainList,
+    // Server-enforced guardrail: search provider is selected by persisted settings.
+    provider: settings.provider,
     provider_config: settings.provider_config,
   };
 };
