@@ -1009,7 +1009,7 @@ test('agent generate emits stream sources before done and warning frames on sear
   }
 });
 
-test('agent generate only injects citation instruction and appends Sources block when source_citation is enabled', async () => {
+test('agent generate handles citation on/off output policy while keeping metadata and logging citation events', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
   let receivedInput = '';
@@ -1046,9 +1046,14 @@ test('agent generate only injects citation instruction and appends Sources block
     }));
     assert.equal(disabledResponse.status, 200);
     assert.doesNotMatch(receivedInput, /Citation mode is REQUIRED/);
-    const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
+      outputText?: string;
+      web_search?: { sourceCount?: number };
+    });
     const disabledDone = disabledFrames.find((frame) => frame.type === 'done');
     assert.equal(disabledDone?.outputText, 'Summary body');
+    assert.equal((disabledDone?.web_search?.sourceCount ?? 0) > 0, true);
 
     await callRoute('PUT', '/api/agent/settings', {
       default_provider: 'openai',
@@ -1074,6 +1079,21 @@ test('agent generate only injects citation instruction and appends Sources block
     const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
     assert.equal(enabledDone?.outputText, 'Summary body[lack citation]');
     assert.doesNotMatch(enabledDone?.outputText ?? '', /snippet/i);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{
+      citation_events_json?: string | null;
+      web_search_enabled: number;
+    }>;
+    const latestEnabled = activity[0];
+    const latestDisabled = activity[1];
+    assert.equal(latestEnabled?.web_search_enabled, 1);
+    assert.equal(latestDisabled?.web_search_enabled, 1);
+    assert.equal(typeof latestEnabled?.citation_events_json, 'string');
+    const parsedEvents = JSON.parse(latestEnabled?.citation_events_json ?? '[]') as Array<{ event_type?: string }>;
+    assert.equal(parsedEvents.some((event) => event.event_type === 'retry_invoked'), true);
+    assert.equal(latestDisabled?.citation_events_json, null);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;

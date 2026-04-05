@@ -12,6 +12,19 @@ type CitationProcessOutput = {
   normalizedText: string;
   citationIndices: number[];
   retryUsed: boolean;
+  citationEvents: CitationActivityEvent[];
+};
+
+export type CitationActivityEventType =
+  | 'normalization_applied'
+  | 'retry_invoked'
+  | 'unsupported_span_marked_lack_citation'
+  | 'citation_off_rewrite_invoked'
+  | 'citation_leakage_prevented';
+
+export type CitationActivityEvent = {
+  event_type: CitationActivityEventType;
+  details?: Record<string, number>;
 };
 
 const SUPERSCRIPT_DIGIT_MAP: Record<string, string> = {
@@ -260,6 +273,7 @@ const rewriteCitationArtifacts = (text: string): string => {
 };
 
 const processCitationModeOn = async (input: CitationProcessInput): Promise<CitationProcessOutput> => {
+  const citationEvents: CitationActivityEvent[] = [];
   const processOnce = (raw: string) => {
     const stripped = stripRenderedCitationSections(raw);
     const normalized = normalizeCitationVariants(stripped);
@@ -272,9 +286,16 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
   let currentText = input.outputText;
   let pass = processOnce(currentText);
   let retryUsed = false;
+  if (pass.normalized !== pass.stripped) {
+    citationEvents.push({
+      event_type: 'normalization_applied',
+      details: { replacements: Math.max(1, countCitationArtifacts(pass.stripped) - countCitationArtifacts(pass.normalized)) },
+    });
+  }
 
   if ((!pass.validation.isValid || !pass.hasAnyCitation) && input.retryCanonicalize) {
     retryUsed = true;
+    citationEvents.push({ event_type: 'retry_invoked' });
     currentText = await input.retryCanonicalize([
       input.outputText,
       '',
@@ -285,6 +306,12 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
   }
 
   const withUnsupported = appendLackCitationForUnsupportedSpans(pass.mapped.mappedText, pass.validation.invalidMappedIndices);
+  if (pass.validation.invalidMappedIndices.size > 0) {
+    citationEvents.push({
+      event_type: 'unsupported_span_marked_lack_citation',
+      details: { unsupported_count: pass.validation.invalidMappedIndices.size },
+    });
+  }
   const withMissingCitationMarker = pass.hasAnyCitation ? withUnsupported : `${withUnsupported}[lack citation]`;
   const referencedOriginalIndices = new Set<number>();
   for (const mappedIndex of Array.from(pass.validation.referencedMappedIndices.values())) {
@@ -301,20 +328,34 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
     normalizedText: withMissingCitationMarker,
     citationIndices: Array.from(referencedOriginalIndices).sort((a, b) => a - b),
     retryUsed,
+    citationEvents,
   };
 };
 
 const processCitationModeOff = (input: CitationProcessInput): CitationProcessOutput => {
   const lightweight = lightweightCleanupOff(input.outputText);
-  const rewritten = shouldRewriteCitationArtifacts(input.outputText, lightweight)
-    ? rewriteCitationArtifacts(lightweight)
-    : lightweight;
+  const citationEvents: CitationActivityEvent[] = [];
+  const rewriteInvoked = shouldRewriteCitationArtifacts(input.outputText, lightweight);
+  let rewritten = lightweight;
+  if (rewriteInvoked) {
+    citationEvents.push({ event_type: 'citation_off_rewrite_invoked' });
+    const beforeLeakageCount = countCitationArtifacts(rewritten);
+    rewritten = rewriteCitationArtifacts(rewritten);
+    const afterLeakageCount = countCitationArtifacts(rewritten);
+    if (afterLeakageCount < beforeLeakageCount) {
+      citationEvents.push({
+        event_type: 'citation_leakage_prevented',
+        details: { removed_artifacts: beforeLeakageCount - afterLeakageCount },
+      });
+    }
+  }
 
   return {
     outputText: rewritten,
     normalizedText: rewritten,
     citationIndices: [],
     retryUsed: false,
+    citationEvents,
   };
 };
 

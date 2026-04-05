@@ -129,6 +129,7 @@ type AgentActivityLogRow = {
   search_query_count: number;
   source_count: number;
   tool_failure_reason: string | null;
+  citation_events_json: string | null;
 };
 
 type PreferredSourceRow = {
@@ -857,6 +858,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         search_query_count: 0,
         source_count: 0,
         tool_failure_reason: null,
+        citation_events_json: null,
       });
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
@@ -883,6 +885,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           search_query_count: 0,
           source_count: 0,
           tool_failure_reason: 'Missing API key.',
+          citation_events_json: null,
         });
         writeJson(res, 400, { error: { message: 'Missing API key for selected provider.' } });
         return true;
@@ -913,6 +916,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           search_query_count: 0,
           source_count: 0,
           tool_failure_reason: reason,
+          citation_events_json: null,
         });
         writeJson(res, 400, { error: { message: reason } });
         return true;
@@ -1033,6 +1037,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           search_query_count: webSearchMetadata.queryCount,
           source_count: webSearchMetadata.sourceCount,
           tool_failure_reason: toolFailureReason,
+          citation_events_json: citationResult.citationEvents.length > 0 ? JSON.stringify(citationResult.citationEvents) : null,
         });
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         res.end();
@@ -1061,6 +1066,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           search_query_count: 0,
           source_count: 0,
           tool_failure_reason: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
+          citation_events_json: null,
         });
         if (res.headersSent) {
           writeNdjson(res, { type: 'error', message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.'), aborted });
