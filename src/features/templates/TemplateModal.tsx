@@ -2,13 +2,13 @@ import { FilePlus2 } from 'lucide-react';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useResearchStore } from '../../hooks/useResearchStore';
+import { toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { createFile } from '../../lib/dataApi';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { useDialog } from '../../components/ui/DialogProvider';
 
 export function TemplateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { files, workspace, selectedFolderId, folders, refresh, noteTypes, selectFile } = useResearchStore();
+  const { files, workspace, selectedFolderId, folders, refresh, selectFile } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
   const [search, setSearch] = useState('');
@@ -100,8 +100,8 @@ export function TemplateModal({ open, onClose }: { open: boolean; onClose: () =>
                   template: false,
                   title: identity ? `${identity.ticker} ${identity.type}` : baseName,
                   ticker: identity?.ticker ?? '',
-                  type: identity?.type ?? (noteTypes[0] ?? ''),
-                  date: identity?.date ?? '',
+                  ...(identity?.type ? { type: identity.type } : {}),
+                  date: identity?.date ?? toLocalDateInputValue(),
                 };
                 const clonedContent = composeMarkdown(clonedFrontmatter, parsed.body);
                 const { error } = await createFile({
