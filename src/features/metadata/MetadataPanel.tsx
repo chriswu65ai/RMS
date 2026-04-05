@@ -1,6 +1,7 @@
 import { BadgeInfo, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { listAttachments, unlinkAttachment, uploadAttachment } from '../../lib/dataApi';
+import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import type { Attachment, FrontmatterModel } from '../../types/models';
 
 type Props = {
@@ -49,16 +50,27 @@ export function MetadataPanel({
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)').matches : false,
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentsError, setAttachmentsError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const guard = createUiAsyncGuard();
     const load = async () => {
       if (!noteId) return;
-      const next = await listAttachments('note', noteId);
-      if (!cancelled) setAttachments(next);
+      await runUiAsync(
+        () => listAttachments('note', noteId),
+        {
+          fallbackMessage: 'Failed to load attachments.',
+          isCancelled: guard.isCancelled,
+          onSuccess: (next) => {
+            setAttachments(next);
+            setAttachmentsError(null);
+          },
+          onError: (message) => setAttachmentsError(message),
+        },
+      );
     };
     void load();
-    return () => { cancelled = true; };
+    return () => { guard.cancel(); };
   }, [noteId]);
 
   useEffect(() => {
@@ -150,10 +162,23 @@ export function MetadataPanel({
             const file = event.target.files?.[0];
             event.target.value = '';
             if (!file || !noteId || !workspaceId) return;
-            await uploadAttachment({ workspaceId, linkType: 'note', linkId: noteId, file });
-            setAttachments(await listAttachments('note', noteId));
+            await runUiAsync(
+              async () => {
+                await uploadAttachment({ workspaceId, linkType: 'note', linkId: noteId, file });
+                return listAttachments('note', noteId);
+              },
+              {
+                fallbackMessage: 'Failed to upload attachment.',
+                onSuccess: (next) => {
+                  setAttachments(next);
+                  setAttachmentsError(null);
+                },
+                onError: (message) => setAttachmentsError(message),
+              },
+            );
           }}
         />
+        {attachmentsError && <p className="mt-2 text-xs text-rose-600">{attachmentsError}</p>}
         <ul className="mt-2 space-y-1">
           {attachments.map((attachment) => (
             <li key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
@@ -161,8 +186,20 @@ export function MetadataPanel({
               <button
                 className="rounded border border-slate-300 px-2 py-0.5"
                 onClick={async () => {
-                  await unlinkAttachment(attachment.id, 'note', noteId);
-                  setAttachments(await listAttachments('note', noteId));
+                  await runUiAsync(
+                    async () => {
+                      await unlinkAttachment(attachment.id, 'note', noteId);
+                      return listAttachments('note', noteId);
+                    },
+                    {
+                      fallbackMessage: 'Failed to remove attachment.',
+                      onSuccess: (next) => {
+                        setAttachments(next);
+                        setAttachmentsError(null);
+                      },
+                      onError: (message) => setAttachmentsError(message),
+                    },
+                  );
                 }}
               >
                 Remove
