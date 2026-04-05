@@ -115,6 +115,14 @@ export function EditorPane() {
     });
   };
 
+  useEffect(() => {
+    // Force toolbar state to match the active note immediately when switching.
+    // A keyed CodeMirror remount will reset history; until remount completes, disable actions.
+    viewRef.current = null;
+    setCanUndo(false);
+    setCanRedo(false);
+  }, [file?.id]);
+
   const dispatchEditorContent = (nextText: string, addToHistory: boolean, isolate = false) => {
     const view = viewRef.current;
     if (!view) return false;
@@ -946,6 +954,7 @@ export function EditorPane() {
             aria-hidden={editorTab === 'preview'}
           >
             <CodeMirror
+              key={file.id}
               value={editorValue}
               className="editor-scroll min-h-0 flex-1"
               height="100%"
