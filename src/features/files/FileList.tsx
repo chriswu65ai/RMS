@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { getFileTitleIndicators } from './unsavedIndicators';
 import { createFile, deleteFile, listAttachments, updateFile } from '../../lib/dataApi';
-import { useResearchStore } from '../../hooks/useResearchStore';
+import { toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 
@@ -11,7 +11,7 @@ const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
-  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, noteTypes, unsavedFileIds } = useResearchStore();
+  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, unsavedFileIds } = useResearchStore();
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
@@ -149,9 +149,9 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               const frontmatter: FrontmatterModel = {
                 title: identity ? `${identity.ticker} ${identity.type}` : baseName,
                 ticker: identity?.ticker ?? '',
-                type: identity?.type ?? (noteTypes[0] ?? ''),
-                date: identity?.date ?? '',
+                date: identity?.date ?? toLocalDateInputValue(),
                 recommendation: '',
+                ...(identity?.type ? { type: identity.type } : {}),
               };
               const content = composeMarkdown(frontmatter, '');
               const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
