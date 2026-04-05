@@ -157,14 +157,16 @@ export async function deletePreferredSource(id: string): Promise<void> {
   if (!response.ok) throw new Error(await asErrorMessage(response));
 }
 
-export async function listModels(provider: AgentProvider): Promise<{
+export async function listModels(provider: AgentProvider, runtimeBaseUrl?: string): Promise<{
   models: ModelListItem[];
   selected_model: string;
   catalog_status: 'live' | 'unsupported' | 'failed';
   selection_source: 'live_catalog' | 'provider_fallback';
   reason_code: ModelCatalogReasonCode;
 }> {
-  const response = await fetch(`/api/agent/models?provider=${provider}`);
+  const params = new URLSearchParams({ provider });
+  if (runtimeBaseUrl && provider === 'ollama') params.set('runtime_base_url', runtimeBaseUrl);
+  const response = await fetch(`/api/agent/models?${params.toString()}`);
   if (!response.ok) throw new Error(await asErrorMessage(response));
   return response.json() as Promise<{
     models: ModelListItem[];

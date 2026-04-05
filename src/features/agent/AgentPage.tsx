@@ -141,7 +141,7 @@ export function AgentPage() {
   const refreshModels = async (nextProvider: AgentProvider, applySelection = true, runtimeBaseUrl = normalizeLocalBaseUrl(localBaseUrl)) => {
     setModelLoadingByProvider((current) => ({ ...current, [nextProvider]: true }));
     try {
-      const response = await modelCatalogService.listModels(nextProvider);
+      const response = await modelCatalogService.listModels(nextProvider, nextProvider === 'ollama' ? runtimeBaseUrl : undefined);
       let nextModels = response.models;
       let nextSelectedModel = response.selectedModel;
       let nextReasonCode = response.reasonCode;

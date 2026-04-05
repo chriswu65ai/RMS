@@ -368,6 +368,41 @@ test('ollama model list endpoint mirrors installed list and selected model', asy
   }
 });
 
+test('ollama model refresh maps runtime_base_url override and strips trailing slash', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.1:8b',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.1:8b',
+        B: 1,
+      },
+    },
+  });
+
+  const originalListModels = providerRegistry.ollama.listModels;
+  let seenBaseUrl = '';
+  providerRegistry.ollama.listModels = async (_apiKey, options) => {
+    seenBaseUrl = options.baseUrl ?? '';
+    return {
+      models: [{ modelId: 'llama3.1:8b', displayName: 'Llama 3.1 8B', B: 1 }],
+      selected_model: 'llama3.1:8b',
+      selection_source: 'live_catalog',
+      catalog_status: 'live',
+      reason_code: 'ok',
+    };
+  };
+
+  try {
+    const response = await callRoute('GET', '/api/agent/models?provider=ollama&runtime_base_url=http%3A%2F%2F127.0.0.1%3A11500%2F');
+    assert.equal(response.status, 200);
+    assert.equal(seenBaseUrl, 'http://127.0.0.1:11500');
+  } finally {
+    providerRegistry.ollama.listModels = originalListModels;
+  }
+});
+
 
 test('agent settings web_search defaults and round-trip persistence', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {
