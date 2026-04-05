@@ -281,6 +281,15 @@ export function EditorPane() {
       annotations: [Transaction.addToHistory.of(addToHistory), ...(isolate ? [isolateHistory.of('full')] : [])],
       scrollIntoView: true,
     });
+    if (showMetadata) {
+      const nextParsed = splitFrontmatter(nextText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+      setFrontmatter(nextParsed.frontmatter);
+      setBody(nextParsed.body);
+      updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'manual');
+    } else {
+      setBody(nextText);
+      updateDraftCache(nextText, frontmatter, 'manual');
+    }
     updateHistoryAvailabilityForFile(targetFileId, view);
     return true;
   };
