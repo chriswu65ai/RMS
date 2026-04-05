@@ -13,7 +13,7 @@ test('citation mode ON normalizes variants, remaps by appearance, validates indi
   });
 
   assert.match(result.normalizedText, /\[1\]/);
-  assert.match(result.normalizedText, /\[2\]\[lack citation\]/);
+  assert.match(result.normalizedText, /\[lack citation\]/);
   assert.match(result.outputText, /Sources/);
   assert.match(result.outputText, /\[2\] \[Beta\]\(https:\/\/example.com\/b\)/);
 });
@@ -46,4 +46,40 @@ test('citation mode OFF strips rendered source sections and emits no inline sour
   assert.equal(result.outputText, 'Body text');
   assert.doesNotMatch(result.outputText, /Sources/i);
   assert.deepEqual(result.citationIndices, []);
+});
+
+test('citation mode OFF conditionally rewrites table citation columns and inline markers', async () => {
+  const result = await processResponseCitations({
+    outputText: [
+      'Findings [1] show improved latency [2].',
+      '',
+      '| Claim | Evidence | References |',
+      '| --- | --- | --- |',
+      '| Faster startup | Benchmarks | [1][2] |',
+      '| Better throughput | Load test | [3] |',
+      '',
+      'References',
+      '[1] Alpha',
+      '[2] Beta',
+      '[3] Gamma',
+    ].join('\n'),
+    sourceCitationEnabled: false,
+    sources: [],
+  });
+
+  assert.doesNotMatch(result.outputText, /\[\d+\]/);
+  assert.doesNotMatch(result.outputText, /References/i);
+  assert.match(result.outputText, /Faster startup/);
+  assert.doesNotMatch(result.outputText, /Benchmarks \|\s*\[1\]/);
+});
+
+test('citation mode OFF skips rewrite when detector does not fire', async () => {
+  const input = 'Use array index [0] for the first item and [1] for the second item.';
+  const result = await processResponseCitations({
+    outputText: input,
+    sourceCitationEnabled: false,
+    sources: [],
+  });
+
+  assert.equal(result.outputText, input);
 });

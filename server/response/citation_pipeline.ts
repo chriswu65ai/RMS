@@ -28,6 +28,7 @@ const SUPERSCRIPT_DIGIT_MAP: Record<string, string> = {
 };
 
 const SUPERSCRIPT_DIGITS = Object.keys(SUPERSCRIPT_DIGIT_MAP).join('');
+const CITATION_COLUMN_HEADER_PATTERN = /\b(?:citation|citations|source|sources|reference|references|ref|refs)\b/i;
 
 const stripRenderedCitationSections = (text: string): string => {
   const normalized = text.replace(/\r\n/g, '\n');
@@ -131,6 +132,133 @@ const buildSourceAppendix = (sources: SearchResult[], referencedOriginalIndices:
   return `\n\nSources\n${lines.join('\n')}`;
 };
 
+const countCitationArtifacts = (text: string): number => {
+  const markerPatterns = [
+    /\[\d+\]/g,
+    /【\s*\d+\s*】/g,
+    /［\s*\d+\s*］/g,
+    new RegExp(`[${SUPERSCRIPT_DIGITS}]`, 'g'),
+    /\b(?:source|sources|reference|references|ref|refs)\s*#?\s*\d+\b/gi,
+  ];
+  return markerPatterns.reduce((count, pattern) => count + (text.match(pattern)?.length ?? 0), 0);
+};
+
+const hasCitationTableArtifacts = (text: string): boolean => {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const header = lines[i]?.trim() ?? '';
+    const separator = lines[i + 1]?.trim() ?? '';
+    if (!header.startsWith('|') || !separator.startsWith('|')) continue;
+    if (!/\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?/.test(separator)) continue;
+    if (CITATION_COLUMN_HEADER_PATTERN.test(header)) return true;
+  }
+  return false;
+};
+
+const lightweightCleanupOff = (text: string): string => stripRenderedCitationSections(text);
+
+const shouldRewriteCitationArtifacts = (originalText: string, cleanedText: string): boolean => {
+  const hasSourceSectionHeader = /(?:^|\n)\s*(?:#{1,6}\s*)?(?:Sources|References)\s*:?\s*(?:\n|$)/i.test(originalText);
+  const hasTableRefColumns = hasCitationTableArtifacts(originalText) || hasCitationTableArtifacts(cleanedText);
+  const markerCount = countCitationArtifacts(cleanedText);
+  const wordCount = cleanedText.trim().split(/\s+/).filter(Boolean).length;
+  const hasHighMarkerDensity = markerCount >= 4 && markerCount / Math.max(1, wordCount) >= 0.08;
+  const hasDanglingArtifacts =
+    /(?:^|\n)\s*(?:\[(?:\d+)\]\s*){1,}\s*$/m.test(cleanedText)
+    || /(?:^|\n)\s*.+?(?:\[\d+\]\s*){2,}$/m.test(cleanedText)
+    || /(?:^|\n)\s*[-*]?\s*(?:source|sources|reference|references)\s*[:\-]/i.test(cleanedText);
+
+  return hasSourceSectionHeader || hasTableRefColumns || hasHighMarkerDensity || hasDanglingArtifacts;
+};
+
+const removeCitationColumnsFromMarkdownTables = (text: string): string => {
+  const lines = text.split('\n');
+  const output: string[] = [];
+
+  const parseRow = (row: string): string[] => row
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+
+  let i = 0;
+  while (i < lines.length) {
+    const header = lines[i] ?? '';
+    const separator = lines[i + 1] ?? '';
+    const looksLikeTable =
+      header.trim().startsWith('|')
+      && separator.trim().startsWith('|')
+      && /\|\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?/.test(separator.trim());
+
+    if (!looksLikeTable) {
+      output.push(header);
+      i += 1;
+      continue;
+    }
+
+    const blockStart = i;
+    let blockEnd = i + 2;
+    while (blockEnd < lines.length && lines[blockEnd].trim().startsWith('|')) {
+      blockEnd += 1;
+    }
+
+    const headerCells = parseRow(lines[blockStart]);
+    const keepMask = headerCells.map((cell) => !CITATION_COLUMN_HEADER_PATTERN.test(cell));
+    const hasAnyRemoved = keepMask.some((keep) => !keep);
+
+    if (!hasAnyRemoved) {
+      output.push(...lines.slice(blockStart, blockEnd));
+      i = blockEnd;
+      continue;
+    }
+
+    const rebuildRow = (row: string): string | null => {
+      const cells = parseRow(row);
+      const kept = cells.filter((_cell, idx) => keepMask[idx]);
+      if (kept.length === 0) return null;
+      return `| ${kept.join(' | ')} |`;
+    };
+
+    const rebuiltHeader = rebuildRow(lines[blockStart]);
+    const rebuiltSeparator = rebuildRow(lines[blockStart + 1])?.replace(/[^|]/g, '-') ?? null;
+    if (rebuiltHeader && rebuiltSeparator) {
+      output.push(rebuiltHeader);
+      output.push(rebuiltSeparator);
+      for (let rowIndex = blockStart + 2; rowIndex < blockEnd; rowIndex += 1) {
+        const rebuilt = rebuildRow(lines[rowIndex]);
+        if (rebuilt) output.push(rebuilt);
+      }
+    }
+
+    i = blockEnd;
+  }
+
+  return output.join('\n');
+};
+
+const rewriteCitationArtifacts = (text: string): string => {
+  let rewritten = removeCitationColumnsFromMarkdownTables(text);
+  rewritten = stripRenderedCitationSections(rewritten);
+  rewritten = rewritten
+    .replace(/\s*(?:\[(\d+)\]|【\s*\d+\s*】|［\s*\d+\s*］|\((\d+)\))(?=[\s.,;:!?)]|$)/g, '')
+    .replace(new RegExp(`[${SUPERSCRIPT_DIGITS}]`, 'g'), '')
+    .replace(/\b(?:source|sources|reference|references|ref|refs)\s*#?\s*\d+\b/gi, '')
+    .replace(/(?:^|\n)\s*(?:\[(?:\d+)\]\s*)+\s*(?=\n|$)/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  // Final safety scrub for OFF mode guarantees.
+  rewritten = rewritten
+    .replace(/\[(\d+)\]/g, '')
+    .replace(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:Sources|References)\s*:?\s*(?:\n|$)/gi, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return rewritten;
+};
+
 const processCitationModeOn = async (input: CitationProcessInput): Promise<CitationProcessOutput> => {
   const processOnce = (raw: string) => {
     const stripped = stripRenderedCitationSections(raw);
@@ -177,10 +305,14 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
 };
 
 const processCitationModeOff = (input: CitationProcessInput): CitationProcessOutput => {
-  const stripped = stripRenderedCitationSections(input.outputText);
+  const lightweight = lightweightCleanupOff(input.outputText);
+  const rewritten = shouldRewriteCitationArtifacts(input.outputText, lightweight)
+    ? rewriteCitationArtifacts(lightweight)
+    : lightweight;
+
   return {
-    outputText: stripped,
-    normalizedText: stripped,
+    outputText: rewritten,
+    normalizedText: rewritten,
     citationIndices: [],
     retryUsed: false,
   };
