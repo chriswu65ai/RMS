@@ -286,3 +286,54 @@ test('chat settings API uses dedicated endpoints for load/save/reload', async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test('generateText ignores malformed NDJSON frames and continues streaming', async () => {
+  const originalFetch = globalThis.fetch;
+  const seenProgress: string[] = [];
+
+  globalThis.fetch = async () => makeChunkedNdjsonResponse([
+    '{"type":"delta","deltaText":"hello"}\n',
+    'not-json\n',
+    '{"type":"delta","deltaText":" world"}\n{"type":"done","outputText":"hello world"}\n',
+  ]);
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-resilient',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onProgress: (next) => seenProgress.push(next),
+    });
+
+    assert.equal(result.outputText, 'hello world');
+    assert.deepEqual(seenProgress, ['hello', 'hello world', 'hello world']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('generateText remains backward compatible with legacy JSON response mode', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => new Response(JSON.stringify({ outputText: 'legacy response' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'legacy-note',
+      inputText: 'legacy mode',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+    });
+    assert.equal(result.outputText, 'legacy response');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

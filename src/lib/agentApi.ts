@@ -320,7 +320,12 @@ export async function generateText(params: {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      const payload = JSON.parse(trimmed) as StreamPayload;
+      let payload: StreamPayload;
+      try {
+        payload = JSON.parse(trimmed) as StreamPayload;
+      } catch {
+        continue;
+      }
       if (payload.type === 'delta') {
         outputText += payload.deltaText ?? '';
         params.onProgress?.(outputText);
