@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { FALLBACK_MODELS, providerRegistry, selectBestModel, supportsToolCalling, type AgentProvider } from './agentProviders';
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
+import { processResponseCitations } from './response/citation_pipeline';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -487,15 +488,6 @@ const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((sour
   provider: source.provider,
   ...(source.published_at ? { published_at: source.published_at } : {}),
 }));
-
-const buildWebSearchSourcesAppendix = (sources: SearchResult[]): string => {
-  if (sources.length === 0) return '';
-  const sourceLines = sources.map((source, index) => {
-    const title = source.title.trim() || source.url;
-    return `${index + 1}. [${title}](${source.url})`;
-  });
-  return ['---', 'Sources', ...sourceLines, '---'].join('\n');
-};
 
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
@@ -993,15 +985,31 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }, apiKey ?? '', controller.signal, {
           onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
         });
-        if (normalizedWebSearchConfig.enabled && normalizedWebSearchConfig.source_citation && normalizedSources.length > 0) {
-          const hasCitation = /\[\d+\]/.test(result.outputText);
-          if (!hasCitation) {
-            throw new Error('Citation mode requires bracket citations like [1] that reference returned sources.');
-          }
-        }
-        const outputText = normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
-          ? `${result.outputText}\n\n${buildWebSearchSourcesAppendix(normalizedSources)}`
-          : result.outputText;
+        const citationResult = await processResponseCitations({
+          outputText: result.outputText,
+          sources: normalizedSources,
+          sourceCitationEnabled: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0,
+          retryCanonicalize: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
+            ? async () => {
+              const retryPass = await providerRegistry[provider].generate({
+                model: resolvedModel,
+                inputText: [
+                  preparedInputText,
+                  '',
+                  'Retry pass: use canonical citation format [n].',
+                  'Every [n] must map to an existing source index from tool_outputs.',
+                  'Do not fabricate citations.',
+                ].join('\n'),
+                generationParams: {
+                  ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
+                  ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
+                },
+              }, apiKey ?? '', controller.signal);
+              return retryPass.outputText;
+            }
+            : undefined,
+        });
+        const outputText = citationResult.outputText;
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
