@@ -123,6 +123,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return response.json() as Promise<ChatMessagesResponse>;
   };
 
+  const toBeforeCursor = (createdAt: number): string | null => {
+    if (!Number.isFinite(createdAt) || createdAt <= 0) return null;
+    return new Date(createdAt).toISOString();
+  };
+
   const store: ChatStore = {
     messages: [],
     running: false,
@@ -152,8 +157,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
     loadOlderMessages: async () => {
       const oldest = get().messages[0];
       if (!oldest) return;
+      const before = toBeforeCursor(oldest.createdAt);
+      if (!before) return;
       try {
-        const payload = await loadMessagesPage(oldest.id);
+        const payload = await loadMessagesPage(before);
         const mapped = (payload.messages ?? []).map(mapApiMessage).filter((entry): entry is ChatMessage => Boolean(entry));
         const knownIds = new Set(get().messages.map((message) => message.id));
         const deduped = mapped.filter((message) => !knownIds.has(message.id));
