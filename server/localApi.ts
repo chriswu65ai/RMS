@@ -1123,6 +1123,29 @@ const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((sour
   ...(source.published_at ? { published_at: source.published_at } : {}),
 }));
 
+const buildProviderGenerationParams = (
+  provider: AgentProvider,
+  payloadGenerationParams: unknown,
+  ollamaRuntime: OllamaRuntimeConfig,
+): { temperature?: number; maxTokens?: number; baseUrl?: string } => ({
+  ...(payloadGenerationParams as { temperature?: number; maxTokens?: number } | undefined),
+  ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
+});
+
+const invokeProviderGenerate = (
+  provider: AgentProvider,
+  request: {
+    model: string;
+    inputText: string;
+    generationParams: { temperature?: number; maxTokens?: number; baseUrl?: string };
+  },
+  apiKey: string,
+  signal: AbortSignal,
+  options?: {
+    onTextDelta?: (deltaText: string) => void;
+  },
+) => providerRegistry[provider].generate(request, apiKey, signal, options);
+
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
   const next = raw as Record<string, unknown>;
@@ -2115,13 +2138,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         if (normalizedSources.length > 0) {
           writeNdjson(res, { type: 'sources', sources: normalizedSources });
         }
-        const result = await providerRegistry[provider].generate({
+        const generationParams = buildProviderGenerationParams(provider, payload.generation_params, ollamaRuntime);
+        const result = await invokeProviderGenerate(provider, {
           model: resolvedModel,
           inputText: preparedInputText,
-          generationParams: {
-            ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
-            ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
-          },
+          generationParams,
         }, apiKey ?? '', controller.signal, {
           onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
         });
@@ -2131,7 +2152,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           sourceCitationEnabled: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0,
           retryCanonicalize: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
             ? async () => {
-              const retryPass = await providerRegistry[provider].generate({
+              const retryPass = await invokeProviderGenerate(provider, {
                 model: resolvedModel,
                 inputText: [
                   preparedInputText,
@@ -2140,10 +2161,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                   'Every [n] must map to an existing source index from tool_outputs.',
                   'Do not fabricate citations.',
                 ].join('\n'),
-                generationParams: {
-                  ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
-                  ...(provider === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
-                },
+                generationParams,
               }, apiKey ?? '', controller.signal);
               return retryPass.outputText;
             }

@@ -22,6 +22,55 @@ const makeChunkedNdjsonResponse = (chunks: string[]) => new Response(new Readabl
   headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
 });
 
+
+test('generateText keeps request payload contract and done-frame output semantics stable for Generate button', async () => {
+  const originalFetch = globalThis.fetch;
+  let seenUrl = '';
+  let seenMethod = '';
+  let seenBody: Record<string, unknown> | null = null;
+  const seenProgress: string[] = [];
+
+  globalThis.fetch = async (input, init) => {
+    seenUrl = String(input);
+    seenMethod = String(init?.method ?? 'GET');
+    seenBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+    return makeNdjsonResponse([
+      JSON.stringify({ type: 'delta', deltaText: 'Draft' }),
+      JSON.stringify({ type: 'done' }),
+    ]);
+  };
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-generate',
+      inputText: 'Summarize',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onProgress: (nextOutputText) => seenProgress.push(nextOutputText),
+    });
+
+    assert.equal(seenUrl, '/api/agent/generate');
+    assert.equal(seenMethod, 'POST');
+    assert.deepEqual(seenBody, {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      note_id: 'note-generate',
+      task_id: '',
+      attachment_ids: [],
+      input_text: 'Summarize',
+      trigger_source: 'manual',
+      save_mode: 'manual_only',
+      initiated_by: 'user',
+    });
+    assert.equal(result.outputText, 'Draft');
+    assert.deepEqual(seenProgress, ['Draft', 'Draft']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('generateText parses sources events and forwards them to callback', async () => {
   const originalFetch = globalThis.fetch;
   const seenSources: Array<{ title: string; url: string }> = [];
