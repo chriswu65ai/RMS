@@ -460,3 +460,81 @@ test('searxng and duckduckgo adapters apply prefer_list domain boost parity', as
     globalThis.fetch = originalFetch;
   }
 });
+
+test('duckduckgo only_list uses constrained upstream queries before domain safety filter', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  const genericHtml = `
+    <a class="result__a" href="https://general.org/top-1">Generic top result</a>
+    <a class="result__snippet">generic snippet</a>
+  `;
+  const targetedHtml = `
+    <a class="result__a" href="https://docs.example.com/relevant">Preferred source</a>
+    <a class="result__snippet">preferred snippet</a>
+  `;
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    const parsed = new URL(url);
+    const q = parsed.searchParams.get('q') ?? '';
+    if (q === 'earnings report') return new Response(genericHtml, { status: 200 });
+    if (q.includes('site%3Aexample.com')) return new Response(targetedHtml, { status: 200 });
+    if (q.includes('site:example.com')) return new Response(targetedHtml, { status: 200 });
+    return new Response(genericHtml, { status: 200 });
+  };
+
+  try {
+    const results = await searchProviderRegistry.duckduckgo.search('earnings report', {
+      policy: 'only_list',
+      domainList: ['example.com'],
+    });
+
+    assert.deepEqual(results.map((item) => item.url), ['https://docs.example.com/relevant']);
+    assert.equal(requestedUrls.length >= 2, true);
+    assert.equal(requestedUrls.some((url) => url.includes('site%3Aexample.com')), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('searxng only_list uses constrained upstream queries before domain safety filter', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requestedUrls.push(url);
+    const parsed = new URL(url);
+    const q = parsed.searchParams.get('q') ?? '';
+    if (q === 'capital expenditure') {
+      return new Response(JSON.stringify({
+        results: [
+          { title: 'Generic top result', url: 'https://general.org/top-1', content: 'generic snippet' },
+        ],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (q.includes('site:example.com')) {
+      return new Response(JSON.stringify({
+        results: [
+          { title: 'Preferred source', url: 'https://research.example.com/relevant', content: 'preferred snippet' },
+        ],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const results = await searchProviderRegistry.searxng.search('capital expenditure', {
+      policy: 'only_list',
+      domainList: ['example.com'],
+      providerConfig: { searxng: { use_json_api: true } },
+    });
+
+    assert.deepEqual(results.map((item) => item.url), ['https://research.example.com/relevant']);
+    assert.equal(requestedUrls.length >= 2, true);
+    assert.equal(requestedUrls.some((url) => url.includes('site%3Aexample.com')), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

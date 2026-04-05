@@ -122,6 +122,26 @@ const applyDomainBoosts = (results: SearchResult[], boostMap: Record<string, num
 
 const enforceResultCap = (results: SearchResult[], resultCap?: number): SearchResult[] => results.slice(0, sanitizeResultCap(resultCap));
 
+const normalizeDomainList = (domainList: string[] = []): string[] => {
+  const unique = new Set(
+    domainList
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return Array.from(unique);
+};
+
+const buildOnlyListQueries = (query: string, domainList: string[] = []): string[] => {
+  const normalizedDomains = normalizeDomainList(domainList);
+  if (normalizedDomains.length === 0) return [query];
+
+  const constrainedGroup = normalizedDomains.map((domain) => `site:${domain}`).join(' OR ');
+  const groupedConstraintQuery = `${query} (${constrainedGroup})`;
+  const perDomainQueries = normalizedDomains.map((domain) => `${query} site:${domain}`);
+
+  return [groupedConstraintQuery, ...perDomainQueries];
+};
+
 
 
 const SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
@@ -284,28 +304,36 @@ class DuckDuckGoSearchAdapter implements SearchProviderAdapter {
     void options.safeSearch;
     void options.recency;
 
-    const response = await fetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(trimmedQuery)}`, {
-      method: 'GET',
-      signal,
-      headers: {
-        Accept: 'text/html',
-      },
-    });
-
-    if (!response.ok) throw new Error('DuckDuckGo search failed.');
-    const html = await response.text();
-
-    const matches = Array.from(html.matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g));
-
-    const rawResults: SearchResult[] = matches.map((match, index) => ({
-      title: decodeHtml(match[2].replace(/<[^>]+>/g, '').trim()),
-      url: normalizeDuckDuckGoResultUrl(match[1]),
-      snippet: decodeHtml(match[3].replace(/<[^>]+>/g, '').trim()),
-      provider: 'duckduckgo',
-      score: Math.max(0, 1 - (index * 0.01)),
-    }));
-
     const policy = options.policy ?? 'open_web';
+    const upstreamQueries = policy === 'only_list'
+      ? buildOnlyListQueries(trimmedQuery, options.domainList)
+      : [trimmedQuery];
+
+    const rawResults: SearchResult[] = [];
+    for (const upstreamQuery of upstreamQueries) {
+      const response = await fetch(`https://duckduckgo.com/html/?q=${encodeURIComponent(upstreamQuery)}`, {
+        method: 'GET',
+        signal,
+        headers: {
+          Accept: 'text/html',
+        },
+      });
+
+      if (!response.ok) throw new Error('DuckDuckGo search failed.');
+      const html = await response.text();
+
+      const matches = Array.from(html.matchAll(/<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g));
+
+      const parsedResults = matches.map((match, index) => ({
+        title: decodeHtml(match[2].replace(/<[^>]+>/g, '').trim()),
+        url: normalizeDuckDuckGoResultUrl(match[1]),
+        snippet: decodeHtml(match[3].replace(/<[^>]+>/g, '').trim()),
+        provider: 'duckduckgo' as const,
+        score: Math.max(0, 1 - (index * 0.01)),
+      }));
+      rawResults.push(...parsedResults);
+    }
+
     const deduped = dedupeByCanonicalUrl(rawResults);
     const domainFiltered = applyDomainPolicy(deduped, policy, options.domainList);
     const boosted = applyDomainBoosts(
@@ -321,55 +349,63 @@ class SearxngSearchAdapter implements SearchProviderAdapter {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) return [];
 
+    const policy = options.policy ?? 'open_web';
+    const upstreamQueries = policy === 'only_list'
+      ? buildOnlyListQueries(trimmedQuery, options.domainList)
+      : [trimmedQuery];
+
     const baseUrl = normalizeSearxngBaseUrl(options.providerConfig?.searxng?.base_url);
     const useJsonApi = options.providerConfig?.searxng?.use_json_api ?? SEARXNG_USE_JSON_API_DEFAULT;
-    const requestUrl = new URL('/search', `${baseUrl}/`);
-    requestUrl.searchParams.set('q', trimmedQuery);
-    requestUrl.searchParams.set('safesearch', options.safeSearch === false ? '0' : '1');
-    if (useJsonApi) requestUrl.searchParams.set('format', 'json');
-    const timeRange = mapRecencyToSearxngTimeRange(options.recency);
-    if (timeRange) requestUrl.searchParams.set('time_range', timeRange);
-
-    const response = await fetch(requestUrl, {
-      method: 'GET',
-      signal,
-      headers: {
-        Accept: useJsonApi ? 'application/json' : 'text/html',
-      },
-    });
-
-    if (!response.ok) throw new Error('SearXNG search failed.');
-
     let rawResults: SearchResult[] = [];
-    if (useJsonApi) {
-      const payload = await response.json() as {
-        results?: Array<{
-          title?: string;
-          url?: string;
-          content?: string;
-          publishedDate?: string;
-        }>;
-      };
-      rawResults = (payload.results ?? []).map((result, index) => ({
-        title: (result.title ?? '').trim() || (result.url ?? '').trim(),
-        url: (result.url ?? '').trim(),
-        snippet: (result.content ?? '').trim(),
-        provider: 'searxng' as const,
-        score: Math.max(0, 1 - (index * 0.01)),
-        ...(result.publishedDate ? { published_at: result.publishedDate } : {}),
-      })).filter((result) => Boolean(result.url));
-    } else {
-      const html = await response.text();
-      const candidateBlocks = extractSearxngHtmlResultBlocks(html);
-      rawResults = candidateBlocks
-        .map((block, index) => parseSearxngHtmlBlock(block, index))
-        .filter((result): result is SearchResult => Boolean(result));
-      if (rawResults.length === 0) {
-        throw new Error('SearXNG HTML extraction empty despite HTTP 200 (template mismatch: expected result containers or heading+snippet pairs).');
+    for (const upstreamQuery of upstreamQueries) {
+      const requestUrl = new URL('/search', `${baseUrl}/`);
+      requestUrl.searchParams.set('q', upstreamQuery);
+      requestUrl.searchParams.set('safesearch', options.safeSearch === false ? '0' : '1');
+      if (useJsonApi) requestUrl.searchParams.set('format', 'json');
+      const timeRange = mapRecencyToSearxngTimeRange(options.recency);
+      if (timeRange) requestUrl.searchParams.set('time_range', timeRange);
+
+      const response = await fetch(requestUrl, {
+        method: 'GET',
+        signal,
+        headers: {
+          Accept: useJsonApi ? 'application/json' : 'text/html',
+        },
+      });
+
+      if (!response.ok) throw new Error('SearXNG search failed.');
+
+      if (useJsonApi) {
+        const payload = await response.json() as {
+          results?: Array<{
+            title?: string;
+            url?: string;
+            content?: string;
+            publishedDate?: string;
+          }>;
+        };
+        const parsedResults = (payload.results ?? []).map((result, index) => ({
+          title: (result.title ?? '').trim() || (result.url ?? '').trim(),
+          url: (result.url ?? '').trim(),
+          snippet: (result.content ?? '').trim(),
+          provider: 'searxng' as const,
+          score: Math.max(0, 1 - (index * 0.01)),
+          ...(result.publishedDate ? { published_at: result.publishedDate } : {}),
+        })).filter((result) => Boolean(result.url));
+        rawResults.push(...parsedResults);
+      } else {
+        const html = await response.text();
+        const candidateBlocks = extractSearxngHtmlResultBlocks(html);
+        const parsedResults = candidateBlocks
+          .map((block, index) => parseSearxngHtmlBlock(block, index))
+          .filter((result): result is SearchResult => Boolean(result));
+        if (parsedResults.length === 0) {
+          throw new Error('SearXNG HTML extraction empty despite HTTP 200 (template mismatch: expected result containers or heading+snippet pairs).');
+        }
+        rawResults.push(...parsedResults);
       }
     }
 
-    const policy = options.policy ?? 'open_web';
     const deduped = dedupeByCanonicalUrl(rawResults);
     const domainFiltered = applyDomainPolicy(deduped, policy, options.domainList);
     const boosted = applyDomainBoosts(
