@@ -1778,3 +1778,94 @@ test('deleting a non-existent research task returns 404', async () => {
   const payload = JSON.parse(deleteResponse.body) as { error?: { message?: string } };
   assert.equal(payload.error?.message, 'Task not found.');
 });
+
+test('chat session endpoints return session and support settings/update flow', async () => {
+  const sessionResponse = await callRoute('GET', '/api/chat/session/current');
+  assert.equal(sessionResponse.status, 200);
+  const session = JSON.parse(sessionResponse.body) as { id: string; is_primary: number; user_id: string };
+  assert.equal(typeof session.id, 'string');
+  assert.equal(session.is_primary, 1);
+  assert.equal(session.user_id, 'local-user');
+
+  const settingsBefore = await callRoute('GET', '/api/chat/settings');
+  assert.equal(settingsBefore.status, 200);
+  const parsedBefore = JSON.parse(settingsBefore.body) as { policy?: Record<string, unknown> };
+  assert.equal(typeof parsedBefore.policy, 'object');
+
+  const updateResponse = await callRoute('PUT', '/api/chat/settings', {
+    policy: { max_context_messages: 12 },
+    profile: { persona: 'concise' },
+  });
+  assert.equal(updateResponse.status, 200);
+
+  const settingsAfter = await callRoute('GET', '/api/chat/settings');
+  assert.equal(settingsAfter.status, 200);
+  const parsedAfter = JSON.parse(settingsAfter.body) as {
+    policy?: { max_context_messages?: number };
+    profile?: { persona?: string };
+  };
+  assert.equal(parsedAfter.policy?.max_context_messages, 12);
+  assert.equal(parsedAfter.profile?.persona, 'concise');
+
+  const reloadResponse = await callRoute('POST', '/api/chat/profile/reload');
+  assert.equal(reloadResponse.status, 200);
+  const reloadPayload = JSON.parse(reloadResponse.body) as { profile?: { reloaded_at?: string; persona?: string } };
+  assert.equal(reloadPayload.profile?.persona, 'concise');
+  assert.equal(typeof reloadPayload.profile?.reloaded_at, 'string');
+});
+
+test('chat message streaming persists user+assistant turn and supports exports/history', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generate = async (_request, _apiKey, _signal, callbacks) => {
+    callbacks?.onTextDelta?.('hello ');
+    callbacks?.onTextDelta?.('world');
+    return { outputText: 'hello world', latencyMs: 1 };
+  };
+
+  try {
+    const postResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'ping',
+    });
+    assert.equal(postResponse.status, 200);
+    const frames = postResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; deltaText?: string });
+    assert.equal(frames[0]?.type, 'status');
+    assert.equal(frames.some((frame) => frame.type === 'delta' && frame.deltaText === 'hello '), true);
+    assert.equal(frames.some((frame) => frame.type === 'done'), true);
+
+    const listResponse = await callRoute('GET', '/api/chat/session/current/messages');
+    assert.equal(listResponse.status, 200);
+    const listPayload = JSON.parse(listResponse.body) as { messages: Array<{ role: string; content: string }> };
+    const tail = listPayload.messages.slice(-2);
+    assert.equal(tail[0]?.role, 'user');
+    assert.equal(tail[0]?.content, 'ping');
+    assert.equal(tail[1]?.role, 'assistant');
+    assert.equal(tail[1]?.content, 'hello world');
+
+    const exportJsonResponse = await callRoute('GET', '/api/chat/session/current/export?format=json');
+    assert.equal(exportJsonResponse.status, 200);
+    const exportJsonPayload = JSON.parse(exportJsonResponse.body) as { messages?: Array<{ role: string }> };
+    assert.equal((exportJsonPayload.messages?.length ?? 0) >= 2, true);
+
+    const exportMarkdownResponse = await callRoute('GET', '/api/chat/session/current/export?format=markdown');
+    assert.equal(exportMarkdownResponse.status, 200);
+    assert.match(exportMarkdownResponse.body, /Chat Transcript:/);
+
+    const historyDeleteResponse = await callRoute('DELETE', '/api/chat/session/current/history?range=all');
+    assert.equal(historyDeleteResponse.status, 200);
+    const historyDeletePayload = JSON.parse(historyDeleteResponse.body) as { deletedMessages?: number };
+    assert.equal((historyDeletePayload.deletedMessages ?? 0) >= 2, true);
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
