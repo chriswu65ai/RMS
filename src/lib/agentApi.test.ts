@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateText, listModels } from './agentApi.js';
+import { generateText, getChatSettings, listModels, reloadChatProfile, saveChatSettings } from './agentApi.js';
 
 const encoder = new TextEncoder();
 
@@ -223,6 +223,65 @@ test('listModels forwards runtime base URL for ollama refresh without mutating s
   try {
     await listModels('ollama', 'http://127.0.0.1:11434');
     assert.equal(seenUrl, '/api/agent/models?provider=ollama&runtime_base_url=http%3A%2F%2F127.0.0.1%3A11434');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('chat settings API uses dedicated endpoints for load/save/reload', async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    const method = String(init?.method ?? 'GET');
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+    seen.push({ url, method, body });
+
+    if (url === '/api/chat/settings' && method === 'GET') {
+      return new Response(JSON.stringify({
+        id: 'chat-settings-1',
+        user_id: 'local-user',
+        policy: { action_mode: 'assist', ask_when_missing: true },
+        profile: null,
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    return new Response(JSON.stringify({ error: null, profile: { reloaded_at: '2026-01-01T00:00:01.000Z' } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    const loaded = await getChatSettings();
+    assert.equal(loaded.policy.action_mode, 'assist');
+
+    await saveChatSettings({
+      policy: {
+        action_mode: 'act',
+        ask_when_missing: false,
+        profile_source: 'file',
+        profile_file_path: '/tmp/profile.md',
+      },
+    });
+    await reloadChatProfile();
+
+    assert.deepEqual(seen.map((call) => ({ url: call.url, method: call.method })), [
+      { url: '/api/chat/settings', method: 'GET' },
+      { url: '/api/chat/settings', method: 'PUT' },
+      { url: '/api/chat/profile/reload', method: 'POST' },
+    ]);
+    assert.deepEqual(seen[1]?.body, {
+      policy: {
+        action_mode: 'act',
+        ask_when_missing: false,
+        profile_source: 'file',
+        profile_file_path: '/tmp/profile.md',
+      },
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

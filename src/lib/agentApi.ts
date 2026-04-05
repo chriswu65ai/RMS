@@ -12,6 +12,25 @@ import type {
 } from '../features/agent/types';
 
 type ApiError = { error?: { message?: string } | null };
+export type ChatProfileSource = 'built_in' | 'file' | 'merged';
+export type ChatActionMode = 'assist' | 'act';
+export type ChatSettingsPolicy = {
+  action_mode?: ChatActionMode;
+  ask_when_missing?: boolean;
+  announce_actions?: boolean;
+  detailed_tool_steps?: boolean;
+  profile_source?: ChatProfileSource;
+  profile_file_path?: string;
+  reload_profile_every_message?: boolean;
+} & Record<string, unknown>;
+export type ChatSettings = {
+  id: string;
+  user_id: string;
+  policy: ChatSettingsPolicy;
+  profile: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+};
 export type StreamSource = {
   title: string;
   url: string;
@@ -139,6 +158,27 @@ export async function saveAgentSettings(settings: AgentSettings): Promise<void> 
     body: JSON.stringify(settings),
   });
   if (!response.ok) throw new Error(await asErrorMessage(response));
+}
+
+export async function getChatSettings(): Promise<ChatSettings> {
+  const response = await fetch('/api/chat/settings');
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<ChatSettings>;
+}
+
+export async function saveChatSettings(settings: { policy?: ChatSettingsPolicy; profile?: Record<string, unknown> | null }): Promise<void> {
+  const response = await fetch('/api/chat/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+}
+
+export async function reloadChatProfile(): Promise<{ profile: Record<string, unknown> }> {
+  const response = await fetch('/api/chat/profile/reload', { method: 'POST' });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<{ profile: Record<string, unknown> }>;
 }
 
 export async function getCredentialStatus(provider: AgentProvider): Promise<{ has_key: boolean }> {
