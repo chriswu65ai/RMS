@@ -2,14 +2,19 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   clearActivityLog,
   deletePreferredSource,
+  getChatSettings,
   getAgentSettings,
   getCredentialStatus,
   listActivityLog,
   loadPreferredSources,
+  reloadChatProfile,
   saveAgentSettings,
+  saveChatSettings,
   saveCredential,
   savePreferredSource,
   savePreferredSourceById,
+  type ChatActionMode,
+  type ChatProfileSource,
 } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
@@ -62,6 +67,15 @@ const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: s
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const CHECKBOX_WITH_LABEL_CLASS = 'inline-flex items-center gap-2 text-sm text-slate-700';
 const CHECKBOX_INPUT_CLASS = 'h-4 w-4';
+const CHAT_PROFILE_SOURCE_OPTIONS: Array<{ value: ChatProfileSource; label: string }> = [
+  { value: 'built_in', label: 'Built-in' },
+  { value: 'file', label: 'File' },
+  { value: 'merged', label: 'Merged' },
+];
+const CHAT_ACTION_MODE_OPTIONS: Array<{ value: ChatActionMode; label: string; helper: string }> = [
+  { value: 'assist', label: 'Assist (recommend only)', helper: 'Draft and explain actions without autonomously executing risky changes.' },
+  { value: 'act', label: 'Act (take action)', helper: 'Proceed with tool actions when enough context is available.' },
+];
 const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {
   1: 'Low',
   2: 'Medium-low',
@@ -153,6 +167,15 @@ export function AgentPage() {
   const [editingEnabled, setEditingEnabled] = useState(true);
   const [webSearchMaxResultsOverridden, setWebSearchMaxResultsOverridden] = useState(false);
   const [webSearchTimeoutOverridden, setWebSearchTimeoutOverridden] = useState(false);
+  const [chatActionMode, setChatActionMode] = useState<ChatActionMode>('assist');
+  const [chatAskWhenMissing, setChatAskWhenMissing] = useState(true);
+  const [chatAnnounceActions, setChatAnnounceActions] = useState(true);
+  const [chatShowDetailedToolSteps, setChatShowDetailedToolSteps] = useState(false);
+  const [chatProfileSource, setChatProfileSource] = useState<ChatProfileSource>('built_in');
+  const [chatProfileFilePath, setChatProfileFilePath] = useState('');
+  const [chatReloadProfileEveryMessage, setChatReloadProfileEveryMessage] = useState(false);
+  const [chatSettingsMessage, setChatSettingsMessage] = useState('');
+  const [chatSettingsValidationError, setChatSettingsValidationError] = useState('');
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
@@ -228,7 +251,7 @@ export function AgentPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [settings, events] = await Promise.all([getAgentSettings(), listActivityLog(12)]);
+        const [settings, events, chatSettings] = await Promise.all([getAgentSettings(), listActivityLog(12), getChatSettings()]);
         const sources = await loadPreferredSources();
         setProvider(settings.default_provider);
         const savedRuntime = getSavedLocalRuntime(settings);
@@ -258,6 +281,14 @@ export function AgentPage() {
         setWebSearchMaxResultsOverridden(loadedMaxResults !== recommendedPreset.maxResults);
         setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
         setPreferredSources(sources);
+        const chatPolicy = chatSettings.policy ?? {};
+        setChatActionMode(chatPolicy.action_mode === 'act' ? 'act' : 'assist');
+        setChatAskWhenMissing(chatPolicy.ask_when_missing ?? true);
+        setChatAnnounceActions(chatPolicy.announce_actions ?? true);
+        setChatShowDetailedToolSteps(chatPolicy.detailed_tool_steps ?? false);
+        setChatProfileSource(chatPolicy.profile_source === 'file' || chatPolicy.profile_source === 'merged' ? chatPolicy.profile_source : 'built_in');
+        setChatProfileFilePath(typeof chatPolicy.profile_file_path === 'string' ? chatPolicy.profile_file_path : '');
+        setChatReloadProfileEveryMessage(chatPolicy.reload_profile_every_message ?? false);
 
         const hasCachedModelsForProvider = (modelsByProvider[settings.default_provider] ?? []).length > 0;
         const shouldRefreshOnMount = !hasCachedModelsForProvider || !settings.default_model.trim()
@@ -278,6 +309,7 @@ export function AgentPage() {
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
   const canSaveLocalDefaults = localBaseUrl.trim().length > 0;
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0;
+  const chatProfilePathRequired = chatProfileSource === 'file' || chatProfileSource === 'merged';
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
     if (webSearchDomainPolicy === 'open_web') return 'Search across the entire web. Listed domains can still receive an importance boost.';
@@ -416,6 +448,152 @@ export function AgentPage() {
               </button>
               {defaultSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{defaultSaveMessage}</p> : null}
               {defaultAgentFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{defaultAgentFeedbackMessage}</p> : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Chat</h2>
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Action mode</span>
+                <select
+                  className="input"
+                  value={chatActionMode}
+                  onChange={(event) => {
+                    setChatActionMode(event.target.value as ChatActionMode);
+                    setChatSettingsMessage('');
+                    setChatSettingsValidationError('');
+                  }}
+                >
+                  {CHAT_ACTION_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <p className="text-xs text-slate-500">{CHAT_ACTION_MODE_OPTIONS.find((option) => option.value === chatActionMode)?.helper}</p>
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Profile source</span>
+                <select
+                  className="input"
+                  value={chatProfileSource}
+                  onChange={(event) => {
+                    setChatProfileSource(event.target.value as ChatProfileSource);
+                    setChatSettingsMessage('');
+                    setChatSettingsValidationError('');
+                  }}
+                >
+                  {CHAT_PROFILE_SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <p className="text-xs text-slate-500">Choose whether chat persona/profile comes from built-in defaults, a file, or merged behavior.</p>
+              </label>
+              <label className="space-y-1 text-sm md:col-span-2">
+                <span className="text-slate-600">Profile file path</span>
+                <input
+                  className="input"
+                  value={chatProfileFilePath}
+                  placeholder="/absolute/or/workspace/path/to/profile.md"
+                  onChange={(event) => {
+                    setChatProfileFilePath(event.target.value);
+                    setChatSettingsMessage('');
+                    setChatSettingsValidationError('');
+                  }}
+                />
+                <p className="text-xs text-slate-500">
+                  {chatProfilePathRequired ? 'Required when profile source is File or Merged.' : 'Optional for Built-in source.'}
+                </p>
+              </label>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={chatAskWhenMissing}
+                  onChange={(event) => {
+                    setChatAskWhenMissing(event.target.checked);
+                    setChatSettingsMessage('');
+                  }}
+                />
+                <span>Ask when required info missing</span>
+              </label>
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={chatAnnounceActions}
+                  onChange={(event) => {
+                    setChatAnnounceActions(event.target.checked);
+                    setChatSettingsMessage('');
+                  }}
+                />
+                <span>Announce actions in chat</span>
+              </label>
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={chatShowDetailedToolSteps}
+                  onChange={(event) => {
+                    setChatShowDetailedToolSteps(event.target.checked);
+                    setChatSettingsMessage('');
+                  }}
+                />
+                <span>Show detailed tool steps</span>
+              </label>
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={chatReloadProfileEveryMessage}
+                  onChange={(event) => {
+                    setChatReloadProfileEveryMessage(event.target.checked);
+                    setChatSettingsMessage('');
+                  }}
+                />
+                <span>Reload profile every message (immediate per-turn)</span>
+              </label>
+            </div>
+            <div className="mt-2 min-h-[1.25rem]">
+              {chatSettingsValidationError ? <p className="text-xs text-rose-700">{chatSettingsValidationError}</p> : null}
+              {!chatSettingsValidationError && chatSettingsMessage
+                ? <p className={`text-xs ${chatSettingsMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}>{chatSettingsMessage}</p>
+                : null}
+            </div>
+            <div className="mt-3">
+              <button
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white"
+                onClick={async () => {
+                  setChatSettingsMessage('');
+                  setChatSettingsValidationError('');
+                  const normalizedPath = chatProfileFilePath.trim();
+                  if (chatProfilePathRequired && !normalizedPath) {
+                    setChatSettingsValidationError('Profile file path is required when profile source is File or Merged.');
+                    return;
+                  }
+                  try {
+                    await saveChatSettings({
+                      policy: {
+                        action_mode: chatActionMode,
+                        ask_when_missing: chatAskWhenMissing,
+                        announce_actions: chatAnnounceActions,
+                        detailed_tool_steps: chatShowDetailedToolSteps,
+                        profile_source: chatProfileSource,
+                        profile_file_path: normalizedPath,
+                        reload_profile_every_message: chatReloadProfileEveryMessage,
+                      },
+                    });
+                    if (chatReloadProfileEveryMessage) {
+                      await reloadChatProfile();
+                    }
+                    setChatSettingsMessage('Chat settings saved. New turns will use this configuration.');
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : 'Failed saving chat settings.';
+                    setChatSettingsMessage(message);
+                  }
+                }}
+              >
+                Save chat settings
+              </button>
             </div>
           </div>
         </section>
