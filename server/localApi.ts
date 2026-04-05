@@ -542,14 +542,66 @@ const writeNdjson = (res: ServerResponse, payload: Record<string, unknown>) => {
   res.write(`${JSON.stringify(payload)}\n`);
 };
 
-const readJsonBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
+const readRawBody = async (req: IncomingMessage): Promise<Buffer> => {
   const chunks: Uint8Array[] = [];
   for await (const chunk of req) {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
   }
-  const raw = Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+};
+
+const readJsonBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
+  const raw = (await readRawBody(req)).toString('utf8');
   if (!raw) return {};
   return JSON.parse(raw) as Record<string, unknown>;
+};
+
+type MultipartUploadBody = {
+  fields: Record<string, string>;
+  file: {
+    filename: string;
+    mimeType: string;
+    buffer: Buffer;
+  } | null;
+};
+
+const readMultipartUploadBody = async (req: IncomingMessage): Promise<MultipartUploadBody> => {
+  const contentType = String(req.headers['content-type'] ?? '');
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = (boundaryMatch?.[1] ?? boundaryMatch?.[2] ?? '').trim();
+  if (!boundary) return { fields: {}, file: null };
+  const raw = (await readRawBody(req)).toString('latin1');
+  const segments = raw.split(`--${boundary}`);
+  const fields: Record<string, string> = {};
+  let file: MultipartUploadBody['file'] = null;
+  for (const segment of segments) {
+    if (!segment || segment === '--\r\n' || segment === '--') continue;
+    const normalized = segment.startsWith('\r\n') ? segment.slice(2) : segment;
+    const headerEndIndex = normalized.indexOf('\r\n\r\n');
+    if (headerEndIndex < 0) continue;
+    const headerBlock = normalized.slice(0, headerEndIndex);
+    let bodyBlock = normalized.slice(headerEndIndex + 4);
+    if (bodyBlock.endsWith('\r\n')) bodyBlock = bodyBlock.slice(0, -2);
+    const dispositionLine = headerBlock.split('\r\n').find((line) => line.toLowerCase().startsWith('content-disposition:'));
+    if (!dispositionLine) continue;
+    const nameMatch = dispositionLine.match(/name="([^"]+)"/i);
+    const filenameMatch = dispositionLine.match(/filename="([^"]*)"/i);
+    const fieldName = nameMatch?.[1]?.trim();
+    if (!fieldName) continue;
+    const contentTypeLine = headerBlock.split('\r\n').find((line) => line.toLowerCase().startsWith('content-type:'));
+    const partMimeType = contentTypeLine?.split(':', 2)[1]?.trim() || 'application/octet-stream';
+    const partBuffer = Buffer.from(bodyBlock, 'latin1');
+    if (filenameMatch && filenameMatch[1] !== undefined) {
+      file = {
+        filename: filenameMatch[1] || 'upload.bin',
+        mimeType: partMimeType,
+        buffer: partBuffer,
+      };
+      continue;
+    }
+    fields[fieldName] = partBuffer.toString('utf8');
+  }
+  return { fields, file };
 };
 
 function ensureWorkspaceWithStarterContent() {
@@ -1062,15 +1114,15 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     }
 
     if (req.method === 'POST' && url === '/api/attachments/upload') {
-      const payload = await readJsonBody(req);
-      const workspaceId = String(payload.workspace_id ?? '').trim();
-      const linkType = coerceLinkType(payload.link_type);
-      const linkId = String(payload.link_id ?? '').trim();
-      const originalName = String(payload.original_name ?? '').trim();
-      const mimeType = String(payload.mime_type ?? 'application/octet-stream').trim() || 'application/octet-stream';
-      const contentBase64 = String(payload.content_base64 ?? '');
-      if (!workspaceId || !linkType || !linkId || !originalName || !contentBase64) {
-        writeJson(res, 400, { error: { message: 'workspace_id, link_type, link_id, original_name, and content_base64 are required.' } });
+      const multipart = await readMultipartUploadBody(req);
+      const workspaceId = String(multipart.fields.workspace_id ?? '').trim();
+      const linkType = coerceLinkType(multipart.fields.link_type);
+      const linkId = String(multipart.fields.link_id ?? '').trim();
+      const originalName = String(multipart.fields.original_name ?? multipart.file?.filename ?? '').trim();
+      const mimeType = String(multipart.fields.mime_type ?? multipart.file?.mimeType ?? 'application/octet-stream').trim() || 'application/octet-stream';
+      const rawBuffer = multipart.file?.buffer ?? Buffer.alloc(0);
+      if (!workspaceId || !linkType || !linkId || !originalName || rawBuffer.byteLength === 0) {
+        writeJson(res, 400, { error: { message: 'workspace_id, link_type, link_id, original_name, and file are required.' } });
         return true;
       }
       if (!ensureLinkTargetExists(linkType, linkId)) {
@@ -1082,7 +1134,6 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 409, { error: { message: `Max ${MAX_LINKS_PER_ENTITY} attachments allowed per ${linkType}.` } });
         return true;
       }
-      const rawBuffer = Buffer.from(contentBase64, 'base64');
       if (rawBuffer.byteLength > MAX_ATTACHMENT_SIZE_BYTES) {
         writeJson(res, 413, { error: { message: 'Attachment exceeds 10MB upload limit.' } });
         return true;
@@ -1099,7 +1150,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const tempPath = path.join(attachmentsTmpPath, `${attachmentId}.upload`);
       writeFileSync(tempPath, rawBuffer);
       const sha256 = createHash('sha256').update(rawBuffer).digest('hex');
-      const parseResult = parseAttachmentText(extension, originalName, readFileSync(tempPath));
+      const parseResult = parseAttachmentText(extension, originalName, rawBuffer);
       const finalDir = path.join(attachmentsRootPath, workspaceId);
       mkdirSync(finalDir, { recursive: true });
       const finalFileName = extension ? `${attachmentId}.${extension}` : attachmentId;

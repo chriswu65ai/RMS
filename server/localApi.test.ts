@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { readFileSync } from 'node:fs';
 import { providerRegistry } from './agentProviders.js';
 import { searchProviderRegistry, searchUtils } from './searchProviders.js';
 
@@ -36,11 +37,14 @@ class MockResponse {
   }
 }
 
-const mkReq = (method: string, url: string, body?: unknown) => {
-  const payload = body === undefined ? [] : [JSON.stringify(body)];
+const mkReq = (method: string, url: string, body?: unknown, headers?: Record<string, string>) => {
+  const payload = body === undefined
+    ? []
+    : [typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body)];
   const req = Readable.from(payload) as Readable & { method?: string; url?: string; on: (event: string, cb: () => void) => void };
   req.method = method;
   req.url = url;
+  (req as Readable & { headers?: Record<string, string> }).headers = headers ?? {};
   return req;
 };
 
@@ -59,20 +63,44 @@ const getHandler = async (fresh = false) => {
   return handleLocalApiRoute;
 };
 
-const callRoute = async (method: string, url: string, body?: unknown) => {
+const callRoute = async (method: string, url: string, body?: unknown, headers?: Record<string, string>) => {
   const handler = await getHandler(false);
-  const req = mkReq(method, url, body);
+  const req = mkReq(method, url, body, headers);
   const res = new MockResponse();
   const handled = await handler(req, res);
   return { handled, status: res.statusCode, body: res.bodyText(), headers: res.headers };
 };
 
-const callRouteAfterRestart = async (method: string, url: string, body?: unknown) => {
+const callRouteAfterRestart = async (method: string, url: string, body?: unknown, headers?: Record<string, string>) => {
   const handler = await getHandler(true);
-  const req = mkReq(method, url, body);
+  const req = mkReq(method, url, body, headers);
   const res = new MockResponse();
   const handled = await handler(req, res);
   return { handled, status: res.statusCode, body: res.bodyText(), headers: res.headers };
+};
+
+const buildMultipartUpload = (fields: Record<string, string>, file: { name: string; mimeType: string; content: Buffer }) => {
+  const boundary = `----rms-boundary-${randomUUID()}`;
+  const chunks: Buffer[] = [];
+  const appendField = (name: string, value: string) => {
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    chunks.push(Buffer.from(`Content-Disposition: form-data; name="${name}"\r\n\r\n`));
+    chunks.push(Buffer.from(value));
+    chunks.push(Buffer.from('\r\n'));
+  };
+  Object.entries(fields).forEach(([name, value]) => appendField(name, value));
+  chunks.push(Buffer.from(`--${boundary}\r\n`));
+  chunks.push(Buffer.from(`Content-Disposition: form-data; name="file"; filename="${file.name}"\r\n`));
+  chunks.push(Buffer.from(`Content-Type: ${file.mimeType}\r\n\r\n`));
+  chunks.push(file.content);
+  chunks.push(Buffer.from('\r\n'));
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return {
+    body: Buffer.concat(chunks),
+    headers: {
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    },
+  };
 };
 
 const withOpenAiToolCalls = async <T>(
@@ -288,14 +316,18 @@ test('attachments migration/init and upload/list flow work', async () => {
   });
   const task = JSON.parse(taskCreate.body) as { id: string };
   const csv = 'name,"comment"\nAlpha,"hello, world"\nBeta,"line1\nline2"';
-  const upload = await callRoute('POST', '/api/attachments/upload', {
+  const multipart = buildMultipartUpload({
     workspace_id: bootstrapPayload.workspace.id,
     link_type: 'task',
     link_id: task.id,
     original_name: 'sample.csv',
     mime_type: 'text/csv',
-    content_base64: Buffer.from(csv, 'utf8').toString('base64'),
+  }, {
+    name: 'sample.csv',
+    mimeType: 'text/csv',
+    content: Buffer.from(csv, 'utf8'),
   });
+  const upload = await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
   assert.equal(upload.status, 200);
   const uploaded = JSON.parse(upload.body) as { id: string; parse_status: string; parsed_text: string | null };
   assert.equal(uploaded.parse_status, 'parsed');
@@ -314,20 +346,109 @@ test('unlinking final link soft deletes attachment', async () => {
   const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };
   const taskCreate = await callRoute('POST', '/api/research-tasks', { ticker: 'AAPL' });
   const task = JSON.parse(taskCreate.body) as { id: string };
-  const upload = await callRoute('POST', '/api/attachments/upload', {
+  const multipart = buildMultipartUpload({
     workspace_id: bootstrapPayload.workspace.id,
     link_type: 'task',
     link_id: task.id,
     original_name: 'notes.txt',
     mime_type: 'text/plain',
-    content_base64: Buffer.from('hello world', 'utf8').toString('base64'),
+  }, {
+    name: 'notes.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('hello world', 'utf8'),
   });
+  const upload = await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
   const uploaded = JSON.parse(upload.body) as { id: string };
   const removed = await callRoute('DELETE', `/api/attachments/${uploaded.id}`, { link_type: 'task', link_id: task.id });
   assert.equal(removed.status, 200);
   const list = await callRoute('GET', `/api/attachments?linkType=task&linkId=${task.id}`);
   const listPayload = JSON.parse(list.body) as Array<{ id: string }>;
   assert.equal(listPayload.length, 0);
+});
+
+test('multipart upload accepts file at size limit and rejects file above limit', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };
+  const taskCreate = await callRoute('POST', '/api/research-tasks', { ticker: 'NVDA' });
+  const task = JSON.parse(taskCreate.body) as { id: string };
+  const atLimit = Buffer.alloc(10 * 1024 * 1024, 65);
+  const withinLimitMultipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: task.id,
+    original_name: 'limit.bin',
+    mime_type: 'application/octet-stream',
+  }, {
+    name: 'limit.bin',
+    mimeType: 'application/octet-stream',
+    content: atLimit,
+  });
+  const accepted = await callRoute('POST', '/api/attachments/upload', withinLimitMultipart.body, withinLimitMultipart.headers);
+  assert.equal(accepted.status, 200);
+
+  const aboveLimit = Buffer.alloc((10 * 1024 * 1024) + 1, 66);
+  const overLimitMultipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: task.id,
+    original_name: 'too-large.bin',
+    mime_type: 'application/octet-stream',
+  }, {
+    name: 'too-large.bin',
+    mimeType: 'application/octet-stream',
+    content: aboveLimit,
+  });
+  const rejected = await callRoute('POST', '/api/attachments/upload', overLimitMultipart.body, overLimitMultipart.headers);
+  assert.equal(rejected.status, 413);
+  assert.match(rejected.body, /10MB upload limit/i);
+});
+
+test('multipart upload enforces quota once storage is near limit', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };
+  const taskCreate = await callRoute('POST', '/api/research-tasks', { ticker: 'TSLA' });
+  const task = JSON.parse(taskCreate.body) as { id: string };
+  await callRoute('PUT', '/api/attachments/settings', { quota_mb: 50, retention_days: 30 });
+
+  for (let index = 0; index < 5; index += 1) {
+    const multipart = buildMultipartUpload({
+      workspace_id: bootstrapPayload.workspace.id,
+      link_type: 'task',
+      link_id: task.id,
+      original_name: `bulk-${index}.bin`,
+      mime_type: 'application/octet-stream',
+    }, {
+      name: `bulk-${index}.bin`,
+      mimeType: 'application/octet-stream',
+      content: Buffer.alloc(10 * 1024 * 1024, index),
+    });
+    const response = await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+    assert.equal(response.status, 200);
+  }
+
+  const overflowMultipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: task.id,
+    original_name: 'overflow.bin',
+    mime_type: 'application/octet-stream',
+  }, {
+    name: 'overflow.bin',
+    mimeType: 'application/octet-stream',
+    content: Buffer.from([1]),
+  });
+  const overflow = await callRoute('POST', '/api/attachments/upload', overflowMultipart.body, overflowMultipart.headers);
+  assert.equal(overflow.status, 413);
+  assert.match(overflow.body, /quota exceeded/i);
+});
+
+test('attachment parse and cleanup hooks remain scoped to explicit attachment actions', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'server/localApi.ts'), 'utf8');
+
+  assert.match(source, /if \(req\.method === 'POST' && url === '\/api\/attachments\/upload'\)[\s\S]*parseAttachmentText\(/);
+  assert.match(source, /if \(req\.method === 'POST' && url === '\/api\/attachments\/cleanup'\)[\s\S]*runAttachmentCleanup\(/);
+  assert.equal((source.match(/parseAttachmentText\(/g) ?? []).length, 1);
+  assert.equal((source.match(/runAttachmentCleanup\(/g) ?? []).length, 1);
 });
 
 test('generate prepends parsed attachment context under token cap', async () => {
@@ -345,14 +466,18 @@ test('generate prepends parsed attachment context under token cap', async () => 
     const refreshed = await callRoute('GET', '/api/bootstrap');
     noteId = (JSON.parse(refreshed.body) as { files: Array<{ id: string }> }).files[0]?.id ?? '';
   }
-  await callRoute('POST', '/api/attachments/upload', {
+  const multipart = buildMultipartUpload({
     workspace_id: bootstrapPayload.workspace.id,
     link_type: 'note',
     link_id: noteId,
     original_name: 'ctx.txt',
     mime_type: 'text/plain',
-    content_base64: Buffer.from('Attachment context payload', 'utf8').toString('base64'),
+  }, {
+    name: 'ctx.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Attachment context payload', 'utf8'),
   });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
   let capturedInput = '';
   const originalGenerate = providerRegistry.minimax.generate;
   providerRegistry.minimax.generate = async (request) => {
