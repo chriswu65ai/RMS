@@ -14,13 +14,11 @@ import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel, NewResearchTask } from '../../types/models';
 import { MetadataPanel } from '../metadata/MetadataPanel';
 import { useDialog } from '../../components/ui/DialogProvider';
-import { GenerateUseCase } from '../agent/GenerateUseCase';
 import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
 import type { StreamSource, ThinkingEvent } from '../../lib/agentApi';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
-const generateUseCase = new GenerateUseCase();
 type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled';
 const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_FADE_MS = 1000;
@@ -41,11 +39,10 @@ export function EditorPane() {
     getDraft,
     setDraft,
     clearDraft,
-    markGenerateRunning,
-    completeGenerate,
-    markGenerateFailed,
-    clearGenerateJob,
     getGenerateJob,
+    clearGenerateJob,
+    startGenerate,
+    cancelGenerate: cancelGenerateByFileId,
   } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
@@ -57,7 +54,6 @@ export function EditorPane() {
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
   const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
   const [defaultModel, setDefaultModel] = useState('');
-  const [generateState, setGenerateState] = useState<'idle' | 'running'>('idle');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const [generatedSourcesByFileId, setGeneratedSourcesByFileId] = useState<Record<string, StreamSource[]>>({});
   const [sourcesBubbleClosedByFileId, setSourcesBubbleClosedByFileId] = useState<Record<string, boolean>>({});
@@ -69,13 +65,11 @@ export function EditorPane() {
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const thinkingCloseTimerByFileIdRef = useRef<Record<string, number | null>>({});
   const thinkingFadeTimerByFileIdRef = useRef<Record<string, number | null>>({});
   const thinkingSwapInFlightByFileIdRef = useRef<Record<string, boolean>>({});
   const originalTextRef = useRef<string | null>(null);
   const preGenerateVisibleTextRef = useRef<string | null>(null);
-  const isGeneratingRef = useRef(false);
   const suppressOnChangeRef = useRef(0);
   const pendingHistoryBaselineRef = useRef<{ fileId: string; beforeVisible: string; afterVisible: string } | null>(null);
   const parsed = useMemo(
@@ -200,6 +194,7 @@ export function EditorPane() {
   const isThinkingBubbleClosed = thinkingBubbleClosedByFileId[file.id] ?? false;
   const thinkingStatus = thinkingStatusByFileId[file.id] ?? 'idle';
   const thinkingIsFading = thinkingIsFadingByFileId[file.id] ?? false;
+  const isGenerateRunning = getGenerateJob(file.id).status === 'running';
 
   const clearThinkingCloseTimer = (fileId: string) => {
     const timer = thinkingCloseTimerByFileIdRef.current[fileId];
@@ -239,7 +234,7 @@ export function EditorPane() {
   };
 
   const normalizeThinkingEvent = (event: ThinkingEvent): string | null => {
-    const toolName = event.toolName?.trim();
+    const toolName = ('toolName' in event && typeof event.toolName === 'string') ? event.toolName.trim() : undefined;
     const lowerToolName = toolName?.toLowerCase() ?? '';
     const isSearchTool = lowerToolName.includes('search') || lowerToolName.includes('web') || lowerToolName.includes('browse');
     if (event.type === 'reasoning') return 'Reasoning step updated';
@@ -635,10 +630,8 @@ export function EditorPane() {
   };
 
   const runGenerate = async () => {
-    if (isGeneratingRef.current) return;
-    isGeneratingRef.current = true;
+    if (isGenerateRunning) return;
     if (!defaultModel.trim()) {
-      isGeneratingRef.current = false;
       await dialog.alert('Generate unavailable', 'Set a default provider/model in Agent settings first.');
       return;
     }
@@ -648,8 +641,6 @@ export function EditorPane() {
     originalTextRef.current = originalText;
     preGenerateVisibleTextRef.current = preGenerateVisibleText;
     pendingHistoryBaselineRef.current = null;
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
     clearThinkingCloseTimer(file.id);
     clearThinkingFadeTimer(file.id);
     thinkingSwapInFlightByFileIdRef.current[file.id] = false;
@@ -661,15 +652,11 @@ export function EditorPane() {
     setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'running' }));
     setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
     setSearchWarningMessage(null);
-    markGenerateRunning(file.id);
-    setGenerateState('running');
     try {
-      const result = await generateUseCase.run({
-        noteId: file.id,
+      const outputText = await startGenerate(file.id, {
         inputText: originalText,
         provider: defaultProvider,
         model: defaultModel,
-        signal: controller.signal,
         onProgress: (nextOutputText) => {
           const nextParsed = splitFrontmatter(nextOutputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
           dispatchEditorContent(toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
@@ -693,7 +680,7 @@ export function EditorPane() {
           });
         },
       });
-      const finalParsed = splitFrontmatter(result.outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+      const finalParsed = splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
       const finalVisibleText = toVisibleEditorText(finalParsed.body, finalParsed.frontmatter);
       if (preGenerateVisibleTextRef.current) {
         const didApplyInEditor = dispatchEditorContent(preGenerateVisibleTextRef.current, false);
@@ -720,7 +707,7 @@ export function EditorPane() {
           };
         }
       }
-      const generatedDraft = completeGenerate(file.id, result.outputText);
+      const generatedDraft = getDraft(file.id);
       setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'completed' }));
       clearThinkingCloseTimer(file.id);
       thinkingCloseTimerByFileIdRef.current[file.id] = window.setTimeout(() => {
@@ -732,7 +719,7 @@ export function EditorPane() {
       }
       setShowGeneratedDraftNotice(true);
     } catch (error) {
-      const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+      const isCancelled = error instanceof Error && error.name === 'AbortError';
       if (isCancelled) {
         if (originalTextRef.current) {
           const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
@@ -741,7 +728,6 @@ export function EditorPane() {
           setBody(restored.body);
           updateDraftCache(restored.body, restored.frontmatter, 'manual');
         }
-        clearGenerateJob(file.id);
         setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
         clearThinkingCloseTimer(file.id);
         clearThinkingFadeTimer(file.id);
@@ -757,7 +743,6 @@ export function EditorPane() {
           setBody(restored.body);
           updateDraftCache(restored.body, restored.frontmatter, 'manual');
         }
-        markGenerateFailed(file.id, error instanceof Error ? error.message : 'Generation failed.');
         setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
         clearThinkingCloseTimer(file.id);
         clearThinkingFadeTimer(file.id);
@@ -767,16 +752,13 @@ export function EditorPane() {
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
-      abortControllerRef.current = null;
       originalTextRef.current = null;
       preGenerateVisibleTextRef.current = null;
-      isGeneratingRef.current = false;
-      setGenerateState('idle');
     }
   };
 
   const cancelGenerate = () => {
-    abortControllerRef.current?.abort();
+    cancelGenerateByFileId(file.id);
   };
 
   return (
@@ -803,7 +785,7 @@ export function EditorPane() {
               <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={downloadCurrent} title="Download" aria-label="Download"><Download className="mr-1" size={14} />Download</button>
               <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={shareCurrent} title="Share" aria-label="Share"><Share2 className="mr-1" size={14} />Share</button>
               <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs" onClick={() => navigator.clipboard.writeText(merged)}><Copy className="mr-1" size={14} />Copy</button>
-              {generateState === 'running' ? (
+              {isGenerateRunning ? (
                 <button className="inline-flex items-center rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-700" onClick={cancelGenerate}>
                   <LoaderCircle className="mr-1 animate-spin" size={14} />
                   <X className="mr-1" size={14} />Cancel
@@ -819,7 +801,7 @@ export function EditorPane() {
               )}
               <button
                 className="inline-flex items-center rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
-                disabled={!dirty || generateState === 'running'}
+                disabled={!dirty || isGenerateRunning}
                 onClick={async () => {
                   const { error } = await updateFile(file.id, {
                     content: merged,

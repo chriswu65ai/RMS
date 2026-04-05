@@ -5,6 +5,8 @@ import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
 import { deriveUnsavedFileIds } from '../features/files/unsavedIndicators';
 import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../features/agent/types';
+import { GenerateUseCase } from '../features/agent/GenerateUseCase';
+import type { StreamSource, ThinkingEvent } from '../lib/agentApi';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
 
 const DEFAULT_SETTINGS: SettingsList = {
@@ -85,6 +87,16 @@ export type AgentCatalogStatusEntry = {
 type AgentModelsByProvider = Record<AgentProvider, ModelListItem[]>;
 type AgentCatalogStatusByProvider = Record<AgentProvider, AgentCatalogStatusEntry>;
 type AgentSelectedModelByProvider = Record<AgentProvider, string>;
+export type StartGeneratePayload = {
+  inputText: string;
+  provider: AgentProvider;
+  model: string;
+  onProgress?: (nextOutputText: string) => void;
+  onSources?: (sources: StreamSource[]) => void;
+  onSearchWarning?: (message: string) => void;
+  onThinkingEvent?: (event: ThinkingEvent) => void;
+};
+type ActiveGenerateStreamCallbacks = Pick<StartGeneratePayload, 'onProgress' | 'onSources' | 'onSearchWarning' | 'onThinkingEvent'>;
 
 type Store = {
   workspace: Workspace | null;
@@ -128,6 +140,8 @@ type Store = {
   markGenerateFailed: (fileId: string, error?: string) => void;
   clearGenerateJob: (fileId: string) => void;
   getGenerateJob: (fileId: string) => GenerateJob;
+  startGenerate: (fileId: string, payload: StartGeneratePayload) => Promise<string>;
+  cancelGenerate: (fileId: string) => void;
   setAgentProviderModels: (
     provider: AgentProvider,
     models: ModelListItem[],
@@ -176,6 +190,9 @@ const EMPTY_AGENT_SELECTED_MODEL_BY_PROVIDER: AgentSelectedModelByProvider = {
   anthropic: '',
   ollama: '',
 };
+const generateUseCase = new GenerateUseCase();
+const activeGenerationControllersByFileId = new Map<string, AbortController>();
+const activeGenerationCallbacksByFileId = new Map<string, ActiveGenerateStreamCallbacks>();
 
 function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null) {
   if (!selectedFileId) return { selectedFileId: null, selectedTicker: null };
@@ -292,6 +309,49 @@ export const useResearchStore = create<Store>()(
         return { generateJobsByFileId: rest };
       }),
       getGenerateJob: (fileId) => get().generateJobsByFileId[fileId] ?? IDLE_GENERATE_JOB,
+      startGenerate: async (fileId, payload) => {
+        if (activeGenerationControllersByFileId.has(fileId)) {
+          throw new Error('Generation already running for this note.');
+        }
+        const controller = new AbortController();
+        activeGenerationControllersByFileId.set(fileId, controller);
+        activeGenerationCallbacksByFileId.set(fileId, {
+          onProgress: payload.onProgress,
+          onSources: payload.onSources,
+          onSearchWarning: payload.onSearchWarning,
+          onThinkingEvent: payload.onThinkingEvent,
+        });
+        get().markGenerateRunning(fileId);
+        try {
+          const result = await generateUseCase.run({
+            noteId: fileId,
+            inputText: payload.inputText,
+            provider: payload.provider,
+            model: payload.model,
+            signal: controller.signal,
+            onProgress: (nextOutputText) => activeGenerationCallbacksByFileId.get(fileId)?.onProgress?.(nextOutputText),
+            onSources: (sources) => activeGenerationCallbacksByFileId.get(fileId)?.onSources?.(sources),
+            onSearchWarning: (message) => activeGenerationCallbacksByFileId.get(fileId)?.onSearchWarning?.(message),
+            onThinkingEvent: (event) => activeGenerationCallbacksByFileId.get(fileId)?.onThinkingEvent?.(event),
+          });
+          get().completeGenerate(fileId, result.outputText);
+          return result.outputText;
+        } catch (error) {
+          const isCancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+          if (isCancelled) {
+            get().clearGenerateJob(fileId);
+          } else {
+            get().markGenerateFailed(fileId, error instanceof Error ? error.message : 'Generation failed.');
+          }
+          throw error;
+        } finally {
+          activeGenerationControllersByFileId.delete(fileId);
+          activeGenerationCallbacksByFileId.delete(fileId);
+        }
+      },
+      cancelGenerate: (fileId) => {
+        activeGenerationControllersByFileId.get(fileId)?.abort();
+      },
       setAgentProviderModels: (provider, models, metadata) => set((state) => ({
         agentModelsByProvider: {
           ...state.agentModelsByProvider,
@@ -416,6 +476,9 @@ export const useResearchStore = create<Store>()(
         }
       },
       reset: () => {
+        activeGenerationControllersByFileId.forEach((controller) => controller.abort());
+        activeGenerationControllersByFileId.clear();
+        activeGenerationCallbacksByFileId.clear();
         set({
           workspace: null,
           folders: [],
