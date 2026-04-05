@@ -2026,6 +2026,91 @@ test('chat tool orchestration executes approved action and persists tool metadat
   }
 });
 
+test('chat tool actions create/update/archive/list/generate_note execute through streaming orchestration', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'chat summary', latencyMs: 1 });
+
+  const runChatWithTool = async (toolCall: { id: string; name: string; arguments: Record<string, unknown> }, content: string) => {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [toolCall],
+    });
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content,
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; result?: Record<string, unknown> });
+    const outcome = frames.find((frame) => frame.type === 'tool_call_result');
+    assert.equal(outcome?.outcome, 'executed');
+    return outcome?.result ?? {};
+  };
+
+  try {
+    await runChatWithTool({
+      id: 'tool-create',
+      name: 'create_task',
+      arguments: { ticker: 'zzzq', title: 'Coverage expansion', note_type: 'Research', status: 'ideas' },
+    }, 'create new task');
+
+    const tasksAfterCreate = await callRoute('GET', '/api/research-tasks');
+    const createdTask = (JSON.parse(tasksAfterCreate.body) as Array<{ id: string; ticker: string; title: string; status: string; archived: boolean }>)
+      .find((task) => task.ticker === 'ZZZQ' && task.title === 'Coverage expansion');
+    assert.equal(typeof createdTask?.id, 'string');
+
+    await runChatWithTool({
+      id: 'tool-update',
+      name: 'update_task',
+      arguments: { task_id: createdTask?.id, status: 'researching', details: 'Started model updates' },
+    }, 'update task');
+
+    const listResult = await runChatWithTool({
+      id: 'tool-list',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'researching' },
+    }, 'list researching tasks');
+    const listedTasks = (listResult.tasks as Array<{ id?: string }> | undefined) ?? [];
+    assert.equal(listedTasks.some((task) => task.id === createdTask?.id), true);
+
+    await runChatWithTool({
+      id: 'tool-generate-note',
+      name: 'generate_note',
+      arguments: { instruction: 'Write investment summary', task_id: createdTask?.id, title: 'ZZZQ note' },
+    }, 'generate task note');
+
+    const tasksAfterNote = await callRoute('GET', '/api/research-tasks');
+    const notedTask = (JSON.parse(tasksAfterNote.body) as Array<{ id: string; linked_note_file_id?: string; linked_note_path?: string }>)
+      .find((task) => task.id === createdTask?.id);
+    assert.equal(typeof notedTask?.linked_note_file_id, 'string');
+    assert.match(notedTask?.linked_note_path ?? '', /ZZZQ note\.md/);
+
+    await runChatWithTool({
+      id: 'tool-archive',
+      name: 'archive_task',
+      arguments: { task_id: createdTask?.id },
+    }, 'archive task');
+
+    const tasksAfterArchive = await callRoute('GET', '/api/research-tasks');
+    const archivedTask = (JSON.parse(tasksAfterArchive.body) as Array<{ id: string; archived: boolean }>)
+      .find((task) => task.id === createdTask?.id);
+    assert.equal(archivedTask?.archived, true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('chat context builder uses bounded recent turns and rolling summary snapshots', async () => {
   await callRoute('PUT', '/api/chat/settings', {
     policy: { max_context_messages: 2, summarize_after_messages: 3, include_pinned_memory: true },

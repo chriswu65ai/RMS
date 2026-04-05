@@ -213,3 +213,47 @@ test('chat tool orchestration supports generate_note create and update modes', a
     { instruction: 'Refresh numbers', taskId: 'task-2', noteId: 'note-2', title: undefined },
   ]);
 });
+
+test('chat tool orchestration saves missing fields for create_task and allows explicit disambiguation selection follow-up', async () => {
+  const { adapter, calls } = makeAdapter();
+
+  const missingCreateFields = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-missing',
+    toolCall: {
+      id: 'tool-missing',
+      name: 'create_task',
+      arguments: { ticker: 'amzn', title: 'Amazon refresh' },
+    },
+    explicitConfirm: true,
+  });
+
+  assert.equal(missingCreateFields.status, 'needs_confirmation');
+  assert.deepEqual(missingCreateFields.missing_fields, ['note_type']);
+  assert.equal(calls.createTask.length, 0);
+  assert.equal(calls.drafts.at(-1)?.status, 'pending');
+  assert.deepEqual(calls.drafts.at(-1)?.draft.missing_fields, ['note_type']);
+
+  const ambiguousArchive = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-disambiguation',
+    toolCall: {
+      id: 'tool-archive-ambiguous',
+      name: 'archive_task',
+      arguments: { task_ref: 'aapl' },
+    },
+    explicitConfirm: true,
+  });
+  assert.equal(ambiguousArchive.status, 'needs_disambiguation');
+  assert.equal(calls.updateTask.length, 0);
+
+  const archiveSelectionConfirmed = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-disambiguation',
+    toolCall: {
+      id: 'tool-archive-selection',
+      name: 'archive_task',
+      arguments: { task_id: 'task-3' },
+    },
+    explicitConfirm: true,
+  });
+  assert.equal(archiveSelectionConfirmed.status, 'executed');
+  assert.deepEqual(calls.updateTask.at(-1), { taskId: 'task-3', patch: { archived: true } });
+});
