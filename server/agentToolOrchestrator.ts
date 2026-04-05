@@ -164,19 +164,22 @@ export const runAgentToolOrchestration = async ({
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: results.length, latencyMs: Date.now() - startedAt });
       if (results.length === 0) throw new Error('web_search returned no sources.');
       toolCalls.push({ name: 'web_search', arguments: args, sources: results });
-      const followupToolCall: AgentToolCall = { id: toolCall.id || `web-search-${i + 1}`, name: 'web_search', arguments: args };
-      initialResponse = await providerRegistry[provider].generateToolFollowupTurn({
-        model,
-        inputText,
-        tools: [WEB_SEARCH_TOOL],
-        toolCalls: [followupToolCall],
-        toolResults: [{
-          tool_call_id: followupToolCall.id,
-          name: 'web_search',
-          result: JSON.stringify(results),
-        }],
-        generationParams: baseUrl ? { baseUrl } : undefined,
-      }, apiKey, signal);
+      const shouldRequestFollowup = i < maxToolCalls - 1;
+      if (shouldRequestFollowup) {
+        const followupToolCall: AgentToolCall = { id: toolCall.id || `web-search-${i + 1}`, name: 'web_search', arguments: args };
+        initialResponse = await providerRegistry[provider].generateToolFollowupTurn({
+          model,
+          inputText,
+          tools: [WEB_SEARCH_TOOL],
+          toolCalls: [followupToolCall],
+          toolResults: [{
+            tool_call_id: followupToolCall.id,
+            name: 'web_search',
+            result: JSON.stringify(results),
+          }],
+          generationParams: baseUrl ? { baseUrl } : undefined,
+        }, apiKey, signal);
+      }
     } catch (error) {
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: 0, latencyMs: 0, status: 'error', error });
       throw error;
