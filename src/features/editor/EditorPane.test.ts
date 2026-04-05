@@ -1,17 +1,16 @@
+import { history, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck.js';
 import {
+  applyTextToEditorState,
   buildMarkdownTable,
   deriveLinkLabelFromUrl,
   EDITOR_SHORTCUT_KEYS,
   getTableSizeError,
   isUrlLikeSelection,
-  pushHistorySnapshot,
-  redoHistorySnapshot,
-  undoHistorySnapshot,
 } from './EditorPane.js';
 
 test('editor stays mounted in edit and split tabs', () => {
@@ -34,50 +33,87 @@ test('editor extensions set spellcheck content attribute', () => {
   assert.equal(hasExpectedAttributes, true);
 });
 
-test('per-note history isolation prevents cross-note undo bleed', () => {
-  const historyByFileId: Record<string, ReturnType<typeof pushHistorySnapshot>> = {
-    noteA: pushHistorySnapshot(null, '', 'alpha'),
-    noteB: pushHistorySnapshot(null, '', 'beta'),
+const applyUndo = (state: EditorState) => {
+  let nextState = state;
+  undo({
+    state,
+    dispatch: (transaction) => {
+      nextState = transaction.state;
+    },
+  });
+  return nextState;
+};
+
+const applyRedo = (state: EditorState) => {
+  let nextState = state;
+  redo({
+    state,
+    dispatch: (transaction) => {
+      nextState = transaction.state;
+    },
+  });
+  return nextState;
+};
+
+const createEditorState = (doc = '') => EditorState.create({ doc, extensions: [history()] });
+
+test('multiple sequential undos/redos in one note use CodeMirror history only', () => {
+  let state = createEditorState();
+  state = applyTextToEditorState(state, 'step 1', true);
+  state = applyTextToEditorState(state, 'step 2', true);
+  state = applyTextToEditorState(state, 'step 3', true);
+  assert.equal(undoDepth(state), 3);
+
+  state = applyUndo(state);
+  assert.equal(state.doc.toString(), 'step 2');
+  state = applyUndo(state);
+  assert.equal(state.doc.toString(), 'step 1');
+  state = applyUndo(state);
+  assert.equal(state.doc.toString(), '');
+
+  assert.equal(undoDepth(state), 0);
+  assert.equal(redoDepth(state), 3);
+
+  state = applyRedo(state);
+  assert.equal(state.doc.toString(), 'step 1');
+  state = applyRedo(state);
+  assert.equal(state.doc.toString(), 'step 2');
+  state = applyRedo(state);
+  assert.equal(state.doc.toString(), 'step 3');
+  assert.equal(redoDepth(state), 0);
+});
+
+test('note switching and return preserve per-note history isolation', () => {
+  const stateByFileId: Record<string, EditorState> = {
+    noteA: createEditorState(),
+    noteB: createEditorState(),
   };
 
-  const undoB = undoHistorySnapshot(historyByFileId.noteB);
-  assert.ok(undoB);
-  assert.equal(undoB.text, '');
-  assert.equal(historyByFileId.noteA.lastText, 'alpha');
+  stateByFileId.noteA = applyTextToEditorState(stateByFileId.noteA, 'A1', true);
+  stateByFileId.noteA = applyTextToEditorState(stateByFileId.noteA, 'A2', true);
+  stateByFileId.noteB = applyTextToEditorState(stateByFileId.noteB, 'B1', true);
+
+  stateByFileId.noteB = applyUndo(stateByFileId.noteB);
+  assert.equal(stateByFileId.noteB.doc.toString(), '');
+  assert.equal(stateByFileId.noteA.doc.toString(), 'A2');
+  assert.equal(undoDepth(stateByFileId.noteA), 2);
 });
 
-test('undo/redo keeps each note history intact when switching back', () => {
-  const noteA1 = pushHistorySnapshot(null, '', 'A1');
-  const noteA2 = pushHistorySnapshot(noteA1, 'A1', 'A2');
-  const undone = undoHistorySnapshot(noteA2);
-  assert.ok(undone);
-  assert.equal(undone.text, 'A1');
-  const redone = redoHistorySnapshot(undone.history);
-  assert.ok(redone);
-  assert.equal(redone.text, 'A2');
-});
+test('no extra undo/redo steps after stack exhaustion', () => {
+  let state = createEditorState();
+  state = applyTextToEditorState(state, 'only step', true);
 
-test('generated output can be undone in one step back to pre-generate content', () => {
-  const preGenerate = 'before generate';
-  const generated = 'after generate';
-  const history = pushHistorySnapshot(null, preGenerate, generated);
-  const undone = undoHistorySnapshot(history);
-  assert.ok(undone);
-  assert.equal(undone.text, preGenerate);
-});
+  state = applyUndo(state);
+  assert.equal(state.doc.toString(), '');
+  const exhaustedUndoState = applyUndo(state);
+  assert.equal(exhaustedUndoState.doc.toString(), '');
+  assert.equal(undoDepth(exhaustedUndoState), 0);
 
-test('metadata/tab toggles with unchanged text do not create undo entries', () => {
-  const baseline = pushHistorySnapshot(null, '', 'body only');
-  const afterToggle = pushHistorySnapshot(baseline, 'body only', 'body only');
-  assert.equal(afterToggle.undoStack.length, baseline.undoStack.length);
-  assert.equal(afterToggle.lastText, baseline.lastText);
-});
-
-test('toolbar and keyboard parity use identical undo/redo state transitions', () => {
-  const history = pushHistorySnapshot(pushHistorySnapshot(null, '', 'one'), 'one', 'two');
-  const toolbarUndo = undoHistorySnapshot(history);
-  const keyboardUndo = undoHistorySnapshot(history);
-  assert.deepEqual(toolbarUndo, keyboardUndo);
+  state = applyRedo(exhaustedUndoState);
+  assert.equal(state.doc.toString(), 'only step');
+  const exhaustedRedoState = applyRedo(state);
+  assert.equal(exhaustedRedoState.doc.toString(), 'only step');
+  assert.equal(redoDepth(exhaustedRedoState), 0);
 });
 
 test('shortcut map includes required bindings and excludes list shortcuts', () => {
