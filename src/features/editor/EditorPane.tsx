@@ -392,46 +392,66 @@ export function EditorPane() {
   void thinkingClockTick;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
 
-  const extractDomainsFromUnknown = (value: unknown, output: Set<string>) => {
-    if (typeof value === 'string') {
-      const matches = value.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
-      matches.forEach((matched) => {
-        try {
-          output.add(new URL(matched).hostname.replace(/^www\./, ''));
-        } catch {
-          // ignore non-URL fragments
-        }
-      });
-      return;
+  const toFiniteNumber = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  );
+
+  const toStringList = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  };
+
+  const extractQueryFromThinkingEvent = (event: ThinkingEvent): string | null => {
+    const raw = event.raw as Record<string, unknown>;
+    const directQuery = typeof raw.query === 'string' ? raw.query.trim() : '';
+    if (directQuery) return directQuery;
+    if (raw.args && typeof raw.args === 'object') {
+      const argsQuery = (raw.args as Record<string, unknown>).query;
+      if (typeof argsQuery === 'string' && argsQuery.trim()) return argsQuery.trim();
     }
-    if (Array.isArray(value)) {
-      value.forEach((item) => extractDomainsFromUnknown(item, output));
-      return;
-    }
-    if (value && typeof value === 'object') {
-      Object.values(value).forEach((item) => extractDomainsFromUnknown(item, output));
-    }
+    return null;
   };
 
   const normalizeThinkingEvent = (event: ThinkingEvent): string | null => {
+    const raw = event.raw as Record<string, unknown>;
     const toolName = ('toolName' in event && typeof event.toolName === 'string') ? event.toolName.trim() : undefined;
     const lowerToolName = toolName?.toLowerCase() ?? '';
     const isSearchTool = lowerToolName.includes('search') || lowerToolName.includes('web') || lowerToolName.includes('browse');
     if (event.type === 'reasoning') return 'Reasoning step updated';
     if (event.type === 'tool_call_started') {
-      if (isSearchTool) return 'Searching the web';
+      const query = extractQueryFromThinkingEvent(event);
+      if (isSearchTool) {
+        return query ? `Searching: "${query}"` : 'Searching the web';
+      }
       return toolName ? `Running ${toolName}` : 'Running tool';
     }
     if (event.type === 'tool_call_result') {
-      const domains = new Set<string>();
-      extractDomainsFromUnknown(event.raw, domains);
-      const domainList = Array.from(domains).slice(0, THINKING_VISIBLE_LINE_LIMIT);
+      const query = extractQueryFromThinkingEvent(event);
+      const sourceCount = toFiniteNumber(raw.sourceCount) ?? toFiniteNumber(raw.source_count);
+      const attempt = toFiniteNumber(raw.attempt) ?? toFiniteNumber(raw.pass) ?? toFiniteNumber(raw.pass_index);
+      const maxAttempts = toFiniteNumber(raw.maxAttempts) ?? toFiniteNumber(raw.max_attempts) ?? toFiniteNumber(raw.total_passes);
+      const latencyMs = toFiniteNumber(raw.latencyMs) ?? toFiniteNumber(raw.latency_ms);
+      const sourceMeta = raw.sourceMeta && typeof raw.sourceMeta === 'object' ? raw.sourceMeta as Record<string, unknown> : null;
+      const topDomains = sourceMeta ? toStringList(sourceMeta.topDomains) : [];
+      const fallbackDomains = toStringList(raw.domains);
+      const domainList = (topDomains.length > 0 ? topDomains : fallbackDomains).slice(0, 3);
+      if (isSearchTool) {
+        const detailSegments: string[] = [];
+        if (query) detailSegments.push(`"${query}"`);
+        if (typeof attempt === 'number' && typeof maxAttempts === 'number') detailSegments.push(`pass ${attempt}/${maxAttempts}`);
+        if (typeof sourceCount === 'number') detailSegments.push(`${sourceCount} sources`);
+        if (domainList.length > 0) detailSegments.push(`domains: ${domainList.join(', ')}`);
+        if (typeof latencyMs === 'number') detailSegments.push(`${Math.round(latencyMs)}ms`);
+        if (detailSegments.length > 0) return `Search complete — ${detailSegments.join(' · ')}`;
+        return 'Search completed';
+      }
       if (domainList.length > 0) return `Sources checked: ${domainList.join(', ')}`;
-      if (isSearchTool) return 'Search completed';
       return toolName ? `${toolName} completed` : 'Tool completed';
     }
     if (event.type === 'tool_call_failed') {
-      if (isSearchTool) return 'Search failed';
+      const reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+      if (isSearchTool) return reason ? `Search failed: ${reason}` : 'Search failed';
+      if (reason) return `${toolName ? `${toolName} failed` : 'Tool failed'}: ${reason}`;
       return toolName ? `${toolName} failed` : 'Tool failed';
     }
     return null;
