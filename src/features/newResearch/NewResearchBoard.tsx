@@ -12,6 +12,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType, getNoteTypeSelectOptions } from './noteTypeOptions';
 import { formatLocalDateTime } from '../../lib/time';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
+import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -128,15 +129,29 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     };
   };
 
-  const loadTasks = async () => {
-    setLoading(true);
-    setError(null);
-    try { setTasks(await listNewResearchTasks()); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Failed to load new research tasks.'); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(() => { void loadTasks(); }, []);
+  useEffect(() => {
+    const guard = createUiAsyncGuard();
+    void runUiAsync(
+      async () => {
+        setLoading(true);
+        setError(null);
+        return listNewResearchTasks();
+      },
+      {
+        fallbackMessage: 'Failed to load new research tasks.',
+        isCancelled: guard.isCancelled,
+        onSuccess: (next) => {
+          setTasks(next);
+          setLoading(false);
+        },
+        onError: (message) => {
+          setError(message);
+          setLoading(false);
+        },
+      },
+    );
+    return () => guard.cancel();
+  }, []);
 
   useEffect(() => {
     if (!selectedTaskId) return;
@@ -153,38 +168,61 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   }, [selectedTaskId, tasks, noteTypes, modalState?.id]);
 
   useEffect(() => {
-    let cancelled = false;
+    const guard = createUiAsyncGuard();
     const loadAttachments = async () => {
       if (!modalState?.id) {
-        setModalAttachments([]);
+        guard.ifActive(() => {
+          setModalAttachments([]);
+          setError(null);
+        });
         return;
       }
-      const attachments = await listAttachments('task', modalState.id);
-      if (!cancelled) setModalAttachments(attachments);
+      const taskId = modalState.id;
+      await runUiAsync(
+        () => listAttachments('task', taskId),
+        {
+          fallbackMessage: 'Failed to load task attachments.',
+          isCancelled: guard.isCancelled,
+          onSuccess: (attachments) => {
+            setModalAttachments(attachments);
+            setError(null);
+          },
+          onError: (message) => setError(message),
+        },
+      );
     };
     void loadAttachments();
-    return () => { cancelled = true; };
+    return () => { guard.cancel(); };
   }, [modalState?.id]);
 
   useEffect(() => {
+    const guard = createUiAsyncGuard();
     if (!modalState?.id) {
-      setActivityItems([]);
-      setActivityError(null);
-      setActivityLoading(false);
+      guard.ifActive(() => {
+        setActivityItems([]);
+        setActivityError(null);
+        setActivityLoading(false);
+      });
       return;
     }
     setActivityLoading(true);
     setActivityError(null);
-    void (async () => {
-      try {
-        const events = await listTaskActivity(modalState.id as string);
-        setActivityItems(events);
-      } catch (err) {
-        setActivityError(err instanceof Error ? err.message : 'Failed to load task activity.');
-      } finally {
-        setActivityLoading(false);
-      }
-    })();
+    void runUiAsync(
+      () => listTaskActivity(modalState.id as string),
+      {
+        fallbackMessage: 'Failed to load task activity.',
+        isCancelled: guard.isCancelled,
+        onSuccess: (events) => {
+          setActivityItems(events);
+          setActivityLoading(false);
+        },
+        onError: (message) => {
+          setActivityError(message);
+          setActivityLoading(false);
+        },
+      },
+    );
+    return () => guard.cancel();
   }, [modalState?.id]);
 
   const saveTask = async () => {
@@ -464,8 +502,20 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       const file = event.target.files?.[0];
                       event.target.value = '';
                       if (!file || !workspace) return;
-                      await uploadAttachment({ workspaceId: workspace.id, linkType: 'task', linkId: modalState.id!, file });
-                      setModalAttachments(await listAttachments('task', modalState.id!));
+                      await runUiAsync(
+                        async () => {
+                          await uploadAttachment({ workspaceId: workspace.id, linkType: 'task', linkId: modalState.id!, file });
+                          return listAttachments('task', modalState.id!);
+                        },
+                        {
+                          fallbackMessage: 'Failed to upload attachment.',
+                          onSuccess: (attachments) => {
+                            setModalAttachments(attachments);
+                            setError(null);
+                          },
+                          onError: (message) => setError(message),
+                        },
+                      );
                     }}
                   />
                   <ul className="mt-2 space-y-1 rounded border border-slate-200 p-2 text-xs">
@@ -476,8 +526,20 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                         <button
                           className="rounded border border-slate-300 px-2 py-0.5"
                           onClick={async () => {
-                            await unlinkAttachment(attachment.id, 'task', modalState.id!);
-                            setModalAttachments(await listAttachments('task', modalState.id!));
+                            await runUiAsync(
+                              async () => {
+                                await unlinkAttachment(attachment.id, 'task', modalState.id!);
+                                return listAttachments('task', modalState.id!);
+                              },
+                              {
+                                fallbackMessage: 'Failed to remove attachment.',
+                                onSuccess: (attachments) => {
+                                  setModalAttachments(attachments);
+                                  setError(null);
+                                },
+                                onError: (message) => setError(message),
+                              },
+                            );
                           }}
                         >
                           Remove

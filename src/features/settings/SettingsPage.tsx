@@ -5,6 +5,7 @@ import { useResearchStore } from '../../hooks/useResearchStore';
 import { createFile, createFolder, getAttachmentSettings, runAttachmentCleanupNow, saveAttachmentSettings } from '../../lib/dataApi';
 import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
 import { splitFrontmatter } from '../../lib/frontmatter';
+import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import type { Folder } from '../../types/models';
 
 export function SettingsPage() {
@@ -19,18 +20,29 @@ export function SettingsPage() {
   const [attachmentRetentionDays, setAttachmentRetentionDays] = useState(30);
   const [attachmentUsageBytes, setAttachmentUsageBytes] = useState(0);
   const [attachmentReclaimableBytes, setAttachmentReclaimableBytes] = useState(0);
+  const [attachmentStatusError, setAttachmentStatusError] = useState<string | null>(null);
 
   useEffect(() => setNoteTypesInput(noteTypes.join(', ')), [noteTypes]);
   useEffect(() => setAssigneesInput(assignees.join(', ')), [assignees]);
   useEffect(() => setSectorsInput(sectors.join(', ')), [sectors]);
   useEffect(() => {
-    void (async () => {
-      const settings = await getAttachmentSettings();
-      setAttachmentQuotaMb(settings.quota_mb);
-      setAttachmentRetentionDays(settings.retention_days);
-      setAttachmentUsageBytes(settings.usage_bytes);
-      setAttachmentReclaimableBytes(settings.reclaimable_bytes);
-    })();
+    const guard = createUiAsyncGuard();
+    void runUiAsync(
+      () => getAttachmentSettings(),
+      {
+        fallbackMessage: 'Failed to load attachment settings.',
+        isCancelled: guard.isCancelled,
+        onSuccess: (settings) => {
+          setAttachmentQuotaMb(settings.quota_mb);
+          setAttachmentRetentionDays(settings.retention_days);
+          setAttachmentUsageBytes(settings.usage_bytes);
+          setAttachmentReclaimableBytes(settings.reclaimable_bytes);
+          setAttachmentStatusError(null);
+        },
+        onError: (message) => setAttachmentStatusError(message),
+      },
+    );
+    return () => guard.cancel();
   }, []);
 
   const exportAllFiles = async () => {
@@ -171,28 +183,59 @@ export function SettingsPage() {
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Total storage quota (MB)</span>
                 <input className="input" type="number" min={50} value={attachmentQuotaMb} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={async () => {
-                  const updated = await saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays });
-                  setAttachmentUsageBytes(updated.usage_bytes);
-                  setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                  await runUiAsync(
+                    () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
+                    {
+                      fallbackMessage: 'Failed to save attachment settings.',
+                      onSuccess: (updated) => {
+                        setAttachmentUsageBytes(updated.usage_bytes);
+                        setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                        setAttachmentStatusError(null);
+                      },
+                      onError: (message) => setAttachmentStatusError(message),
+                    },
+                  );
                 }} />
               </label>
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Retention days</span>
                 <input className="input" type="number" min={1} value={attachmentRetentionDays} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={async () => {
-                  const updated = await saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays });
-                  setAttachmentUsageBytes(updated.usage_bytes);
-                  setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                  await runUiAsync(
+                    () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
+                    {
+                      fallbackMessage: 'Failed to save attachment settings.',
+                      onSuccess: (updated) => {
+                        setAttachmentUsageBytes(updated.usage_bytes);
+                        setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                        setAttachmentStatusError(null);
+                      },
+                      onError: (message) => setAttachmentStatusError(message),
+                    },
+                  );
                 }} />
               </label>
             </div>
             <p className="mt-3 text-sm text-slate-600">Current usage: {(attachmentUsageBytes / (1024 * 1024)).toFixed(2)} MB</p>
             <p className="text-sm text-slate-600">Reclaimable (soft-deleted): {(attachmentReclaimableBytes / (1024 * 1024)).toFixed(2)} MB</p>
+            {attachmentStatusError && <p className="mt-2 text-sm text-rose-600">{attachmentStatusError}</p>}
             <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={async () => {
-              const result = await runAttachmentCleanupNow();
-              const refreshed = await getAttachmentSettings();
-              setAttachmentUsageBytes(refreshed.usage_bytes);
-              setAttachmentReclaimableBytes(refreshed.reclaimable_bytes);
-              await dialog.alert('Cleanup complete', `Removed ${result.removed_files} file(s), purged ${result.purged_attachments} attachment record(s).`);
+              await runUiAsync(
+                async () => {
+                  const result = await runAttachmentCleanupNow();
+                  const refreshed = await getAttachmentSettings();
+                  return { result, refreshed };
+                },
+                {
+                  fallbackMessage: 'Failed to run attachment cleanup.',
+                  onSuccess: async ({ result, refreshed }) => {
+                    setAttachmentUsageBytes(refreshed.usage_bytes);
+                    setAttachmentReclaimableBytes(refreshed.reclaimable_bytes);
+                    setAttachmentStatusError(null);
+                    await dialog.alert('Cleanup complete', `Removed ${result.removed_files} file(s), purged ${result.purged_attachments} attachment record(s).`);
+                  },
+                  onError: (message) => setAttachmentStatusError(message),
+                },
+              );
             }}>
               Run cleanup now
             </button>
