@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -141,8 +142,47 @@ type PreferredSourceRow = {
   updated_at: string;
 };
 
+type AttachmentRow = {
+  id: string;
+  workspace_id: string;
+  storage_relpath: string;
+  original_name: string;
+  mime_type: string;
+  extension: string;
+  size_bytes: number;
+  sha256: string;
+  estimated_tokens: number;
+  parse_status: 'parsed' | 'pending' | 'failed';
+  parsed_text: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+type AttachmentLinkRow = {
+  id: string;
+  attachment_id: string;
+  link_type: 'task' | 'note';
+  link_id: string;
+  created_at: string;
+};
+
+type AttachmentSettingsRow = {
+  id: number;
+  quota_mb: number;
+  retention_days: number;
+};
+
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
+const attachmentsRootPath = path.resolve(process.cwd(), 'data/attachments');
+const attachmentsTmpPath = path.join(attachmentsRootPath, '.tmp');
+mkdirSync(attachmentsTmpPath, { recursive: true });
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_LINKS_PER_ENTITY = 5;
+const DEFAULT_ATTACHMENT_QUOTA_MB = 500;
+const DEFAULT_ATTACHMENT_RETENTION_DAYS = 30;
+const ATTACHMENT_CONTEXT_TOKEN_BUDGET = 1_500;
 let initialized = false;
 
 const sqlEscape = (value: unknown) => {
@@ -160,6 +200,97 @@ const queryJson = <T>(sql: string): T[] => {
   const out = execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8' });
   const trimmed = out.trim();
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+};
+
+const coerceLinkType = (value: unknown): 'task' | 'note' | null => (value === 'task' || value === 'note' ? value : null);
+
+const ensureLinkTargetExists = (linkType: 'task' | 'note', linkId: string): boolean => {
+  if (!linkId.trim()) return false;
+  if (linkType === 'task') {
+    return Boolean(queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where id = ${sqlEscape(linkId)} limit 1`)[0]);
+  }
+  return Boolean(queryJson<Pick<ResearchNoteRow, 'id'>>(`select id from research_notes where id = ${sqlEscape(linkId)} limit 1`)[0]);
+};
+
+const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
+
+const chunkText = (text: string, maxChunkChars = 2000): string[] => {
+  const normalized = text.trim();
+  if (!normalized) return [];
+  const chunks: string[] = [];
+  for (let index = 0; index < normalized.length; index += maxChunkChars) {
+    chunks.push(normalized.slice(index, index + maxChunkChars));
+  }
+  return chunks;
+};
+
+const parseCsvRows = (csvText: string): string[][] => {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < csvText.length; i += 1) {
+    const char = csvText[i] ?? '';
+    const next = csvText[i + 1] ?? '';
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (!inQuotes && char === ',') {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if (!inQuotes && (char === '\n' || char === '\r')) {
+      if (char === '\r' && next === '\n') i += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+  row.push(cell);
+  if (row.length > 1 || row[0] !== '') rows.push(row);
+  return rows;
+};
+
+const parseAttachmentText = (extension: string, originalName: string, rawBuffer: Buffer): { parseStatus: AttachmentRow['parse_status']; parsedText: string | null } => {
+  const normalizedExtension = extension.toLowerCase();
+  if (normalizedExtension === 'txt' || normalizedExtension === 'md') {
+    const text = rawBuffer.toString('utf8');
+    return { parseStatus: 'parsed', parsedText: text };
+  }
+  if (normalizedExtension === 'csv') {
+    const csvText = rawBuffer.toString('utf8');
+    const rows = parseCsvRows(csvText);
+    if (rows.length === 0) return { parseStatus: 'parsed', parsedText: `Source: ${originalName}\nColumns: (none)\nRow count: 0` };
+    const header = rows[0] ?? [];
+    const dataRows = rows.slice(1);
+    const windows = chunkText(
+      dataRows.map((row, rowIndex) => `Row ${rowIndex + 1}: ${header.map((column, columnIndex) => `${column || `column_${columnIndex + 1}`}=${row[columnIndex] ?? ''}`).join(' | ')}`).join('\n'),
+      1500,
+    );
+    const sampledRows = dataRows.slice(0, 3).map((row) => row.join(' | ')).join('\n');
+    const sections = [
+      `Source: ${originalName}`,
+      `Columns: ${header.join(', ') || '(none)'}`,
+      `Row count: ${dataRows.length}`,
+      sampledRows ? `Sample rows:\n${sampledRows}` : 'Sample rows: (none)',
+      ...windows.map((window, index) => `Window ${index + 1}:\n${window}`),
+    ];
+    return { parseStatus: 'parsed', parsedText: sections.join('\n\n') };
+  }
+  if (normalizedExtension === 'pdf' || normalizedExtension === 'docx') {
+    return { parseStatus: 'pending', parsedText: null };
+  }
+  return { parseStatus: 'failed', parsedText: null };
 };
 
 const recordTaskEvent = (taskId: string, eventType: string, description: string) => {
@@ -265,8 +396,39 @@ const ensureInitialized = () => {
     source_count integer not null default 0,
     tool_failure_reason text
   );
+  create table if not exists attachments (
+    id text primary key,
+    workspace_id text not null,
+    storage_relpath text not null,
+    original_name text not null,
+    mime_type text not null,
+    extension text not null,
+    size_bytes integer not null,
+    sha256 text not null,
+    estimated_tokens integer not null default 0,
+    parse_status text not null default 'pending',
+    parsed_text text,
+    created_at text not null,
+    updated_at text not null,
+    deleted_at text
+  );
+  create table if not exists attachment_links (
+    id text primary key,
+    attachment_id text not null,
+    link_type text not null,
+    link_id text not null,
+    created_at text not null,
+    unique(attachment_id, link_type, link_id)
+  );
+  create index if not exists idx_attachment_links_target on attachment_links(link_type, link_id);
+  create table if not exists attachment_settings (
+    id integer primary key check (id = 1),
+    quota_mb integer not null default 500,
+    retention_days integer not null default 30
+  );
   `);
   execSql(`insert or ignore into agent_settings (id, default_provider, default_model, generation_params_json) values (1, 'minimax', '', null);`);
+  execSql(`insert or ignore into attachment_settings (id, quota_mb, retention_days) values (1, ${DEFAULT_ATTACHMENT_QUOTA_MB}, ${DEFAULT_ATTACHMENT_RETENTION_DAYS});`);
   try {
     execSql(`alter table agent_activity_log add column search_warning integer not null default 0;`);
   } catch {
@@ -588,6 +750,62 @@ const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
   }
 };
 
+const getAttachmentSettings = () => {
+  const row = queryJson<AttachmentSettingsRow>('select id, quota_mb, retention_days from attachment_settings where id = 1 limit 1')[0];
+  return {
+    quota_mb: Number(row?.quota_mb ?? DEFAULT_ATTACHMENT_QUOTA_MB),
+    retention_days: Number(row?.retention_days ?? DEFAULT_ATTACHMENT_RETENTION_DAYS),
+  };
+};
+
+const getAttachmentUsage = () => {
+  const usage = queryJson<{ usage_bytes: number }>('select coalesce(sum(size_bytes), 0) as usage_bytes from attachments where deleted_at is null')[0];
+  const reclaimable = queryJson<{ reclaimable_bytes: number }>('select coalesce(sum(size_bytes), 0) as reclaimable_bytes from attachments where deleted_at is not null')[0];
+  return {
+    usage_bytes: Number(usage?.usage_bytes ?? 0),
+    reclaimable_bytes: Number(reclaimable?.reclaimable_bytes ?? 0),
+  };
+};
+
+const runAttachmentCleanup = () => {
+  const { retention_days } = getAttachmentSettings();
+  const cutoff = new Date(Date.now() - retention_days * 24 * 60 * 60 * 1000).toISOString();
+  const expired = queryJson<AttachmentRow>(`select * from attachments where deleted_at is not null and deleted_at <= ${sqlEscape(cutoff)}`);
+  let removedFiles = 0;
+  expired.forEach((attachment) => {
+    const filePath = path.resolve(attachmentsRootPath, attachment.storage_relpath);
+    try {
+      if (statSync(filePath).isFile()) {
+        unlinkSync(filePath);
+        removedFiles += 1;
+      }
+    } catch {}
+  });
+  if (expired.length > 0) {
+    const ids = expired.map((attachment) => sqlEscape(attachment.id)).join(', ');
+    execSql(`delete from attachment_links where attachment_id in (${ids}); delete from attachments where id in (${ids});`);
+  }
+
+  const knownPaths = new Set(queryJson<Pick<AttachmentRow, 'storage_relpath'>>('select storage_relpath from attachments').map((row) => row.storage_relpath));
+  const walk = (dirPath: string): string[] => {
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    return entries.flatMap((entry) => {
+      const resolved = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) return walk(resolved);
+      return [resolved];
+    });
+  };
+  const files = walk(attachmentsRootPath).filter((filePath) => !filePath.includes(`${path.sep}.tmp${path.sep}`));
+  files.forEach((filePath) => {
+    const relpath = path.relative(attachmentsRootPath, filePath).split(path.sep).join('/');
+    if (!knownPaths.has(relpath)) {
+      rmSync(filePath, { force: true });
+      removedFiles += 1;
+    }
+  });
+  return { removed_files: removedFiles, purged_attachments: expired.length };
+};
+
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
   ensureInitialized();
@@ -824,6 +1042,154 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'GET' && url === '/api/attachments/settings') {
+      writeJson(res, 200, { ...getAttachmentSettings(), ...getAttachmentUsage() });
+      return true;
+    }
+
+    if (req.method === 'PUT' && url === '/api/attachments/settings') {
+      const payload = await readJsonBody(req);
+      const nextQuota = Math.max(50, Math.floor(Number(payload.quota_mb ?? DEFAULT_ATTACHMENT_QUOTA_MB)));
+      const nextRetention = Math.max(1, Math.floor(Number(payload.retention_days ?? DEFAULT_ATTACHMENT_RETENTION_DAYS)));
+      execSql(`update attachment_settings set quota_mb = ${sqlEscape(nextQuota)}, retention_days = ${sqlEscape(nextRetention)} where id = 1`);
+      writeJson(res, 200, { quota_mb: nextQuota, retention_days: nextRetention, ...getAttachmentUsage() });
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/attachments/cleanup') {
+      writeJson(res, 200, runAttachmentCleanup());
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/attachments/upload') {
+      const payload = await readJsonBody(req);
+      const workspaceId = String(payload.workspace_id ?? '').trim();
+      const linkType = coerceLinkType(payload.link_type);
+      const linkId = String(payload.link_id ?? '').trim();
+      const originalName = String(payload.original_name ?? '').trim();
+      const mimeType = String(payload.mime_type ?? 'application/octet-stream').trim() || 'application/octet-stream';
+      const contentBase64 = String(payload.content_base64 ?? '');
+      if (!workspaceId || !linkType || !linkId || !originalName || !contentBase64) {
+        writeJson(res, 400, { error: { message: 'workspace_id, link_type, link_id, original_name, and content_base64 are required.' } });
+        return true;
+      }
+      if (!ensureLinkTargetExists(linkType, linkId)) {
+        writeJson(res, 404, { error: { message: 'Link target not found.' } });
+        return true;
+      }
+      const existingLinkCount = queryJson<{ total: number }>(`select count(*) as total from attachment_links where link_type = ${sqlEscape(linkType)} and link_id = ${sqlEscape(linkId)}`)[0];
+      if (Number(existingLinkCount?.total ?? 0) >= MAX_LINKS_PER_ENTITY) {
+        writeJson(res, 409, { error: { message: `Max ${MAX_LINKS_PER_ENTITY} attachments allowed per ${linkType}.` } });
+        return true;
+      }
+      const rawBuffer = Buffer.from(contentBase64, 'base64');
+      if (rawBuffer.byteLength > MAX_ATTACHMENT_SIZE_BYTES) {
+        writeJson(res, 413, { error: { message: 'Attachment exceeds 10MB upload limit.' } });
+        return true;
+      }
+      const { quota_mb } = getAttachmentSettings();
+      const usage = getAttachmentUsage();
+      if (usage.usage_bytes + rawBuffer.byteLength > quota_mb * 1024 * 1024) {
+        writeJson(res, 413, { error: { message: `Attachment quota exceeded (${quota_mb}MB).` } });
+        return true;
+      }
+      const extension = path.extname(originalName).replace('.', '').toLowerCase();
+      const attachmentId = randomUUID();
+      const now = new Date().toISOString();
+      const tempPath = path.join(attachmentsTmpPath, `${attachmentId}.upload`);
+      writeFileSync(tempPath, rawBuffer);
+      const sha256 = createHash('sha256').update(rawBuffer).digest('hex');
+      const parseResult = parseAttachmentText(extension, originalName, readFileSync(tempPath));
+      const finalDir = path.join(attachmentsRootPath, workspaceId);
+      mkdirSync(finalDir, { recursive: true });
+      const finalFileName = extension ? `${attachmentId}.${extension}` : attachmentId;
+      const finalPath = path.join(finalDir, finalFileName);
+      renameSync(tempPath, finalPath);
+      const storageRelpath = path.relative(attachmentsRootPath, finalPath).split(path.sep).join('/');
+      const estimatedTokens = estimateTokens(parseResult.parsedText ?? '');
+      execSql(`
+        begin;
+        insert into attachments (id, workspace_id, storage_relpath, original_name, mime_type, extension, size_bytes, sha256, estimated_tokens, parse_status, parsed_text, created_at, updated_at, deleted_at)
+        values (${sqlEscape(attachmentId)}, ${sqlEscape(workspaceId)}, ${sqlEscape(storageRelpath)}, ${sqlEscape(originalName)}, ${sqlEscape(mimeType)}, ${sqlEscape(extension)}, ${sqlEscape(rawBuffer.byteLength)}, ${sqlEscape(sha256)}, ${sqlEscape(estimatedTokens)}, ${sqlEscape(parseResult.parseStatus)}, ${sqlEscape(parseResult.parsedText)}, ${sqlEscape(now)}, ${sqlEscape(now)}, null);
+        insert into attachment_links (id, attachment_id, link_type, link_id, created_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(attachmentId)}, ${sqlEscape(linkType)}, ${sqlEscape(linkId)}, ${sqlEscape(now)});
+        commit;
+      `);
+      const created = queryJson<AttachmentRow>(`select * from attachments where id = ${sqlEscape(attachmentId)} limit 1`)[0];
+      writeJson(res, 200, created);
+      return true;
+    }
+
+    if (req.method === 'GET' && url.startsWith('/api/attachments?')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const linkType = coerceLinkType(parsedUrl.searchParams.get('linkType'));
+      const linkId = parsedUrl.searchParams.get('linkId')?.trim() ?? '';
+      if (!linkType || !linkId) {
+        writeJson(res, 400, { error: { message: 'linkType and linkId are required.' } });
+        return true;
+      }
+      const attachments = queryJson<AttachmentRow>(`
+        select a.* from attachments a
+        inner join attachment_links l on l.attachment_id = a.id
+        where l.link_type = ${sqlEscape(linkType)} and l.link_id = ${sqlEscape(linkId)} and a.deleted_at is null
+        order by a.created_at desc
+      `);
+      writeJson(res, 200, attachments);
+      return true;
+    }
+
+    if (req.method === 'POST' && /^\/api\/attachments\/[^/]+\/link$/.test(url)) {
+      const attachmentId = url.replace('/api/attachments/', '').replace('/link', '').trim();
+      const payload = await readJsonBody(req);
+      const linkType = coerceLinkType(payload.link_type);
+      const linkId = String(payload.link_id ?? '').trim();
+      if (!attachmentId || !linkType || !linkId) {
+        writeJson(res, 400, { error: { message: 'attachment id, link_type and link_id are required.' } });
+        return true;
+      }
+      if (!ensureLinkTargetExists(linkType, linkId)) {
+        writeJson(res, 404, { error: { message: 'Link target not found.' } });
+        return true;
+      }
+      const existingLinkCount = queryJson<{ total: number }>(`select count(*) as total from attachment_links where link_type = ${sqlEscape(linkType)} and link_id = ${sqlEscape(linkId)}`)[0];
+      if (Number(existingLinkCount?.total ?? 0) >= MAX_LINKS_PER_ENTITY) {
+        writeJson(res, 409, { error: { message: `Max ${MAX_LINKS_PER_ENTITY} attachments allowed per ${linkType}.` } });
+        return true;
+      }
+      const exists = queryJson<Pick<AttachmentRow, 'id'>>(`select id from attachments where id = ${sqlEscape(attachmentId)} limit 1`)[0];
+      if (!exists) {
+        writeJson(res, 404, { error: { message: 'Attachment not found.' } });
+        return true;
+      }
+      const now = new Date().toISOString();
+      execSql(`
+        begin;
+        insert or ignore into attachment_links (id, attachment_id, link_type, link_id, created_at)
+        values (${sqlEscape(randomUUID())}, ${sqlEscape(attachmentId)}, ${sqlEscape(linkType)}, ${sqlEscape(linkId)}, ${sqlEscape(now)});
+        update attachments set deleted_at = null, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(attachmentId)};
+        commit;
+      `);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'DELETE' && /^\/api\/attachments\/[^/]+$/.test(url)) {
+      const attachmentId = url.replace('/api/attachments/', '').trim();
+      const payload = await readJsonBody(req);
+      const linkType = coerceLinkType(payload.link_type);
+      const linkId = String(payload.link_id ?? '').trim();
+      if (!attachmentId || !linkType || !linkId) {
+        writeJson(res, 400, { error: { message: 'attachment id, link_type and link_id are required.' } });
+        return true;
+      }
+      execSql(`delete from attachment_links where attachment_id = ${sqlEscape(attachmentId)} and link_type = ${sqlEscape(linkType)} and link_id = ${sqlEscape(linkId)}`);
+      const remaining = queryJson<{ total: number }>(`select count(*) as total from attachment_links where attachment_id = ${sqlEscape(attachmentId)}`)[0];
+      if (Number(remaining?.total ?? 0) === 0) {
+        execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())}, updated_at = ${sqlEscape(new Date().toISOString())} where id = ${sqlEscape(attachmentId)}`);
+      }
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
     if (req.method === 'POST' && url === '/api/agent/generate') {
       const payload = await readJsonBody(req);
       const provider = payload.provider;
@@ -833,6 +1199,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const model = String(payload.model ?? '').trim();
       const inputText = String(payload.input_text ?? '');
+      const contextTaskId = String(payload.task_id ?? '').trim();
+      const contextNoteId = String(payload.note_id ?? '').trim();
+      const explicitAttachmentIds = Array.isArray(payload.attachment_ids)
+        ? payload.attachment_ids.map((value) => String(value ?? '').trim()).filter(Boolean)
+        : [];
       if (provider !== 'ollama' && !model) {
         writeJson(res, 400, { error: { message: 'Model is required.' } });
         return true;
@@ -972,6 +1343,39 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         };
         let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
         let preparedInputText = inputText;
+        const attachmentCandidateIds = new Set<string>(explicitAttachmentIds);
+        if (contextTaskId) {
+          const task = queryJson<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(`select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`)[0];
+          const taskAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'task' and link_id = ${sqlEscape(contextTaskId)}`);
+          taskAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
+          if (task?.linked_note_file_id) {
+            const linkedNoteAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(task.linked_note_file_id)}`);
+            linkedNoteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
+          }
+        }
+        if (contextNoteId) {
+          const noteAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(contextNoteId)}`);
+          noteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
+        }
+        if (attachmentCandidateIds.size > 0) {
+          const idsSql = Array.from(attachmentCandidateIds).map((id) => sqlEscape(id)).join(', ');
+          const candidates = queryJson<AttachmentRow>(`select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`);
+          let consumed = 0;
+          const contextLines: string[] = ['[ATTACHMENT_CONTEXT_BEGIN]'];
+          candidates.forEach((attachment, index) => {
+            if (!attachment.parsed_text || consumed >= ATTACHMENT_CONTEXT_TOKEN_BUDGET) return;
+            const chunkBudgetChars = Math.max(200, (ATTACHMENT_CONTEXT_TOKEN_BUDGET - consumed) * 4);
+            const nextChunk = attachment.parsed_text.slice(0, chunkBudgetChars);
+            const nextTokens = estimateTokens(nextChunk);
+            consumed += nextTokens;
+            contextLines.push(`### Source ${index + 1}: ${attachment.original_name} [attachment:${attachment.id}]`);
+            contextLines.push(nextChunk);
+          });
+          contextLines.push('[ATTACHMENT_CONTEXT_END]');
+          if (contextLines.length > 2) {
+            preparedInputText = `${contextLines.join('\n\n')}\n\n${inputText}`;
+          }
+        }
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
         let toolFailureReason: string | null = null;
@@ -1211,10 +1615,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       execSql(`
         begin;
+        delete from attachment_links where link_type = 'task' and link_id = ${sqlEscape(taskId)};
         delete from task_activity_events where task_id = ${sqlEscape(taskId)};
         delete from new_research_tasks where id = ${sqlEscape(taskId)};
         commit;
       `);
+      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -1295,6 +1701,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           recordTaskEvent(task.id, 'unlink', 'Unlinked note because the linked note was deleted.');
         });
       }
+      execSql(`delete from attachment_links where link_type = 'note' and link_id = ${sqlEscape(fileId)}`);
+      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
       execSql(`delete from research_notes where id = ${sqlEscape(fileId)}`);
       writeJson(res, 200, { error: null });
       return true;

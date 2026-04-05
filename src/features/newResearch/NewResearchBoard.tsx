@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import type { Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
+import type { Attachment, Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listNewResearchTasks, listTaskActivity, updateNewResearchTask } from '../../lib/dataApi';
+import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
@@ -62,6 +62,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<Array<{ id: string; description: string; created_at: string }>>([]);
+  const [modalAttachments, setModalAttachments] = useState<Attachment[]>([]);
   const taskByLinkedFileId = useMemo(() => {
     const byLinkedFile = new Map<string, NewResearchTask>();
     tasks.forEach((task) => {
@@ -150,6 +151,20 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     setModalState({ mode: 'edit', id: selectedTask.id, task: { ...selectedTask } });
     setActivityExpanded(false);
   }, [selectedTaskId, tasks, noteTypes, modalState?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAttachments = async () => {
+      if (!modalState?.id) {
+        setModalAttachments([]);
+        return;
+      }
+      const attachments = await listAttachments('task', modalState.id);
+      if (!cancelled) setModalAttachments(attachments);
+    };
+    void loadAttachments();
+    return () => { cancelled = true; };
+  }, [modalState?.id]);
 
   useEffect(() => {
     if (!modalState?.id) {
@@ -439,6 +454,39 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                   : null}
               </label>
               <label className="text-sm md:col-span-2">Details<textarea className="input mt-1 min-h-32" value={modalState.task.details} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, details: e.target.value } } : prev)} /></label>
+              {modalState.id && (
+                <div className="text-sm md:col-span-2">
+                  <p className="text-xs font-medium text-slate-600">Attachments</p>
+                  <input
+                    className="mt-1 block w-full text-xs"
+                    type="file"
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (!file || !workspace) return;
+                      await uploadAttachment({ workspaceId: workspace.id, linkType: 'task', linkId: modalState.id!, file });
+                      setModalAttachments(await listAttachments('task', modalState.id!));
+                    }}
+                  />
+                  <ul className="mt-2 space-y-1 rounded border border-slate-200 p-2 text-xs">
+                    {modalAttachments.length === 0 && <li className="text-slate-500">No attachments yet.</li>}
+                    {modalAttachments.map((attachment) => (
+                      <li key={attachment.id} className="flex items-center justify-between gap-2">
+                        <span className="truncate">{attachment.original_name} · {Math.round(attachment.size_bytes / 1024)}KB · {attachment.estimated_tokens} tok</span>
+                        <button
+                          className="rounded border border-slate-300 px-2 py-0.5"
+                          onClick={async () => {
+                            await unlinkAttachment(attachment.id, 'task', modalState.id!);
+                            setModalAttachments(await listAttachments('task', modalState.id!));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             {modalState.id && (
               <div className="mt-4 rounded-lg border border-slate-200">

@@ -1,6 +1,7 @@
 import { BadgeInfo, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { FrontmatterModel } from '../../types/models';
+import { listAttachments, unlinkAttachment, uploadAttachment } from '../../lib/dataApi';
+import type { Attachment, FrontmatterModel } from '../../types/models';
 
 type Props = {
   frontmatter: FrontmatterModel;
@@ -15,6 +16,8 @@ type Props = {
   onViewTask: () => void;
   canViewTask: boolean;
   viewTaskHelperText?: string;
+  workspaceId: string;
+  noteId: string;
 };
 
 const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; label: string }> = [
@@ -38,11 +41,25 @@ export function MetadataPanel({
   onViewTask,
   canViewTask,
   viewTaskHelperText,
+  workspaceId,
+  noteId,
 }: Props) {
   const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? '');
   const [isBelowLg, setIsBelowLg] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)').matches : false,
   );
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!noteId) return;
+      const next = await listAttachments('note', noteId);
+      if (!cancelled) setAttachments(next);
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [noteId]);
 
   useEffect(() => {
     setSelectedSector(frontmatter.sector ?? '');
@@ -124,6 +141,36 @@ export function MetadataPanel({
           ))}
         </select>
       </label>
+      <div className="rounded border border-slate-200 p-2">
+        <p className="text-xs font-medium text-slate-600">Attachments</p>
+        <input
+          className="mt-2 block w-full text-xs"
+          type="file"
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file || !noteId || !workspaceId) return;
+            await uploadAttachment({ workspaceId, linkType: 'note', linkId: noteId, file });
+            setAttachments(await listAttachments('note', noteId));
+          }}
+        />
+        <ul className="mt-2 space-y-1">
+          {attachments.map((attachment) => (
+            <li key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
+              <button
+                className="rounded border border-slate-300 px-2 py-0.5"
+                onClick={async () => {
+                  await unlinkAttachment(attachment.id, 'note', noteId);
+                  setAttachments(await listAttachments('note', noteId));
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <input

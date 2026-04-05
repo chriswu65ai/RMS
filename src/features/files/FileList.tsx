@@ -1,8 +1,8 @@
-import { FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { FilePlus2, Paperclip, Pencil, Star, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { getFileTitleIndicators } from './unsavedIndicators';
-import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
+import { createFile, deleteFile, listAttachments, updateFile } from '../../lib/dataApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
@@ -15,6 +15,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
+  const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({});
 
   const visible = useMemo(() => {
     const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
@@ -66,6 +67,24 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   }, [files, folders, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAttachmentFlags = async () => {
+      const counts: Record<string, number> = {};
+      await Promise.all(visible.slice(0, 40).map(async (file) => {
+        try {
+          const attachments = await listAttachments('note', file.id);
+          counts[file.id] = attachments.length;
+        } catch {
+          counts[file.id] = 0;
+        }
+      }));
+      if (!cancelled) setAttachmentCounts(counts);
+    };
+    void loadAttachmentFlags();
+    return () => { cancelled = true; };
+  }, [visible]);
 
   const hasDuplicateInFolder = (folderId: string | null, fileName: string, currentFileId?: string) => {
     const normalizedName = fileName.toLowerCase();
@@ -159,6 +178,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               >
                 <p className="flex items-center gap-1 text-sm font-medium">
                   <span>{getDisplayTitle(frontmatter.title, file.name)}</span>
+                  {attachmentCounts[file.id] > 0 && <Paperclip size={12} className="text-slate-500" aria-label="Has attachments" />}
                   {getFileTitleIndicators({ isStarred: frontmatter.starred === true, isUnsaved: unsavedFileIds.includes(file.id) }).map((indicator) => (
                     indicator === 'starred'
                       ? <span key={`${file.id}-starred`} title="Starred note" aria-label="Starred note"><Star size={12} className="text-amber-500" fill="currentColor" /></span>

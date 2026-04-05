@@ -2,7 +2,7 @@ import { Download, Upload } from 'lucide-react';
 import { type ChangeEvent, useEffect, useState } from 'react';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { useResearchStore } from '../../hooks/useResearchStore';
-import { createFile, createFolder } from '../../lib/dataApi';
+import { createFile, createFolder, getAttachmentSettings, runAttachmentCleanupNow, saveAttachmentSettings } from '../../lib/dataApi';
 import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
 import { splitFrontmatter } from '../../lib/frontmatter';
 import type { Folder } from '../../types/models';
@@ -15,10 +15,23 @@ export function SettingsPage() {
   const [sectorsInput, setSectorsInput] = useState(sectors.join(', '));
   const [importTargetFolderId, setImportTargetFolderId] = useState<string>('');
   const [importing, setImporting] = useState(false);
+  const [attachmentQuotaMb, setAttachmentQuotaMb] = useState(500);
+  const [attachmentRetentionDays, setAttachmentRetentionDays] = useState(30);
+  const [attachmentUsageBytes, setAttachmentUsageBytes] = useState(0);
+  const [attachmentReclaimableBytes, setAttachmentReclaimableBytes] = useState(0);
 
   useEffect(() => setNoteTypesInput(noteTypes.join(', ')), [noteTypes]);
   useEffect(() => setAssigneesInput(assignees.join(', ')), [assignees]);
   useEffect(() => setSectorsInput(sectors.join(', ')), [sectors]);
+  useEffect(() => {
+    void (async () => {
+      const settings = await getAttachmentSettings();
+      setAttachmentQuotaMb(settings.quota_mb);
+      setAttachmentRetentionDays(settings.retention_days);
+      setAttachmentUsageBytes(settings.usage_bytes);
+      setAttachmentReclaimableBytes(settings.reclaimable_bytes);
+    })();
+  }, []);
 
   const exportAllFiles = async () => {
     if (!workspace) return;
@@ -148,6 +161,41 @@ export function SettingsPage() {
                 }} placeholder="Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Health Care, Financials, Information Technology, Communication Services, Utilities, Real Estate" />
               </section>
             </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Attachments</h2>
+          <div className="w-full rounded-xl border border-slate-200 bg-white p-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-2 text-sm text-slate-600">
+                <span>Total storage quota (MB)</span>
+                <input className="input" type="number" min={50} value={attachmentQuotaMb} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={async () => {
+                  const updated = await saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays });
+                  setAttachmentUsageBytes(updated.usage_bytes);
+                  setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                }} />
+              </label>
+              <label className="space-y-2 text-sm text-slate-600">
+                <span>Retention days</span>
+                <input className="input" type="number" min={1} value={attachmentRetentionDays} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={async () => {
+                  const updated = await saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays });
+                  setAttachmentUsageBytes(updated.usage_bytes);
+                  setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+                }} />
+              </label>
+            </div>
+            <p className="mt-3 text-sm text-slate-600">Current usage: {(attachmentUsageBytes / (1024 * 1024)).toFixed(2)} MB</p>
+            <p className="text-sm text-slate-600">Reclaimable (soft-deleted): {(attachmentReclaimableBytes / (1024 * 1024)).toFixed(2)} MB</p>
+            <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={async () => {
+              const result = await runAttachmentCleanupNow();
+              const refreshed = await getAttachmentSettings();
+              setAttachmentUsageBytes(refreshed.usage_bytes);
+              setAttachmentReclaimableBytes(refreshed.reclaimable_bytes);
+              await dialog.alert('Cleanup complete', `Removed ${result.removed_files} file(s), purged ${result.purged_attachments} attachment record(s).`);
+            }}>
+              Run cleanup now
+            </button>
           </div>
         </section>
 

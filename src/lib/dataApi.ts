@@ -1,5 +1,17 @@
 import { normalizeFrontmatter } from './frontmatter';
-import { Priority, TaskStatus, type Folder, type NewResearchTask, type NewResearchTaskInput, type ResearchNote, type TaskActivityEvent, type Workspace } from '../types/models';
+import {
+  Priority,
+  TaskStatus,
+  type Attachment,
+  type AttachmentLinkType,
+  type AttachmentStorageSettings,
+  type Folder,
+  type NewResearchTask,
+  type NewResearchTaskInput,
+  type ResearchNote,
+  type TaskActivityEvent,
+  type Workspace,
+} from '../types/models';
 
 type ApiError = { message: string };
 type ApiResult = { error: ApiError | null };
@@ -178,4 +190,79 @@ export async function listTaskActivity(taskId: string): Promise<TaskActivityEven
   const response = await fetch(`/api/research-tasks/${taskId}/activity`);
   if (!response.ok) throw new Error(await response.text());
   return readJson<TaskActivityEvent[]>(response);
+}
+
+export async function uploadAttachment(params: {
+  workspaceId: string;
+  linkType: AttachmentLinkType;
+  linkId: string;
+  file: File;
+}): Promise<Attachment> {
+  const buffer = await params.file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+  const contentBase64 = btoa(binary);
+  const response = await fetch('/api/attachments/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspace_id: params.workspaceId,
+      link_type: params.linkType,
+      link_id: params.linkId,
+      original_name: params.file.name,
+      mime_type: params.file.type,
+      content_base64: contentBase64,
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<Attachment>(response);
+}
+
+export async function listAttachments(linkType: AttachmentLinkType, linkId: string): Promise<Attachment[]> {
+  const response = await fetch(`/api/attachments?linkType=${encodeURIComponent(linkType)}&linkId=${encodeURIComponent(linkId)}`);
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<Attachment[]>(response);
+}
+
+export async function unlinkAttachment(attachmentId: string, linkType: AttachmentLinkType, linkId: string): Promise<ApiResult> {
+  const response = await fetch(`/api/attachments/${attachmentId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ link_type: linkType, link_id: linkId }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<ApiResult>(response);
+}
+
+export async function linkAttachment(attachmentId: string, linkType: AttachmentLinkType, linkId: string): Promise<ApiResult> {
+  const response = await fetch(`/api/attachments/${attachmentId}/link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ link_type: linkType, link_id: linkId }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<ApiResult>(response);
+}
+
+export async function getAttachmentSettings(): Promise<AttachmentStorageSettings> {
+  const response = await fetch('/api/attachments/settings');
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<AttachmentStorageSettings>(response);
+}
+
+export async function saveAttachmentSettings(input: Pick<AttachmentStorageSettings, 'quota_mb' | 'retention_days'>): Promise<AttachmentStorageSettings> {
+  const response = await fetch('/api/attachments/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<AttachmentStorageSettings>(response);
+}
+
+export async function runAttachmentCleanupNow(): Promise<{ removed_files: number; purged_attachments: number }> {
+  const response = await fetch('/api/attachments/cleanup', { method: 'POST' });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<{ removed_files: number; purged_attachments: number }>(response);
 }
