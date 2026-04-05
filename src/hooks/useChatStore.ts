@@ -28,6 +28,11 @@ type StreamPayload = {
   tool_name?: string;
   toolCallId?: string;
   tool_call_id?: string;
+  narration_before?: string;
+  narration_after?: string;
+  status?: string;
+  outcome?: string;
+  planned_tool_calls?: Array<{ id?: string; name?: string }>;
 } & Record<string, unknown>;
 
 type ChatStore = {
@@ -54,12 +59,33 @@ const now = () => Date.now();
 
 const updateMessage = (messages: ChatMessage[], id: string, updater: (message: ChatMessage) => ChatMessage) => messages.map((m) => m.id === id ? updater(m) : m);
 
-const appendTrace = (messages: ChatMessage[], messageId: string, entry: ToolTraceEntry) => updateMessage(messages, messageId, (message) => ({ ...message, traces: [...message.traces, entry] }));
-
-const updateTraceStatus = (messages: ChatMessage[], messageId: string, traceId: string, status: ToolTraceStatus, detail: string) => updateMessage(messages, messageId, (message) => ({
-  ...message,
-  traces: message.traces.map((trace) => trace.id === traceId ? { ...trace, status, detail, endedAt: status === 'running' || status === 'pending' ? undefined : now() } : trace),
-}));
+const updateTraceStatus = (
+  messages: ChatMessage[],
+  messageId: string,
+  traceId: string,
+  status: ToolTraceStatus,
+  detail: string,
+  toolName = 'tool',
+) => updateMessage(messages, messageId, (message) => {
+  const existing = message.traces.find((trace) => trace.id === traceId);
+  if (!existing) {
+    return {
+      ...message,
+      traces: [...message.traces, {
+        id: traceId,
+        toolName,
+        status,
+        detail,
+        startedAt: now(),
+        endedAt: status === 'running' || status === 'pending' ? undefined : now(),
+      }],
+    };
+  }
+  return {
+    ...message,
+    traces: message.traces.map((trace) => trace.id === traceId ? { ...trace, status, detail, endedAt: status === 'running' || status === 'pending' ? undefined : now() } : trace),
+  };
+});
 
 const toUiRole = (role: string): ChatRole | null => {
   if (role === 'user' || role === 'assistant') return role;
@@ -99,6 +125,42 @@ const pickToolCallId = (payload: StreamPayload): string => (
     ? payload.toolCallId
     : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : makeId())
 );
+
+const pickNarrationDetail = (payload: StreamPayload, fallback: string): string => {
+  const parts = [payload.message, payload.narration_before, payload.narration_after]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim());
+  return parts.length > 0 ? parts.join('\n\n') : fallback;
+};
+
+const mapTerminalTraceStatus = (
+  payload: StreamPayload,
+  fallback: Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled'>,
+): Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled'> => {
+  const normalized = (typeof payload.status === 'string' ? payload.status : payload.outcome)?.toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === 'cancelled' || normalized === 'canceled') return 'cancelled';
+  if (normalized === 'failed' || normalized === 'error' || normalized === 'rejected') return 'failed';
+  return 'completed';
+};
+
+const upsertTrace = (
+  messages: ChatMessage[],
+  messageId: string,
+  entry: ToolTraceEntry,
+) => updateMessage(messages, messageId, (message) => {
+  const existingIndex = message.traces.findIndex((trace) => trace.id === entry.id);
+  if (existingIndex < 0) {
+    return { ...message, traces: [...message.traces, entry] };
+  }
+  const nextTraces = [...message.traces];
+  nextTraces[existingIndex] = {
+    ...nextTraces[existingIndex],
+    ...entry,
+    startedAt: nextTraces[existingIndex]?.startedAt ?? entry.startedAt,
+  };
+  return { ...message, traces: nextTraces };
+});
 
 const markRunningTraces = (
   messages: ChatMessage[],
@@ -251,13 +313,33 @@ export const useChatStore = create<ChatStore>((set, get) => {
             if (payload.type === 'tool_call_started') {
               const traceId = pickToolCallId(payload);
               set((state) => ({
-                messages: appendTrace(state.messages, assistantMessageId, {
+                messages: upsertTrace(state.messages, assistantMessageId, {
                   id: traceId,
                   toolName: pickToolName(payload),
                   status: 'running',
-                  detail: payload.message ?? 'Tool call started.',
+                  detail: pickNarrationDetail(payload, 'Tool call started.'),
                   startedAt: now(),
                 }),
+              }));
+              continue;
+            }
+
+            if (payload.type === 'tool_planning_result' && Array.isArray(payload.planned_tool_calls)) {
+              set((state) => ({
+                messages: payload.planned_tool_calls.reduce<ChatMessage[]>((messages, plannedCall) => {
+                  const traceId = typeof plannedCall.id === 'string' && plannedCall.id.trim()
+                    ? plannedCall.id
+                    : makeId();
+                  return upsertTrace(messages, assistantMessageId, {
+                    id: traceId,
+                    toolName: typeof plannedCall.name === 'string' && plannedCall.name.trim()
+                      ? plannedCall.name
+                      : 'tool',
+                    status: 'pending',
+                    detail: 'Planned tool action.',
+                    startedAt: now(),
+                  });
+                }, state.messages),
               }));
               continue;
             }
@@ -269,8 +351,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   state.messages,
                   assistantMessageId,
                   traceId,
-                  'completed',
-                  payload.message ?? 'Tool call completed.',
+                  mapTerminalTraceStatus(payload, 'completed'),
+                  pickNarrationDetail(payload, 'Tool call completed.'),
+                  pickToolName(payload),
                 ),
               }));
               continue;
@@ -283,8 +366,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   state.messages,
                   assistantMessageId,
                   traceId,
-                  'failed',
-                  payload.message ?? 'Tool call failed.',
+                  mapTerminalTraceStatus(payload, 'failed'),
+                  pickNarrationDetail(payload, 'Tool call failed.'),
+                  pickToolName(payload),
                 ),
               }));
               continue;
