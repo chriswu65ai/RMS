@@ -16,6 +16,20 @@ test('domain policy only_list keeps only matching hostnames and subdomains', () 
   ]);
 });
 
+test('domain policy only_list treats www-prefixed preferred domains as canonical hosts', () => {
+  const results = [
+    { title: 'A', url: 'https://example.com/news', snippet: 'a', provider: 'duckduckgo' as const },
+    { title: 'B', url: 'https://sub.example.com/report', snippet: 'b', provider: 'duckduckgo' as const },
+    { title: 'C', url: 'https://another.org/post', snippet: 'c', provider: 'duckduckgo' as const },
+  ];
+
+  const filtered = searchUtils.applyDomainPolicy(results, 'only_list', ['www.example.com']);
+  assert.deepEqual(filtered.map((item) => item.url), [
+    'https://example.com/news',
+    'https://sub.example.com/report',
+  ]);
+});
+
 test('domain policy prefer_list keeps open-web result set unchanged', () => {
   const results = [
     { title: 'A', url: 'https://example.com/news', snippet: 'a', provider: 'duckduckgo' as const },

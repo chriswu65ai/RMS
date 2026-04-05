@@ -460,10 +460,12 @@ const normalizeEndpointUrl = (value: unknown, fallback: string): string => {
 const normalizeDomain = (value: unknown): string => {
   if (typeof value !== 'string') return '';
   let domain = value.trim().toLowerCase();
+  // Keep storage canonical for matching, even if UI later chooses to preserve raw input separately.
   domain = domain.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
   domain = domain.replace(/^\/\//, '');
   domain = domain.split(/[/?#]/, 1)[0] ?? '';
   domain = domain.replace(/:\d+$/, '');
+  domain = domain.replace(/^(?:www\d*|m)\./, '');
   domain = domain.replace(/\.+$/, '');
   return domain;
 };
