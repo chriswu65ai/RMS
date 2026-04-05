@@ -22,8 +22,14 @@ import type { StreamSource, ThinkingEvent } from '../../lib/agentApi';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled';
 const THINKING_VISIBLE_LINE_LIMIT = 5;
-const THINKING_FADE_MS = 1000;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
+const THINKING_EVENT_HISTORY_LIMIT = 50;
+type ThinkingPhase = 'waiting' | 'reasoning' | 'tool_running' | 'tool_completed' | 'tool_failed';
+type ThinkingFeedEvent = {
+  id: string;
+  text: string;
+  type: ThinkingEvent['type'];
+};
 
 export type EditorHistorySnapshot = {
   undoStack: string[];
@@ -162,17 +168,18 @@ export function EditorPane() {
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const [generatedSourcesByFileId, setGeneratedSourcesByFileId] = useState<Record<string, StreamSource[]>>({});
   const [sourcesBubbleClosedByFileId, setSourcesBubbleClosedByFileId] = useState<Record<string, boolean>>({});
-  const [thinkingQueueByFileId, setThinkingQueueByFileId] = useState<Record<string, string[]>>({});
-  const [thinkingVisibleLinesByFileId, setThinkingVisibleLinesByFileId] = useState<Record<string, string[]>>({});
+  const [thinkingEventsByFileId, setThinkingEventsByFileId] = useState<Record<string, ThinkingFeedEvent[]>>({});
   const [thinkingBubbleClosedByFileId, setThinkingBubbleClosedByFileId] = useState<Record<string, boolean>>({});
   const [thinkingStatusByFileId, setThinkingStatusByFileId] = useState<Record<string, ThinkingStatus>>({});
-  const [thinkingIsFadingByFileId, setThinkingIsFadingByFileId] = useState<Record<string, boolean>>({});
+  const [thinkingPhaseByFileId, setThinkingPhaseByFileId] = useState<Record<string, ThinkingPhase>>({});
+  const [thinkingAttemptByFileId, setThinkingAttemptByFileId] = useState<Record<string, number | undefined>>({});
+  const [thinkingMaxAttemptsByFileId, setThinkingMaxAttemptsByFileId] = useState<Record<string, number | undefined>>({});
+  const [thinkingStartedAtByFileId, setThinkingStartedAtByFileId] = useState<Record<string, number | undefined>>({});
+  const [thinkingClockTick, setThinkingClockTick] = useState(0);
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const [canUndoByFileId, setCanUndoByFileId] = useState<Record<string, boolean>>({});
   const [canRedoByFileId, setCanRedoByFileId] = useState<Record<string, boolean>>({});
   const thinkingCloseTimerByFileIdRef = useRef<Record<string, number | null>>({});
-  const thinkingFadeTimerByFileIdRef = useRef<Record<string, number | null>>({});
-  const thinkingSwapInFlightByFileIdRef = useRef<Record<string, boolean>>({});
   const originalTextByFileIdRef = useRef<Record<string, string | null>>({});
   const preGenerateVisibleTextByFileIdRef = useRef<Record<string, string | null>>({});
   const suppressOnChangeRef = useRef(0);
@@ -324,57 +331,42 @@ export function EditorPane() {
     }
   };
 
-  const clearThinkingFadeTimer = (fileId: string) => {
-    const timer = thinkingFadeTimerByFileIdRef.current[fileId];
-    if (timer) {
-      window.clearTimeout(timer);
-      thinkingFadeTimerByFileIdRef.current[fileId] = null;
-    }
-  };
-
   const metadataSyntax = useMemo(() => {
     const withFrontmatterOnly = composeMarkdown(frontmatter, '');
     const match = withFrontmatterOnly.match(/^---\n([\s\S]*?)\n---\n?$/);
     return match ? match[1] : '';
   }, [frontmatter]);
 
-  const processThinkingQueue = (fileId: string) => {
-    if (thinkingSwapInFlightByFileIdRef.current[fileId]) return;
-    const queue = thinkingQueueByFileId[fileId] ?? [];
-    if (queue.length === 0) return;
-    const visible = thinkingVisibleLinesByFileId[fileId] ?? [];
-    const swapVisible = () => {
-      setThinkingQueueByFileId((current) => {
-        const currentQueue = current[fileId] ?? [];
-        if (currentQueue.length === 0) return current;
-        const nextLines = currentQueue.slice(0, THINKING_VISIBLE_LINE_LIMIT);
-        const remaining = currentQueue.slice(THINKING_VISIBLE_LINE_LIMIT);
-        setThinkingVisibleLinesByFileId((lines) => ({ ...lines, [fileId]: nextLines }));
-        return { ...current, [fileId]: remaining };
-      });
+  const deriveThinkingPhase = (eventType: ThinkingEvent['type']): ThinkingPhase => {
+    if (eventType === 'reasoning') return 'reasoning';
+    if (eventType === 'tool_call_started') return 'tool_running';
+    if (eventType === 'tool_call_result') return 'tool_completed';
+    return 'tool_failed';
+  };
+
+  const extractAttemptData = (event: ThinkingEvent): { attempt?: number; maxAttempts?: number } => {
+    const raw = event.raw as Record<string, unknown>;
+    const attemptCandidates = [raw.attempt, raw.pass, raw.passIndex, raw.pass_index];
+    const maxCandidates = [raw.maxAttempts, raw.max_attempts, raw.totalPasses, raw.total_passes];
+    const attempt = attemptCandidates.find((value) => typeof value === 'number' && Number.isFinite(value));
+    const maxAttempts = maxCandidates.find((value) => typeof value === 'number' && Number.isFinite(value));
+    return {
+      attempt: typeof attempt === 'number' ? attempt : undefined,
+      maxAttempts: typeof maxAttempts === 'number' ? maxAttempts : undefined,
     };
-    if (visible.length === 0) {
-      swapVisible();
-      return;
-    }
-    thinkingSwapInFlightByFileIdRef.current[fileId] = true;
-    setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: true }));
-    clearThinkingFadeTimer(fileId);
-    thinkingFadeTimerByFileIdRef.current[fileId] = window.setTimeout(() => {
-      swapVisible();
-      setThinkingIsFadingByFileId((current) => ({ ...current, [fileId]: false }));
-      thinkingSwapInFlightByFileIdRef.current[fileId] = false;
-    }, THINKING_FADE_MS);
   };
 
   useEffect(() => {
-    if (!file?.id) return;
-    processThinkingQueue(file.id);
-  }, [file?.id, thinkingQueueByFileId, thinkingVisibleLinesByFileId]);
+    const hasRunning = Object.values(thinkingStatusByFileId).some((status) => status === 'running');
+    if (!hasRunning) return;
+    const timer = window.setInterval(() => {
+      setThinkingClockTick((tick) => tick + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [thinkingStatusByFileId]);
 
   useEffect(() => () => {
     Object.keys(thinkingCloseTimerByFileIdRef.current).forEach(clearThinkingCloseTimer);
-    Object.keys(thinkingFadeTimerByFileIdRef.current).forEach(clearThinkingFadeTimer);
   }, []);
 
 
@@ -389,10 +381,15 @@ export function EditorPane() {
   const canUndo = canUndoByFileId[file.id] ?? false;
   const canRedo = canRedoByFileId[file.id] ?? false;
   const isSourcesBubbleClosed = sourcesBubbleClosedByFileId[file.id] ?? false;
-  const thinkingVisibleLines = thinkingVisibleLinesByFileId[file.id] ?? [];
+  const thinkingEvents = thinkingEventsByFileId[file.id] ?? [];
   const isThinkingBubbleClosed = thinkingBubbleClosedByFileId[file.id] ?? false;
   const thinkingStatus = thinkingStatusByFileId[file.id] ?? 'idle';
-  const thinkingIsFading = thinkingIsFadingByFileId[file.id] ?? false;
+  const thinkingPhase = thinkingPhaseByFileId[file.id] ?? 'waiting';
+  const thinkingAttempt = thinkingAttemptByFileId[file.id];
+  const thinkingMaxAttempts = thinkingMaxAttemptsByFileId[file.id];
+  const thinkingStartedAt = thinkingStartedAtByFileId[file.id];
+  const elapsedSeconds = thinkingStartedAt && thinkingStatus === 'running' ? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000)) : 0;
+  void thinkingClockTick;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
 
   const extractDomainsFromUnknown = (value: unknown, output: Set<string>) => {
@@ -438,6 +435,12 @@ export function EditorPane() {
       return toolName ? `${toolName} failed` : 'Tool failed';
     }
     return null;
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mm = Math.floor(seconds / 60);
+    const ss = seconds % 60;
+    return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
   };
 
   const getLineText = () => {
@@ -896,15 +899,15 @@ export function EditorPane() {
     preGenerateVisibleTextByFileIdRef.current[targetFileId] = preGenerateVisibleText;
     pendingHistoryBaselineByFileIdRef.current[targetFileId] = null;
     clearThinkingCloseTimer(targetFileId);
-    clearThinkingFadeTimer(targetFileId);
-    thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
     setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: [] }));
     setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
-    setThinkingQueueByFileId((current) => ({ ...current, [file.id]: [] }));
-    setThinkingVisibleLinesByFileId((current) => ({ ...current, [file.id]: [] }));
+    setThinkingEventsByFileId((current) => ({ ...current, [file.id]: [] }));
     setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
     setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'running' }));
-    setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
+    setThinkingPhaseByFileId((current) => ({ ...current, [file.id]: 'waiting' }));
+    setThinkingAttemptByFileId((current) => ({ ...current, [file.id]: undefined }));
+    setThinkingMaxAttemptsByFileId((current) => ({ ...current, [file.id]: undefined }));
+    setThinkingStartedAtByFileId((current) => ({ ...current, [file.id]: Date.now() }));
     setSearchWarningMessage(null);
     try {
       const outputText = await startGenerate(targetFileId, {
@@ -934,10 +937,24 @@ export function EditorPane() {
         },
         onThinkingEvent: (event) => {
           const normalized = normalizeThinkingEvent(event);
+          const { attempt, maxAttempts } = extractAttemptData(event);
+          setThinkingPhaseByFileId((current) => ({ ...current, [targetFileId]: deriveThinkingPhase(event.type) }));
+          if (typeof attempt === 'number') {
+            setThinkingAttemptByFileId((current) => ({ ...current, [targetFileId]: attempt }));
+          }
+          if (typeof maxAttempts === 'number') {
+            setThinkingMaxAttemptsByFileId((current) => ({ ...current, [targetFileId]: maxAttempts }));
+          }
           if (!normalized) return;
-          setThinkingQueueByFileId((current) => {
+          setThinkingEventsByFileId((current) => {
             const existing = current[targetFileId] ?? [];
-            return { ...current, [targetFileId]: [...existing, normalized] };
+            return {
+              ...current,
+              [targetFileId]: [
+                ...existing,
+                { id: `${Date.now()}-${existing.length}-${event.type}`, text: normalized, type: event.type },
+              ].slice(-THINKING_EVENT_HISTORY_LIMIT),
+            };
           });
         },
       });
@@ -1001,10 +1018,7 @@ export function EditorPane() {
         }
         setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'cancelled' }));
         clearThinkingCloseTimer(targetFileId);
-        clearThinkingFadeTimer(targetFileId);
-        thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
         setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
-        setThinkingIsFadingByFileId((current) => ({ ...current, [targetFileId]: false }));
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
         const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
@@ -1024,10 +1038,7 @@ export function EditorPane() {
         }
         setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'cancelled' }));
         clearThinkingCloseTimer(targetFileId);
-        clearThinkingFadeTimer(targetFileId);
-        thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
         setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
-        setThinkingIsFadingByFileId((current) => ({ ...current, [targetFileId]: false }));
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
@@ -1101,12 +1112,25 @@ export function EditorPane() {
               </button>
             </div>
           )}
-          {thinkingVisibleLines.length > 0 && !isThinkingBubbleClosed && (
-            <div className={`mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900 transition-opacity duration-1000 ${thinkingIsFading ? 'opacity-0' : 'opacity-100'}`}>
+          {(thinkingEvents.length > 0 || thinkingStatus === 'running') && !isThinkingBubbleClosed && (
+            <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
               <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div>
                   <p className="font-semibold text-indigo-900">Thinking</p>
-                  <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingStatus}</span>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingStatus}</span>
+                    <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingPhase}</span>
+                    {typeof thinkingAttempt === 'number' && typeof thinkingMaxAttempts === 'number' && (
+                      <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                        pass {thinkingAttempt}/{thinkingMaxAttempts}
+                      </span>
+                    )}
+                    {thinkingStatus === 'running' && (
+                      <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                        elapsed {formatDuration(elapsedSeconds)}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -1121,11 +1145,14 @@ export function EditorPane() {
                   <X size={12} />
                 </button>
               </div>
-              <ul className="mt-1 list-disc space-y-1 pl-4">
-                {thinkingVisibleLines.slice(0, THINKING_VISIBLE_LINE_LIMIT).map((line, index) => (
-                  <li key={`${line}-${index}`}>{line}</li>
+              <div className="mt-2 space-y-1">
+                {thinkingEvents.slice(-THINKING_VISIBLE_LINE_LIMIT).map((event) => (
+                  <div key={event.id} className="flex items-start gap-2 rounded-sm bg-white/60 px-2 py-1">
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                    <span className="leading-4">{event.text}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
           {searchWarningMessage && (
