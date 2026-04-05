@@ -1997,3 +1997,95 @@ test('reset-context clears summary snapshot without deleting message history', a
   assert.equal(payload.messages.some((message) => message.content.includes('Context summary reset by user.')), true);
   assert.equal(payload.messages.some((message) => message.content.includes('before reset')), true);
 });
+
+test('chat settings precedence applies immediately and profile reload is reflected on next message', async () => {
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: { max_context_messages: 2, summarize_after_messages: 99, include_pinned_memory: true },
+    profile: { persona: 'detailed' },
+  });
+
+  const initialSettings = await callRoute('GET', '/api/chat/settings');
+  assert.equal(initialSettings.status, 200);
+  const initialPayload = JSON.parse(initialSettings.body) as {
+    policy?: { max_context_messages?: number; summarize_after_messages?: number; include_pinned_memory?: boolean };
+    profile?: { persona?: string; reloaded_at?: string };
+  };
+  assert.equal(initialPayload.policy?.max_context_messages, 2);
+  assert.equal(initialPayload.profile?.persona, 'detailed');
+
+  const reloadResponse = await callRoute('POST', '/api/chat/profile/reload');
+  assert.equal(reloadResponse.status, 200);
+  const reloaded = JSON.parse(reloadResponse.body) as { profile?: { persona?: string; reloaded_at?: string } };
+  assert.equal(reloaded.profile?.persona, 'detailed');
+  assert.equal(typeof reloaded.profile?.reloaded_at, 'string');
+
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+
+  const originalGenerate = providerRegistry.ollama.generate;
+  const seenInputPrompts: string[] = [];
+  providerRegistry.ollama.generate = async (request) => {
+    seenInputPrompts.push(request.inputText);
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'verify immediate settings' });
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+
+  const latestPrompt = seenInputPrompts.at(-1) ?? '';
+  assert.match(latestPrompt, /\[PROFILE\]/);
+  assert.match(latestPrompt, /"persona":"detailed"/);
+  assert.match(latestPrompt, /"reloaded_at":/);
+  assert.match(latestPrompt, /\[USER_INPUT\]\nverify immediate settings/);
+});
+
+test('chat purge range and export stay consistent after purge-all', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generate = async () => ({ outputText: 'reply', latencyMs: 1 });
+
+  try {
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'purge target 1' });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'purge target 2' });
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+
+  const exportBefore = await callRoute('GET', '/api/chat/session/current/export?format=json');
+  assert.equal(exportBefore.status, 200);
+  const exportBeforePayload = JSON.parse(exportBefore.body) as { messages?: unknown[] };
+  assert.equal((exportBeforePayload.messages?.length ?? 0) >= 4, true);
+
+  const purge7d = await callRoute('DELETE', '/api/chat/session/current/history?range=7d');
+  assert.equal(purge7d.status, 200);
+  const purge7dPayload = JSON.parse(purge7d.body) as { deletedMessages?: number };
+  assert.equal((purge7dPayload.deletedMessages ?? 0) >= 4, true);
+
+  const exportAfter = await callRoute('GET', '/api/chat/session/current/export?format=json');
+  assert.equal(exportAfter.status, 200);
+  const exportAfterPayload = JSON.parse(exportAfter.body) as { messages?: unknown[]; pending_actions?: unknown[] };
+  assert.equal((exportAfterPayload.messages?.length ?? 0), 0);
+  assert.equal((exportAfterPayload.pending_actions?.length ?? 0), 0);
+});
