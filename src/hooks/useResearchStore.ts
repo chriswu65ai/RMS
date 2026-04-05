@@ -72,6 +72,12 @@ export type DraftEntry = {
   source: DraftSource;
   updatedAt: number;
 };
+export type HistoryEntry = {
+  undoStack: string[];
+  redoStack: string[];
+  lastText: string;
+  updatedAt: number;
+};
 export type GenerateJobStatus = 'idle' | 'running' | 'completed' | 'failed';
 export type GenerateJob = {
   status: GenerateJobStatus;
@@ -116,6 +122,7 @@ type Store = {
   metadataPanelCollapsed: boolean;
   editorTab: EditorTab;
   draftByFileId: Record<string, DraftEntry>;
+  historyByFileId: Record<string, HistoryEntry>;
   generateJobsByFileId: Record<string, GenerateJob>;
   unsavedFileIds: string[];
   loading: boolean;
@@ -135,6 +142,9 @@ type Store = {
   setDraft: (fileId: string, draftPayload: DraftEntry) => void;
   clearDraft: (fileId: string) => void;
   getDraft: (fileId: string) => DraftEntry | null;
+  setHistoryEntry: (fileId: string, historyPayload: HistoryEntry) => void;
+  clearHistoryEntry: (fileId: string) => void;
+  getHistoryEntry: (fileId: string) => HistoryEntry | null;
   markGenerateRunning: (fileId: string) => void;
   completeGenerate: (fileId: string, outputText: string) => DraftEntry | null;
   markGenerateFailed: (fileId: string, error?: string) => void;
@@ -230,6 +240,7 @@ export const useResearchStore = create<Store>()(
       metadataPanelCollapsed: false,
       editorTab: 'split',
       draftByFileId: {},
+      historyByFileId: {},
       generateJobsByFileId: {},
       loading: false,
       error: null,
@@ -260,12 +271,26 @@ export const useResearchStore = create<Store>()(
       clearDraft: (fileId) => set((state) => {
         if (!state.draftByFileId[fileId]) return state;
         const { [fileId]: _removed, ...rest } = state.draftByFileId;
+        const { [fileId]: _historyRemoved, ...remainingHistory } = state.historyByFileId;
         return {
           draftByFileId: rest,
+          historyByFileId: remainingHistory,
           unsavedFileIds: deriveUnsavedFileIds(state.files, rest),
         };
       }),
       getDraft: (fileId) => get().draftByFileId[fileId] ?? null,
+      setHistoryEntry: (fileId, historyPayload) => set((state) => ({
+        historyByFileId: {
+          ...state.historyByFileId,
+          [fileId]: historyPayload,
+        },
+      })),
+      clearHistoryEntry: (fileId) => set((state) => {
+        if (!state.historyByFileId[fileId]) return state;
+        const { [fileId]: _removed, ...rest } = state.historyByFileId;
+        return { historyByFileId: rest };
+      }),
+      getHistoryEntry: (fileId) => get().historyByFileId[fileId] ?? null,
       markGenerateRunning: (fileId) => set((state) => ({
         generateJobsByFileId: {
           ...state.generateJobsByFileId,
@@ -490,6 +515,7 @@ export const useResearchStore = create<Store>()(
           selectedTag: null,
           search: '',
           draftByFileId: {},
+          historyByFileId: {},
           generateJobsByFileId: {},
           unsavedFileIds: [],
           loading: false,
@@ -522,6 +548,7 @@ export const useResearchStore = create<Store>()(
         editorTab: state.editorTab,
         selectedTicker: state.selectedTicker,
         draftByFileId: state.draftByFileId,
+        historyByFileId: state.historyByFileId,
         generateJobsByFileId: state.generateJobsByFileId,
         agentModelsByProvider: state.agentModelsByProvider,
         agentCatalogStatusByProvider: state.agentCatalogStatusByProvider,
