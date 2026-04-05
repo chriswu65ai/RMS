@@ -11,6 +11,7 @@ import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType, getNoteTypeSelectOptions } from './noteTypeOptions';
 import { formatLocalDateTime } from '../../lib/time';
+import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -234,7 +235,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
     const type = getCreateNoteType(task.note_type, noteTypes);
     const date = toLocalDateInputValue();
-    const name = buildCanonicalStockFileName(date, ticker, type);
+    const baseName = buildCanonicalStockFileName(date, ticker, type);
     let targetFolder = preview.selectedFolder ?? preview.tickerFolder;
 
     if (preview.needsFolderCreation) {
@@ -249,7 +250,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       if (!targetFolder) return setError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
     }
 
-    const existing = files.find((file) => !file.is_template && file.name === name && file.folder_id === (targetFolder?.id ?? null));
+    const existing = files.find((file) => !file.is_template && file.name === `${baseName}.md` && file.folder_id === (targetFolder?.id ?? null));
 
     if (existing) {
       const linkedOwner = taskByLinkedFileId.get(existing.id);
@@ -257,11 +258,12 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         setError(`A different task is already linked to ${existing.path}. Keep task↔note links one-to-one by creating a new note.`);
         return;
       }
-      const updatedTask = await updateNewResearchTask(task.id, { ...task, linked_note_file_id: existing.id, linked_note_path: existing.path });
-      setTasks((prev) => prev.map((item) => (item.id === task.id ? updatedTask : item)));
-      openLinkedNote(updatedTask);
-      return;
     }
+    const name = resolveUniqueMarkdownFileName(
+      baseName,
+      files.filter((file) => !file.is_template),
+      targetFolder?.id ?? null,
+    );
 
     const taskContext = task.details || task.title || '-';
     const template = matchingTemplateForType(type);
