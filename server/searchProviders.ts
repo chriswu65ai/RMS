@@ -75,14 +75,20 @@ const dedupeByCanonicalUrl = (results: SearchResult[]): SearchResult[] => {
   return deduped;
 };
 
+const normalizeDomainHost = (value: string): string => value
+  .trim()
+  .toLowerCase()
+  .replace(/^(?:www\d*|m)\./, '')
+  .replace(/\.+$/, '');
+
 const applyDomainPolicy = (results: SearchResult[], policy: SearchPolicy, domainList: string[] = []): SearchResult[] => {
   if (domainList.length === 0 || policy === 'open_web') return results;
-  const allowedDomains = new Set(domainList.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  const allowedDomains = new Set(domainList.map((entry) => normalizeDomainHost(entry)).filter(Boolean));
   const allowedDomainList = Array.from(allowedDomains);
 
   return results.filter((result) => {
     try {
-      const hostname = new URL(result.url).hostname.toLowerCase();
+      const hostname = normalizeDomainHost(new URL(result.url).hostname);
       const matched = allowedDomainList.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
       return policy === 'only_list' ? matched : true;
     } catch {
@@ -95,7 +101,7 @@ const applyDomainBoosts = (results: SearchResult[], boostMap: Record<string, num
   if (Object.keys(boostMap).length === 0) return results;
   const normalizedBoosts = new Map<string, number>(
     Object.entries(boostMap)
-      .map(([domain, value]) => [domain.trim().toLowerCase(), value] as const)
+      .map(([domain, value]) => [normalizeDomainHost(domain), value] as const)
       .filter(([domain, value]) => domain.length > 0 && Number.isFinite(value)),
   );
 
@@ -103,7 +109,7 @@ const applyDomainBoosts = (results: SearchResult[], boostMap: Record<string, num
     .map((result, index) => {
       let boost = 0;
       try {
-        const hostname = new URL(result.url).hostname.toLowerCase();
+        const hostname = normalizeDomainHost(new URL(result.url).hostname);
         for (const [domain, value] of Array.from(normalizedBoosts.entries())) {
           if (hostname === domain || hostname.endsWith(`.${domain}`)) {
             boost = Math.max(boost, value);

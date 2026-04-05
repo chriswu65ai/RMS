@@ -412,14 +412,14 @@ test('preferred sources create normalizes domain and supports listing', async ()
   });
   assert.equal(createResponse.status, 200);
   const created = JSON.parse(createResponse.body) as { domain: string; weight: number; enabled: boolean };
-  assert.equal(created.domain, 'www.example.com');
+  assert.equal(created.domain, 'example.com');
   assert.equal(created.weight, 25);
   assert.equal(created.enabled, true);
 
   const listResponse = await callRoute('GET', '/api/agent/preferred-sources');
   assert.equal(listResponse.status, 200);
   const listPayload = JSON.parse(listResponse.body) as Array<{ domain: string }>;
-  assert.equal(listPayload.some((item) => item.domain === 'www.example.com'), true);
+  assert.equal(listPayload.some((item) => item.domain === 'example.com'), true);
 });
 
 test('preferred sources validate domain, weight, and uniqueness', async () => {
@@ -436,6 +436,13 @@ test('preferred sources validate domain, weight, and uniqueness', async () => {
   assert.equal(firstCreate.status, 200);
   const duplicateCreate = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'DUPLICATE.EXAMPLE.COM' });
   assert.equal(duplicateCreate.status, 409);
+
+  const withProtocolPathPort = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'https://www.pref-source.example.com:8443/research/report?x=1#section',
+  });
+  assert.equal(withProtocolPathPort.status, 200);
+  const normalized = JSON.parse(withProtocolPathPort.body) as { domain: string };
+  assert.equal(normalized.domain, 'pref-source.example.com');
 });
 
 test('preferred sources patch and delete endpoints update rows', async () => {
