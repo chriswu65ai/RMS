@@ -1,9 +1,10 @@
 import { isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { Transaction } from '@codemirror/state';
+import { openSearchPanel } from '@codemirror/search';
 import { EditorView, keymap } from '@codemirror/view';
 import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck';
 import CodeMirror from '@uiw/react-codemirror';
-import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
+import { Copy, Download, Link2, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
@@ -72,6 +73,55 @@ export const redoHistorySnapshot = (history: EditorHistorySnapshot): { history: 
   };
 };
 
+const URL_LIKE_PATTERN = /^(https?:\/\/|www\.)\S+$/i;
+
+export const isUrlLikeSelection = (value: string) => URL_LIKE_PATTERN.test(value.trim());
+
+export const deriveLinkLabelFromUrl = (value: string) => {
+  try {
+    const normalized = value.startsWith('http://') || value.startsWith('https://') ? value : `https://${value}`;
+    const parsed = new URL(normalized);
+    const cleanPath = parsed.pathname.replace(/\/$/, '');
+    const pathSuffix = cleanPath && cleanPath !== '/' ? cleanPath.split('/').slice(-1)[0] : '';
+    return pathSuffix ? `${parsed.hostname}/${pathSuffix}` : parsed.hostname;
+  } catch {
+    return 'link';
+  }
+};
+
+export const getTableSizeError = (raw: string, label: 'Rows' | 'Columns') => {
+  if (!/^\d+$/.test(raw.trim())) return `${label} must be an integer from 1 to 20.`;
+  const parsed = Number.parseInt(raw, 10);
+  if (parsed < 1 || parsed > 20) return `${label} must be between 1 and 20.`;
+  return null;
+};
+
+export const buildMarkdownTable = (rows: number, cols: number) => {
+  const header = `| ${Array.from({ length: cols }, (_, i) => `Col ${i + 1}`).join(' | ')} |`;
+  const sep = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`;
+  const bodyRows = Array.from({ length: rows }, () => `| ${Array.from({ length: cols }, () => ' ').join(' | ')} |`).join('\n');
+  return `${header}\n${sep}\n${bodyRows}`;
+};
+
+export const EDITOR_SHORTCUT_KEYS = {
+  undo: ['Mod-z'],
+  redo: ['Mod-Shift-z', 'Ctrl-y'],
+  save: ['Mod-s'],
+  bold: ['Mod-b'],
+  italic: ['Mod-i'],
+  h1: ['Mod-Alt-1'],
+  h2: ['Mod-Alt-2'],
+  h3: ['Mod-Alt-3'],
+  link: ['Mod-k'],
+  editTab: ['Mod-Shift-e'],
+  previewTab: ['Mod-Shift-p'],
+  splitTab: ['Mod-Shift-\\'],
+  find: ['Mod-f'],
+  replace: ['Mod-h'],
+  generate: ['Mod-Enter'],
+  cancelGenerate: ['Escape'],
+} as const;
+
 export function EditorPane() {
   const {
     files,
@@ -101,6 +151,9 @@ export function EditorPane() {
   const viewFileIdRef = useRef<string | null>(null);
   const selectedFileIdRef = useRef<string | null>(selectedFileId);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [tableDialogOpen, setTableDialogOpen] = useState(false);
+  const [tableRowsInput, setTableRowsInput] = useState('3');
+  const [tableColumnsInput, setTableColumnsInput] = useState('3');
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
   const [linkedTask, setLinkedTask] = useState<NewResearchTask | null>(null);
@@ -423,6 +476,54 @@ export function EditorPane() {
     });
     view.focus();
   };
+
+  const insertLink = async () => {
+    const selectedText = getSelectedText();
+    const hasSelection = selectedText.length > 0;
+
+    if (hasSelection && !isUrlLikeSelection(selectedText)) {
+      const url = await dialog.prompt('Insert link', '', 'URL');
+      if (url === null) return;
+      const replacement = `[${selectedText}](${url})`;
+      if (!url.trim()) {
+        applySelection(replacement, replacement.length - 1, replacement.length - 1);
+        return;
+      }
+      insertAndMoveCaretRight(replacement);
+      return;
+    }
+
+    if (hasSelection && isUrlLikeSelection(selectedText)) {
+      const defaultLabel = deriveLinkLabelFromUrl(selectedText);
+      const label = await dialog.prompt('Insert link', defaultLabel, 'Label');
+      if (label === null) return;
+      insertAndMoveCaretRight(`[${label || defaultLabel}](${selectedText})`);
+      return;
+    }
+
+    const label = await dialog.prompt('Insert link', 'link text', 'Label');
+    if (label === null) return;
+    const url = await dialog.prompt('Insert link', '', 'URL');
+    if (url === null) return;
+    const nextLabel = label || 'link text';
+    const replacement = `[${nextLabel}](${url})`;
+    if (!url.trim()) {
+      applySelection(replacement, replacement.length - 1, replacement.length - 1);
+      return;
+    }
+    insertAndMoveCaretRight(replacement);
+  };
+
+  const openTableDialog = () => {
+    setTableRowsInput('3');
+    setTableColumnsInput('3');
+    setTableDialogOpen(true);
+  };
+
+  const rowsError = getTableSizeError(tableRowsInput, 'Rows');
+  const columnsError = getTableSizeError(tableColumnsInput, 'Columns');
+  const tableDialogError = rowsError ?? columnsError;
+  const canInsertTable = tableDialogError === null;
 
   const toggleWrap = (token: string, fallback: string) => {
     const view = viewRef.current;
@@ -747,6 +848,40 @@ export function EditorPane() {
     window.location.href = `mailto:?subject=${subject}&body=${bodyText}`;
   };
 
+  const onSave = async () => {
+    const { error } = await updateFile(file.id, {
+      content: merged,
+      frontmatter_json: frontmatter,
+      is_template: !!frontmatter.template,
+    });
+    if (error) {
+      await dialog.alert('Save failed', error.message);
+      return;
+    }
+    clearDraft(file.id);
+    clearGenerateJob(file.id);
+    setShowGeneratedDraftNotice(false);
+    await refresh();
+  };
+
+  const switchToTab = (tab: 'edit' | 'split' | 'preview') => {
+    setEditorTab(tab);
+  };
+
+  const openFindPanel = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    openSearchPanel(view);
+    view.focus();
+  };
+
+  const openReplacePanelInEditor = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    openSearchPanel(view);
+    view.focus();
+  };
+
   const runGenerate = async () => {
     if (isGenerateRunning) return;
     if (!defaultModel.trim()) {
@@ -919,7 +1054,7 @@ export function EditorPane() {
                 <button
                   key={t.key}
                   className={`rounded-md px-3 py-1 text-xs ${editorTab === t.key ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}
-                  onClick={() => setEditorTab(t.key)}
+                  onClick={() => switchToTab(t.key)}
                 >
                   {t.label}
                 </button>
@@ -946,21 +1081,7 @@ export function EditorPane() {
               <button
                 className="inline-flex items-center rounded-md bg-slate-900 px-2 py-1 text-xs text-white disabled:opacity-50"
                 disabled={!dirty || isGenerateRunning}
-                onClick={async () => {
-                  const { error } = await updateFile(file.id, {
-                    content: merged,
-                    frontmatter_json: frontmatter,
-                    is_template: !!frontmatter.template,
-                  });
-                  if (error) {
-                    await dialog.alert('Save failed', error.message);
-                    return;
-                  }
-                  clearDraft(file.id);
-                  clearGenerateJob(file.id);
-                  setShowGeneratedDraftNotice(false);
-                  await refresh();
-                }}
+                onClick={() => void onSave()}
               >
                 <Save className="mr-1" size={14} />Save {dirty ? '*' : ''}
               </button>
@@ -1052,20 +1173,17 @@ export function EditorPane() {
             <button className={btn(active.hr)} onClick={toggleHorizontalRule}><Minus size={14} /></button>
             <button
               className="inline-flex items-center justify-center rounded border px-2 py-1 leading-none"
+              title="Link"
+              aria-label="Link"
+              onClick={() => void insertLink()}
+            >
+              <Link2 className="align-middle" size={14} />
+            </button>
+            <button
+              className="inline-flex items-center justify-center rounded border px-2 py-1 leading-none"
               title="Table"
               aria-label="Table"
-              onClick={async () => {
-                const r = await dialog.prompt('Insert table', '3', 'Rows');
-                if (!r) return;
-                const c = await dialog.prompt('Insert table', '3', 'Columns');
-                if (!c) return;
-                const rows = Math.max(1, Number.parseInt(r, 10) || 1);
-                const cols = Math.max(1, Number.parseInt(c, 10) || 1);
-                const header = `| ${Array.from({ length: cols }, (_, i) => `Col ${i + 1}`).join(' | ')} |`;
-                const sep = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`;
-                const bodyRows = Array.from({ length: rows }, () => `| ${Array.from({ length: cols }, () => ' ').join(' | ')} |`).join('\n');
-                insertAndMoveCaretRight(`${header}\n${sep}\n${bodyRows}`);
-              }}
+              onClick={openTableDialog}
             >
               <Table className="align-middle" size={14} />
             </button>
@@ -1087,9 +1205,30 @@ export function EditorPane() {
               extensions={[
                 ...editorExtensions,
                 keymap.of([
-                  { key: 'Mod-z', run: () => { onUndo(); return true; } },
-                  { key: 'Mod-Shift-z', run: () => { onRedo(); return true; } },
-                  { key: 'Mod-y', run: () => { onRedo(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.undo[0], run: () => { onUndo(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.redo[0], run: () => { onRedo(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.redo[1], run: () => { onRedo(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.save[0], run: () => { void onSave(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.bold[0], run: () => { toggleWrap('**', 'bold text'); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.italic[0], run: () => { toggleWrap('*', 'italic text'); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.h1[0], run: () => { toggleHeading(1); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.h2[0], run: () => { toggleHeading(2); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.h3[0], run: () => { toggleHeading(3); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.link[0], run: () => { void insertLink(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.editTab[0], run: () => { switchToTab('edit'); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.previewTab[0], run: () => { switchToTab('preview'); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.splitTab[0], run: () => { switchToTab('split'); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.find[0], run: () => { openFindPanel(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.replace[0], run: () => { openReplacePanelInEditor(); return true; } },
+                  { key: EDITOR_SHORTCUT_KEYS.generate[0], run: () => { void runGenerate(); return true; } },
+                  {
+                    key: EDITOR_SHORTCUT_KEYS.cancelGenerate[0],
+                    run: () => {
+                      if (!isGenerateRunning) return false;
+                      cancelGenerate();
+                      return true;
+                    },
+                  },
                 ]),
               ]}
               onCreateEditor={(view) => {
@@ -1196,6 +1335,54 @@ export function EditorPane() {
         }}
         viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.title || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
       />
+
+      {tableDialogOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+            <h3 className="text-sm font-semibold">Insert table</h3>
+            <div className="mt-3 flex items-center gap-2">
+              <label className="text-sm text-slate-600" htmlFor="table-rows-input">Rows</label>
+              <input
+                id="table-rows-input"
+                className="input"
+                inputMode="numeric"
+                autoFocus
+                value={tableRowsInput}
+                onChange={(event) => setTableRowsInput(event.target.value)}
+                aria-label="Rows"
+              />
+              <span className="text-sm text-slate-500">x</span>
+              <input
+                id="table-columns-input"
+                className="input"
+                inputMode="numeric"
+                value={tableColumnsInput}
+                onChange={(event) => setTableColumnsInput(event.target.value)}
+                aria-label="Columns"
+              />
+              <label className="text-sm text-slate-600" htmlFor="table-columns-input">Columns</label>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Rows × Columns (1..20 each)</p>
+            {tableDialogError && <p className="mt-2 text-sm text-red-600">{tableDialogError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="rounded-md border border-slate-300 px-3 py-1.5 text-sm" onClick={() => setTableDialogOpen(false)}>Cancel</button>
+              <button
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!canInsertTable}
+                onClick={() => {
+                  if (!canInsertTable) return;
+                  const rows = Number.parseInt(tableRowsInput, 10);
+                  const cols = Number.parseInt(tableColumnsInput, 10);
+                  insertAndMoveCaretRight(buildMarkdownTable(rows, cols));
+                  setTableDialogOpen(false);
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {emojiOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4">
