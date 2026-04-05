@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { providerRegistry } from './agentProviders.js';
-import { searchProviderRegistry } from './searchProviders.js';
+import { searchProviderRegistry, searchUtils } from './searchProviders.js';
 
 type RouteHandler = (req: Readable & { method?: string; url?: string; on: (event: string, cb: () => void) => void }, res: MockResponse) => Promise<boolean>;
 
@@ -79,33 +79,51 @@ const withOpenAiToolCalls = async <T>(
   queries: string[],
   callback: () => Promise<T>,
 ): Promise<T> => {
-  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
-  const originalFollowup = providerRegistry.openai.generateToolFollowupTurn;
-  providerRegistry.openai.generateToolFirstTurn = async () => ({
+  return withProviderToolCalls('openai', queries.map((query) => ({ query })), callback);
+};
+
+const withProviderToolCalls = async <T>(
+  provider: 'openai' | 'minimax' | 'ollama',
+  toolArguments: Array<Record<string, unknown> | null>,
+  callback: () => Promise<T>,
+): Promise<T> => {
+  const originalFirst = providerRegistry[provider].generateToolFirstTurn;
+  const originalFollowup = providerRegistry[provider].generateToolFollowupTurn;
+  providerRegistry[provider].generateToolFirstTurn = async () => ({
     outputText: '',
     latencyMs: 1,
-    toolCalls: queries[0]
-      ? [{ id: 'tool-1', name: 'web_search', arguments: { query: queries[0] } }]
+    toolCalls: toolArguments[0]
+      ? [{ id: 'tool-1', name: 'web_search', arguments: toolArguments[0] }]
       : [],
   });
-  providerRegistry.openai.generateToolFollowupTurn = async (request) => {
+  providerRegistry[provider].generateToolFollowupTurn = async (request) => {
     const index = request.toolResults.length;
-    const nextQuery = queries[index];
+    const nextArguments = toolArguments[index];
     return {
       outputText: '',
       latencyMs: 1,
-      toolCalls: nextQuery
-        ? [{ id: `tool-${index + 1}`, name: 'web_search', arguments: { query: nextQuery } }]
+      toolCalls: nextArguments
+        ? [{ id: `tool-${index + 1}`, name: 'web_search', arguments: nextArguments }]
         : [],
     };
   };
   try {
     return await callback();
   } finally {
-    providerRegistry.openai.generateToolFirstTurn = originalFirst;
-    providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
+    providerRegistry[provider].generateToolFirstTurn = originalFirst;
+    providerRegistry[provider].generateToolFollowupTurn = originalFollowup;
   }
 };
+
+const withMinimaxToolCalls = async <T>(
+  toolArguments: Array<Record<string, unknown> | null>,
+  callback: () => Promise<T>,
+): Promise<T> => withProviderToolCalls('minimax', toolArguments, callback);
+
+const withOllamaToolCalls = async <T>(
+  toolArguments: Array<Record<string, unknown> | null>,
+  callback: () => Promise<T>,
+): Promise<T> => withProviderToolCalls('ollama', toolArguments, callback);
 
 test('saving ollama defaults keeps default_model and local_connection.model in sync', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {
@@ -964,6 +982,154 @@ test('agent generate forwards web search controls for duckduckgo and searxng pro
     searchProviderRegistry.duckduckgo.search = originalDuckSearch;
     searchProviderRegistry.searxng.search = originalSearxngSearch;
     providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('minimax web search prefer_list forwards preferred list/boost and blocks model override args', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.minimax.generate;
+  const seenSearchOptions: Array<Record<string, unknown>> = [];
+
+  providerRegistry.minimax.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  searchProviderRegistry.duckduckgo.search = async (_query, options) => {
+    seenSearchOptions.push({
+      policy: options?.policy,
+      domainList: options?.domainList,
+      domainBoost: options?.domainBoost,
+    });
+    return [{ title: 'trusted', url: 'https://trusted.example/report', snippet: 'trusted', provider: 'duckduckgo' }];
+  };
+
+  try {
+    await callRoute('DELETE', '/api/agent/activity-log');
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/minimax', { api_key: 'mm-test' });
+    assert.equal(credentialSave.status, 200);
+    assert.equal((await callRoute('POST', '/api/agent/preferred-sources', { domain: 'trusted-minimax.example', weight: 90 })).status, 200);
+    assert.equal((await callRoute('POST', '/api/agent/preferred-sources', { domain: 'another-minimax.example', weight: 40 })).status, 200);
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'minimax',
+      default_model: 'MiniMax-M2.5',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          provider: 'duckduckgo',
+          mode: 'single',
+          max_results: 4,
+          timeout_ms: 3000,
+          domain_policy: 'prefer_list',
+        },
+      },
+    });
+
+    const response = await withMinimaxToolCalls([{
+      query: 'ACME guidance',
+      domain_policy: 'only_list',
+      domain_list: ['malicious.example'],
+      provider: 'searxng',
+    }], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'minimax',
+      model: 'MiniMax-M2.5',
+      input_text: 'ACME guidance',
+    }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(seenSearchOptions, [{
+      policy: 'prefer_list',
+      domainList: ['trusted-minimax.example', 'another-minimax.example'],
+      domainBoost: { 'trusted-minimax.example': 90, 'another-minimax.example': 40 },
+    }]);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    const started = frames.find((frame) => frame.type === 'tool_call_started') as { args?: Record<string, unknown> } | undefined;
+    assert.deepEqual(started?.args, {
+      query: 'ACME guidance',
+      mode: 'single',
+      max_results: 4,
+      recency: 'any',
+      safe_search: true,
+      domain_policy: 'prefer_list',
+      domain_list: ['trusted-minimax.example', 'another-minimax.example'],
+      provider: 'duckduckgo',
+      provider_config: {
+        searxng: {
+          base_url: 'http://localhost:8080',
+          use_json_api: true,
+        },
+      },
+    });
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.minimax.generate = originalGenerate;
+  }
+});
+
+test('ollama web search only_list enforces preferred-domain filtering and ignores model overrides', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.ollama.generate;
+  const seenSearchOptions: Array<Record<string, unknown>> = [];
+
+  providerRegistry.ollama.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  searchProviderRegistry.duckduckgo.search = async (_query, options) => {
+    seenSearchOptions.push({
+      policy: options?.policy,
+      domainList: options?.domainList,
+      domainBoost: options?.domainBoost,
+    });
+    const raw = [
+      { title: 'trusted', url: 'https://trusted-ollama.example/1', snippet: 'trusted', provider: 'duckduckgo' as const },
+      { title: 'blocked', url: 'https://untrusted.example/2', snippet: 'blocked', provider: 'duckduckgo' as const },
+    ];
+    return searchUtils.applyDomainPolicy(raw, options?.policy ?? 'open_web', options?.domainList ?? []);
+  };
+
+  try {
+    await callRoute('DELETE', '/api/agent/activity-log');
+    assert.equal((await callRoute('POST', '/api/agent/preferred-sources', { domain: 'trusted-ollama.example', weight: 55 })).status, 200);
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'ollama',
+      default_model: 'llama3.2:latest',
+      generation_params: {
+        local_connection: {
+          base_url: 'http://localhost:11434',
+          model: 'llama3.2:latest',
+          B: 1,
+        },
+        web_search: {
+          enabled: true,
+          provider: 'duckduckgo',
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+          domain_policy: 'only_list',
+        },
+      },
+    });
+
+    const response = await withOllamaToolCalls([{
+      query: 'Local model grounding',
+      domain_policy: 'open_web',
+      domain_list: ['bad.example'],
+      provider: 'searxng',
+    }], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'llama3.2:latest',
+      input_text: 'Local model grounding',
+    }));
+    assert.equal(response.status, 200);
+    assert.deepEqual(seenSearchOptions, [{
+      policy: 'only_list',
+      domainList: ['trusted-ollama.example'],
+      domainBoost: undefined,
+    }]);
+
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    const sourcesFrame = frames.find((frame) => frame.type === 'sources') as { sources?: Array<{ url?: string }> } | undefined;
+    assert.deepEqual(sourcesFrame?.sources?.map((entry) => entry.url), ['https://trusted-ollama.example/1']);
+    const started = frames.find((frame) => frame.type === 'tool_call_started') as { args?: Record<string, unknown> } | undefined;
+    assert.equal(started?.args?.domain_policy, 'only_list');
+    assert.deepEqual(started?.args?.domain_list, ['trusted-ollama.example']);
+    assert.equal(started?.args?.provider, 'duckduckgo');
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.ollama.generate = originalGenerate;
   }
 });
 
