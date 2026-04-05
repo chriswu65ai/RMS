@@ -599,7 +599,7 @@ export function AgentPage() {
                     const defaultProviderMatchesDraft = settings.default_provider === provider;
                     if (!defaultProviderMatchesDraft || !defaultModelMatchesDraft) {
                       setWebSearchStatusMessage(
-                        `Save default agent first. Web search validation uses the saved default provider/model (${providerLabel(settings.default_provider)} / ${settings.default_model.trim() || 'not selected'}), which differs from your current draft (${providerLabel(provider)} / ${draftModelForProvider || 'not selected'}).`,
+                        'Select an agent before saving web search settings.',
                       );
                       return;
                     }
