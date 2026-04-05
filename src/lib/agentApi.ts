@@ -181,6 +181,8 @@ export async function generateText(params: {
   provider: AgentProvider;
   model: string;
   noteId: string;
+  taskId?: string;
+  attachmentIds?: string[];
   inputText: string;
   triggerSource: TriggerSource;
   saveMode: SaveMode;
@@ -197,6 +199,8 @@ export async function generateText(params: {
       provider: params.provider,
       model: params.model,
       note_id: params.noteId,
+      task_id: params.taskId ?? '',
+      attachment_ids: params.attachmentIds ?? [],
       input_text: params.inputText,
       trigger_source: params.triggerSource,
       save_mode: params.saveMode,

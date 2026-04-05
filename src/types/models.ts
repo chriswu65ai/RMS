@@ -130,3 +130,29 @@ export type TaskActivityEvent = {
   description: string;
   created_at: string;
 };
+
+export type AttachmentLinkType = 'task' | 'note';
+
+export type Attachment = {
+  id: string;
+  workspace_id: string;
+  storage_relpath: string;
+  original_name: string;
+  mime_type: string;
+  extension: string;
+  size_bytes: number;
+  sha256: string;
+  estimated_tokens: number;
+  parse_status: 'parsed' | 'pending' | 'failed';
+  parsed_text: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export type AttachmentStorageSettings = {
+  quota_mb: number;
+  retention_days: number;
+  usage_bytes: number;
+  reclaimable_bytes: number;
+};

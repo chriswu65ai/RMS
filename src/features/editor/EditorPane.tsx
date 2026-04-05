@@ -130,6 +130,7 @@ export const EDITOR_SHORTCUT_KEYS = {
 
 export function EditorPane() {
   const {
+    workspace,
     files,
     selectedFileId,
     refresh,
@@ -1381,6 +1382,8 @@ export function EditorPane() {
           navigate('/tasks.html');
         }}
         viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.title || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
+        workspaceId={workspace?.id ?? ''}
+        noteId={file.id}
       />
 
       {tableDialogOpen && (

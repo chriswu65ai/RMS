@@ -271,6 +271,109 @@ test('ollama generate uses model selected in subsequent defaults save instead of
   }
 });
 
+test('attachments migration/init and upload/list flow work', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const taskCreate = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'MSFT',
+    title: 'Task with attachment',
+    details: 'x',
+    note_type: 'Research',
+    assignee: '',
+    priority: '',
+    deadline: '',
+    status: 'ideas',
+    date_completed: '',
+    archived: false,
+  });
+  const task = JSON.parse(taskCreate.body) as { id: string };
+  const csv = 'name,"comment"\nAlpha,"hello, world"\nBeta,"line1\nline2"';
+  const upload = await callRoute('POST', '/api/attachments/upload', {
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: task.id,
+    original_name: 'sample.csv',
+    mime_type: 'text/csv',
+    content_base64: Buffer.from(csv, 'utf8').toString('base64'),
+  });
+  assert.equal(upload.status, 200);
+  const uploaded = JSON.parse(upload.body) as { id: string; parse_status: string; parsed_text: string | null };
+  assert.equal(uploaded.parse_status, 'parsed');
+  assert.match(uploaded.parsed_text ?? '', /hello, world/);
+  assert.match(uploaded.parsed_text ?? '', /line1\nline2/);
+
+  const list = await callRoute('GET', `/api/attachments?linkType=task&linkId=${task.id}`);
+  assert.equal(list.status, 200);
+  const listPayload = JSON.parse(list.body) as Array<{ id: string }>;
+  assert.equal(listPayload.length, 1);
+  assert.equal(listPayload[0]?.id, uploaded.id);
+});
+
+test('unlinking final link soft deletes attachment', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };
+  const taskCreate = await callRoute('POST', '/api/research-tasks', { ticker: 'AAPL' });
+  const task = JSON.parse(taskCreate.body) as { id: string };
+  const upload = await callRoute('POST', '/api/attachments/upload', {
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: task.id,
+    original_name: 'notes.txt',
+    mime_type: 'text/plain',
+    content_base64: Buffer.from('hello world', 'utf8').toString('base64'),
+  });
+  const uploaded = JSON.parse(upload.body) as { id: string };
+  const removed = await callRoute('DELETE', `/api/attachments/${uploaded.id}`, { link_type: 'task', link_id: task.id });
+  assert.equal(removed.status, 200);
+  const list = await callRoute('GET', `/api/attachments?linkType=task&linkId=${task.id}`);
+  const listPayload = JSON.parse(list.body) as Array<{ id: string }>;
+  assert.equal(listPayload.length, 0);
+});
+
+test('generate prepends parsed attachment context under token cap', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  let noteId = bootstrapPayload.files[0]?.id ?? '';
+  if (!noteId) {
+    await callRoute('POST', '/api/files', {
+      workspaceId: bootstrapPayload.workspace.id,
+      folderId: null,
+      name: 'note.md',
+      path: 'note.md',
+      content: 'x',
+    });
+    const refreshed = await callRoute('GET', '/api/bootstrap');
+    noteId = (JSON.parse(refreshed.body) as { files: Array<{ id: string }> }).files[0]?.id ?? '';
+  }
+  await callRoute('POST', '/api/attachments/upload', {
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'ctx.txt',
+    mime_type: 'text/plain',
+    content_base64: Buffer.from('Attachment context payload', 'utf8').toString('base64'),
+  });
+  let capturedInput = '';
+  const originalGenerate = providerRegistry.minimax.generate;
+  providerRegistry.minimax.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'minimax',
+      model: 'mini',
+      note_id: noteId,
+      input_text: 'Main prompt body',
+    });
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /\[ATTACHMENT_CONTEXT_BEGIN\]/);
+    assert.match(capturedInput, /Attachment context payload/);
+  } finally {
+    providerRegistry.minimax.generate = originalGenerate;
+  }
+});
+
 test('non-ollama default model does not overwrite saved local_connection.model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
