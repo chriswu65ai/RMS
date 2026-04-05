@@ -1152,6 +1152,7 @@ export function EditorPane() {
             <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
             <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onUndo} title="Undo" aria-label="Undo" disabled={!canUndo}><Undo2 size={14} /></button>
             <button className={`${btn(false)} disabled:cursor-not-allowed disabled:opacity-40`} onClick={onRedo} title="Redo" aria-label="Redo" disabled={!canRedo}><Redo2 size={14} /></button>
+            <span className="select-none px-1 text-slate-300" aria-hidden="true">|</span>
             <button className={btn(active.h1)} onClick={() => toggleHeading(1)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h1 ? 'text-white/70' : 'text-slate-500'}`}>1</span></button>
             <button className={btn(active.h2)} onClick={() => toggleHeading(2)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h2 ? 'text-white/70' : 'text-slate-500'}`}>2</span></button>
             <button className={btn(active.h3)} onClick={() => toggleHeading(3)}><span className="font-semibold">H</span><span className={`text-[10px] ${active.h3 ? 'text-white/70' : 'text-slate-500'}`}>3</span></button>
