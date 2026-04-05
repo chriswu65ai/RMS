@@ -1571,6 +1571,62 @@ test('ollama web search only_list enforces preferred-domain filtering and ignore
   }
 });
 
+test('ollama generate keeps baseUrl on citation retry during web-search-backed Generate flow', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.ollama.generate;
+  const seenCalls: Array<{ inputText: string; baseUrl?: string }> = [];
+
+  providerRegistry.ollama.generate = async (request) => {
+    seenCalls.push({
+      inputText: request.inputText,
+      baseUrl: request.generationParams?.baseUrl,
+    });
+    return { outputText: 'Summary body', latencyMs: 1 };
+  };
+  searchProviderRegistry.duckduckgo.search = async () => ([
+    { title: 'A', url: 'https://example.com/a', snippet: 'A', provider: 'duckduckgo' },
+  ]);
+
+  try {
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'ollama',
+      default_model: 'llama3.2:latest',
+      generation_params: {
+        local_connection: {
+          base_url: 'http://127.0.0.1:11434',
+          model: 'llama3.2:latest',
+          B: 1,
+        },
+        web_search: {
+          enabled: true,
+          provider: 'duckduckgo',
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+          source_citation: true,
+        },
+      },
+    });
+
+    const response = await withOllamaToolCalls([{ query: 'hello' }], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'ignored-by-server',
+      input_text: 'hello',
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(seenCalls.length, 2);
+    assert.deepEqual(seenCalls.map((call) => call.baseUrl), ['http://127.0.0.1:11434', 'http://127.0.0.1:11434']);
+    assert.match(seenCalls[1]?.inputText ?? '', /Retry pass: use canonical citation format \[n\]\./);
+
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const doneFrame = frames.find((frame) => frame.type === 'done');
+    assert.equal(doneFrame?.outputText, 'Summary body[lack citation]');
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('agent generate emits stream sources before done and warning frames on search failure', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
@@ -1623,9 +1679,11 @@ test('agent generate emits stream sources before done and warning frames on sear
 test('agent generate handles citation on/off output policy while keeping metadata and logging citation events', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
-  let receivedInput = '';
+  const receivedInputs: string[] = [];
+  const seenGenerationParams: Array<{ temperature?: number; maxTokens?: number; baseUrl?: string }> = [];
   providerRegistry.openai.generate = async (request) => {
-    receivedInput = request.inputText;
+    receivedInputs.push(request.inputText);
+    seenGenerationParams.push(request.generationParams ?? {});
     return { outputText: 'Summary body', latencyMs: 1 };
   };
   searchProviderRegistry.duckduckgo.search = async () => ([
@@ -1656,7 +1714,7 @@ test('agent generate handles citation on/off output policy while keeping metadat
       input_text: 'hello',
     }));
     assert.equal(disabledResponse.status, 200);
-    assert.doesNotMatch(receivedInput, /Citation mode is REQUIRED/);
+    assert.doesNotMatch(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
     const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
       type?: string;
       outputText?: string;
@@ -1685,11 +1743,16 @@ test('agent generate handles citation on/off output policy while keeping metadat
       input_text: 'hello',
     }));
     assert.equal(enabledResponse.status, 200);
-    assert.match(receivedInput, /Citation mode is REQUIRED/);
+    assert.match(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
     const enabledFrames = enabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
     const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
     assert.equal(enabledDone?.outputText, 'Summary body[lack citation]');
     assert.doesNotMatch(enabledDone?.outputText ?? '', /snippet/i);
+
+    assert.equal(receivedInputs.length >= 3, true);
+    const retryInput = receivedInputs.at(-1) ?? '';
+    assert.match(retryInput, /Retry pass: use canonical citation format \[n\]\./);
+    assert.deepEqual(seenGenerationParams.every((params) => params.baseUrl === undefined), true);
 
     const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
     assert.equal(activityResponse.status, 200);

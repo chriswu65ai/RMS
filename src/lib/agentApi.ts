@@ -64,6 +64,59 @@ type StreamPayload = {
   text?: string;
 } & Record<string, unknown>;
 
+const pickToolName = (payload: StreamPayload): string | undefined => (
+  typeof payload.toolName === 'string'
+    ? payload.toolName
+    : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined)
+);
+
+const pickToolCallId = (payload: StreamPayload): string | undefined => (
+  typeof payload.toolCallId === 'string'
+    ? payload.toolCallId
+    : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined)
+);
+
+const buildThinkingEvent = (payload: StreamPayload): ThinkingEvent | null => {
+  if (payload.type === 'tool_call_started') {
+    return {
+      type: 'tool_call_started',
+      toolName: pickToolName(payload),
+      toolCallId: pickToolCallId(payload),
+      message: payload.message,
+      raw: payload,
+    };
+  }
+  if (payload.type === 'tool_call_result') {
+    return {
+      type: 'tool_call_result',
+      toolName: pickToolName(payload),
+      toolCallId: pickToolCallId(payload),
+      message: payload.message,
+      raw: payload,
+    };
+  }
+  if (payload.type === 'tool_call_failed') {
+    return {
+      type: 'tool_call_failed',
+      toolName: pickToolName(payload),
+      toolCallId: pickToolCallId(payload),
+      message: payload.message,
+      raw: payload,
+    };
+  }
+  if (payload.type === 'reasoning' || payload.type === 'provider_summary') {
+    return {
+      type: 'reasoning',
+      summary: typeof payload.summary === 'string'
+        ? payload.summary
+        : (typeof payload.reasoning === 'string' ? payload.reasoning : (typeof payload.text === 'string' ? payload.text : undefined)),
+      message: payload.message,
+      raw: payload,
+    };
+  }
+  return null;
+};
+
 const asErrorMessage = async (response: Response) => {
   try {
     const payload = await response.json() as ApiError;
@@ -238,42 +291,9 @@ export async function generateText(params: {
       if (payload.type === 'search_warning') {
         params.onSearchWarning?.(payload.message ?? 'Web search failed.');
       }
-      if (payload.type === 'tool_call_started') {
-        params.onThinkingEvent?.({
-          type: 'tool_call_started',
-          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
-          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
-          message: payload.message,
-          raw: payload,
-        });
-      }
-      if (payload.type === 'tool_call_result') {
-        params.onThinkingEvent?.({
-          type: 'tool_call_result',
-          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
-          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
-          message: payload.message,
-          raw: payload,
-        });
-      }
-      if (payload.type === 'tool_call_failed') {
-        params.onThinkingEvent?.({
-          type: 'tool_call_failed',
-          toolName: typeof payload.toolName === 'string' ? payload.toolName : (typeof payload.tool_name === 'string' ? payload.tool_name : undefined),
-          toolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined),
-          message: payload.message,
-          raw: payload,
-        });
-      }
-      if (payload.type === 'reasoning' || payload.type === 'provider_summary') {
-        params.onThinkingEvent?.({
-          type: 'reasoning',
-          summary: typeof payload.summary === 'string'
-            ? payload.summary
-            : (typeof payload.reasoning === 'string' ? payload.reasoning : (typeof payload.text === 'string' ? payload.text : undefined)),
-          message: payload.message,
-          raw: payload,
-        });
+      const thinkingEvent = buildThinkingEvent(payload);
+      if (thinkingEvent) {
+        params.onThinkingEvent?.(thinkingEvent);
       }
       if (payload.type === 'done') {
         outputText = payload.outputText ?? outputText;
