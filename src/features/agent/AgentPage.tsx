@@ -102,7 +102,8 @@ export function AgentPage() {
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<CloudAgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
-  const [modelFeedbackMessage, setModelFeedbackMessage] = useState('');
+  const [defaultAgentFeedbackMessage, setDefaultAgentFeedbackMessage] = useState('');
+  const [localRuntimeFeedbackMessage, setLocalRuntimeFeedbackMessage] = useState('');
   const [credentialFeedbackMessage, setCredentialFeedbackMessage] = useState('');
   const [activityLogFeedbackMessage, setActivityLogFeedbackMessage] = useState('');
   const [defaultSaveMessage, setDefaultSaveMessage] = useState('');
@@ -239,7 +240,7 @@ export function AgentPage() {
         const statuses = await Promise.all(CLOUD_AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
       } catch (error) {
-        setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
+        setDefaultAgentFeedbackMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -314,8 +315,12 @@ export function AgentPage() {
                     const nextModel = event.target.value;
                     setAgentSelectedModel(provider, nextModel);
                     setDefaultSaveMessage('');
+                    setDefaultAgentFeedbackMessage('');
                     setAgentOllamaRuntimeModelDraft(getMirroredOllamaDraftModel(provider, nextModel, ollamaRuntimeModelDraft));
-                    if (provider === 'ollama') setLocalSaveMessage('');
+                    if (provider === 'ollama') {
+                      setLocalSaveMessage('');
+                      setLocalRuntimeFeedbackMessage('');
+                    }
                   }}
                   disabled={modelState.loading || modelOptions.length === 0}
                 >
@@ -341,8 +346,11 @@ export function AgentPage() {
                 disabled={!canSaveDefaults}
                 onClick={async () => {
                   setDefaultSaveMessage('');
+                  setDefaultAgentFeedbackMessage('');
                   if (provider !== 'ollama' && hasUnsavedLocalChanges) {
-                    setModelFeedbackMessage('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.');
+                    setDefaultAgentFeedbackMessage(
+                      `Unsaved local runtime edits are pending. Save local settings first before saving ${providerLabel(provider)} as the default agent to avoid ambiguous runtime context.`,
+                    );
                     return;
                   }
                   try {
@@ -357,16 +365,16 @@ export function AgentPage() {
                     }
                     setAgentSelectedModel(provider, canonicalModel);
                     setDefaultSaveMessage('Default provider/model saved.');
-                    setModelFeedbackMessage('');
+                    setDefaultAgentFeedbackMessage('');
                   } catch (error) {
-                    setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
+                    setDefaultAgentFeedbackMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
                   }
                 }}
               >
                 Save default agent
               </button>
               {defaultSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{defaultSaveMessage}</p> : null}
-              {modelFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{modelFeedbackMessage}</p> : null}
+              {defaultAgentFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{defaultAgentFeedbackMessage}</p> : null}
             </div>
           </div>
         </section>
@@ -510,6 +518,15 @@ export function AgentPage() {
                   try {
                     setWebSearchStatusMessage('');
                     const settings = await getAgentSettings();
+                    const draftModelForProvider = selectedModelByProvider[provider]?.trim() ?? '';
+                    const defaultModelMatchesDraft = settings.default_model.trim() === draftModelForProvider;
+                    const defaultProviderMatchesDraft = settings.default_provider === provider;
+                    if (!defaultProviderMatchesDraft || !defaultModelMatchesDraft) {
+                      setWebSearchStatusMessage(
+                        `Save default agent first. Web search validation uses the saved default provider/model (${providerLabel(settings.default_provider)} / ${settings.default_model.trim() || 'not selected'}), which differs from your current draft (${providerLabel(provider)} / ${draftModelForProvider || 'not selected'}).`,
+                      );
+                      return;
+                    }
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
                       enabled: webSearchEnabled,
                       provider: webSearchProvider,
@@ -761,6 +778,7 @@ export function AgentPage() {
                   onChange={(event) => {
                     setLocalBaseUrl(event.target.value);
                     setLocalSaveMessage('');
+                    setLocalRuntimeFeedbackMessage('');
                     invalidateAgentOllamaModelsForBaseUrl(event.target.value.trim() || LOCAL_BASE_URL_DEFAULT);
                   }}
                   onBlur={(event) => {
@@ -784,6 +802,7 @@ export function AgentPage() {
                     setAgentSelectedModel('ollama', nextLocalModel);
                     if (provider === 'ollama') setAgentSelectedModel(provider, nextLocalModel);
                     setLocalSaveMessage('');
+                    setLocalRuntimeFeedbackMessage('');
                   }}
                   disabled={(provider === 'ollama' && modelState.loading) || localModelOptions.length === 0}
                 >
@@ -804,6 +823,7 @@ export function AgentPage() {
             <p className="mt-2 text-xs text-slate-600">Active Ollama runtime: <span className="font-medium">{savedLocalRuntime.baseUrl || LOCAL_BASE_URL_DEFAULT}</span> / <span className="font-medium">{savedLocalRuntime.model || 'not configured'}</span></p>
             {hasUnsavedLocalChanges ? <p className="mt-2 text-xs text-amber-700">Unsaved local runtime changes.</p> : null}
             {!hasUnsavedLocalChanges && localSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{localSaveMessage}</p> : null}
+            {localRuntimeFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{localRuntimeFeedbackMessage}</p> : null}
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
@@ -831,9 +851,9 @@ export function AgentPage() {
                     setAgentSelectedModel('ollama', canonicalModel);
                     if (provider === 'ollama') setAgentSelectedModel(provider, canonicalModel);
                     setLocalSaveMessage('Local settings saved.');
-                    setModelFeedbackMessage('');
+                    setLocalRuntimeFeedbackMessage('');
                   } catch (error) {
-                    setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
+                    setLocalRuntimeFeedbackMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
                   }
                 }}
               >
