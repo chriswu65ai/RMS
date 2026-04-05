@@ -221,6 +221,12 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete task.'); }
   };
 
+  const openLinkedNote = (task: NewResearchTask) => {
+    const transition = transitionTaskToNote(task);
+    if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
+    navigate('/research.html');
+  };
+
   const createNoteFromTask = async (task: NewResearchTask) => {
     if (!workspace) return setError('Workspace is not ready yet.');
     const preview = resolveDestinationPreview(task);
@@ -357,7 +363,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
                       <p className="col-span-2 mt-1">Linked note: {hasLinkedNote(task) ? task.linked_note_path : '—'}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => void createNoteFromTask(task)}>{hasLinkedNote(task) ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
+                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => { if (hasLinkedNote(task)) { openLinkedNote(task); return; } void createNoteFromTask(task); }}>{hasLinkedNote(task) ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
                 {prioritizedTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
@@ -458,7 +464,22 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               </div>
             )}
             <div className="mt-4 flex justify-end gap-2">
-              {modalState.mode === 'edit' && modalState.id && <button className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm" onClick={() => { const task = tasks.find((item) => item.id === modalState.id); if (task) void createNoteFromTask(task); }}>{hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}</button>}
+              {modalState.mode === 'edit' && modalState.id && (
+                <button
+                  className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  onClick={() => {
+                    const task = tasks.find((item) => item.id === modalState.id);
+                    if (!task) return;
+                    if (hasLinkedNote(task)) {
+                      openLinkedNote(task);
+                      return;
+                    }
+                    void createNoteFromTask(task);
+                  }}
+                >
+                  {hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}
+                </button>
+              )}
               <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
               <button className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={saving} onClick={() => void saveTask()}>{saving ? 'Saving...' : 'Save'}</button>
             </div>
