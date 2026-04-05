@@ -235,3 +235,35 @@ test('minimax generate keeps delta chunks incremental and ignores fallback full 
   assert.deepEqual(deltas, ['Hello ', 'world']);
   assert.equal(deltas.join(''), result.outputText);
 });
+
+test('minimax tool first turn forces structured web_search and retries once when first turn is pseudo-tool text', async () => {
+  const seenBodies: Array<Record<string, unknown>> = [];
+  let callCount = 0;
+  globalThis.fetch = async (_input, init) => {
+    seenBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    callCount += 1;
+    if (callCount === 1) {
+      return jsonResponse(200, {
+        choices: [{
+          message: {
+            content: '<tool_code>visit("https://example.com")</tool_code>',
+          },
+        }],
+      });
+    }
+    return jsonResponse(200, {
+      choices: [{
+        message: {
+          tool_calls: [{ id: 'mm-tool-1', function: { name: 'web_search', arguments: '{"query":"nvidia latest guidance"}' } }],
+        },
+      }],
+    });
+  };
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.minimax.generateToolFirstTurn({ model: 'MiniMax-M2.5', inputText: 'Find latest', tools: [tool] }, 'test-key');
+  assert.equal(first.toolCalls.length, 1);
+  assert.equal(first.toolCalls[0]?.name, 'web_search');
+  assert.equal(callCount, 2);
+  assert.deepEqual(seenBodies[0]?.tool_choice, { type: 'function', function: { name: 'web_search' } });
+  assert.match(String((seenBodies[1]?.messages as Array<{ content?: string }>)?.[0]?.content ?? ''), /Protocol repair/i);
+});

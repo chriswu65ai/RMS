@@ -937,7 +937,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
       const controller = new AbortController();
-      req.on('aborted', () => controller.abort());
+      let clientAborted = false;
+      req.on('aborted', () => {
+        clientAborted = true;
+        controller.abort();
+      });
       beginNdjson(res);
       writeNdjson(res, { type: 'status', stage: 'started' });
       try {
@@ -1057,7 +1061,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         res.end();
       } catch (error) {
-        const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+        const cancelled = clientAborted;
+        const errorMessage = error instanceof Error ? error.message : 'Generation failed.';
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
@@ -1066,13 +1071,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           initiated_by: String(payload.initiated_by ?? 'user'),
           provider,
           model: resolvedModel,
-          status: aborted ? 'cancelled' : 'failed',
+          status: cancelled ? 'cancelled' : 'failed',
           duration_ms: Date.now() - startedAt,
           input_chars: inputText.length,
           output_chars: 0,
           token_estimate: null,
           cost_estimate_usd: null,
-          error_message_short: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
+          error_message_short: errorMessage.slice(0, 180),
           search_warning: 0,
           search_warning_message: null,
           web_search_enabled: settings.generation_params?.web_search?.enabled ? 1 : 0,
@@ -1080,14 +1085,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           tool_calls_succeeded: 0,
           search_query_count: 0,
           source_count: 0,
-          tool_failure_reason: error instanceof Error ? error.message.slice(0, 180) : 'Generation failed.',
+          tool_failure_reason: errorMessage.slice(0, 180),
           citation_events_json: null,
         });
         if (res.headersSent) {
-          writeNdjson(res, { type: 'error', message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.'), aborted });
+          writeNdjson(res, { type: 'error', message: cancelled ? 'Generation cancelled.' : errorMessage, aborted: cancelled });
           res.end();
         } else {
-          writeJson(res, aborted ? 499 : 400, { error: { message: aborted ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.') } });
+          writeJson(res, cancelled ? 499 : 400, { error: { message: cancelled ? 'Generation cancelled.' : errorMessage } });
         }
       }
       return true;

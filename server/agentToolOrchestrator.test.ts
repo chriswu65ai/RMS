@@ -176,3 +176,112 @@ test('runAgentToolOrchestration keeps guardrails across deep follow-up tool call
     searchProviderRegistry.duckduckgo.search = originalDdgSearch;
   }
 });
+
+test('runAgentToolOrchestration repairs pseudo-tool plain text into structured web_search call', async () => {
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  const originalFollowup = providerRegistry.openai.generateToolFollowupTurn;
+  const originalDdgSearch = searchProviderRegistry.duckduckgo.search;
+  let firstTurnCount = 0;
+
+  providerRegistry.openai.generateToolFirstTurn = async (request) => {
+    firstTurnCount += 1;
+    if (firstTurnCount === 1) {
+      return {
+        outputText: '<tool_code>open_page("https://example.com")</tool_code>',
+        latencyMs: 1,
+        toolCalls: [],
+      };
+    }
+    assert.match(request.inputText, /Protocol repair/i);
+    return {
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{ id: 'repair-call-1', name: 'web_search', arguments: { query: 'repaired query' } }],
+    };
+  };
+  providerRegistry.openai.generateToolFollowupTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+  searchProviderRegistry.duckduckgo.search = async () => ([{
+    title: 'Result',
+    url: 'https://trusted.example/repaired',
+    snippet: 'Snippet',
+    provider: 'duckduckgo',
+  }]);
+
+  try {
+    const result = await runAgentToolOrchestration({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      inputText: 'Find latest guidance',
+      apiKey: 'test-key',
+      settings: baseSettings,
+      preferredSources: [],
+    });
+    assert.equal(firstTurnCount, 2);
+    assert.equal(result.toolCalls[0]?.arguments.query, 'repaired query');
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+    providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
+    searchProviderRegistry.duckduckgo.search = originalDdgSearch;
+  }
+});
+
+test('runAgentToolOrchestration fails with explicit protocol mismatch when repair cannot recover', async () => {
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  providerRegistry.openai.generateToolFirstTurn = async () => ({
+    outputText: '<invoke name="fetch_fetch"></invoke>',
+    latencyMs: 1,
+    toolCalls: [],
+  });
+  try {
+    await assert.rejects(() => runAgentToolOrchestration({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      inputText: 'Find latest guidance',
+      apiKey: 'test-key',
+      settings: baseSettings,
+      preferredSources: [],
+    }), /Protocol mismatch: model emitted pseudo-tool content/i);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+  }
+});
+
+test('runAgentToolOrchestration maps structured fetch_fetch alias URL to deterministic web_search query', async () => {
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  const originalFollowup = providerRegistry.openai.generateToolFollowupTurn;
+  const originalDdgSearch = searchProviderRegistry.duckduckgo.search;
+  const seenQueries: string[] = [];
+
+  providerRegistry.openai.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{ id: 'alias-call-1', name: 'fetch_fetch', arguments: { url: 'https://docs.example.com/path/to/latest-earnings-report' } }],
+  });
+  providerRegistry.openai.generateToolFollowupTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+  searchProviderRegistry.duckduckgo.search = async (query) => {
+    seenQueries.push(query);
+    return [{
+      title: 'Aliased',
+      url: 'https://docs.example.com/path/to/latest-earnings-report',
+      snippet: 'Snippet',
+      provider: 'duckduckgo',
+    }];
+  };
+
+  try {
+    await runAgentToolOrchestration({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      inputText: 'Find latest guidance',
+      apiKey: 'test-key',
+      settings: baseSettings,
+      preferredSources: [],
+    });
+    assert.equal(seenQueries.length, 1);
+    assert.match(seenQueries[0] ?? '', /^site:docs\.example\.com /);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+    providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
+    searchProviderRegistry.duckduckgo.search = originalDdgSearch;
+  }
+});
