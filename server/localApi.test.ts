@@ -647,6 +647,83 @@ test('agent generate hard-fails when web search tool call fails', async () => {
   });
 });
 
+test('agent generate classifies internal AbortError as failed (not cancelled)', async () => {
+  await callRoute('DELETE', '/api/agent/activity-log');
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+  });
+  const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  assert.equal(credentialSave.status, 200);
+
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => {
+    const timeoutError = new Error('internal timeout');
+    timeoutError.name = 'AbortError';
+    throw timeoutError;
+  };
+
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(frames.some((line) => line.type === 'error' && line.message === 'internal timeout' && line.aborted === false), true);
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
+    const activity = JSON.parse(activityResponse.body) as Array<{ status: string; error_message_short?: string }>;
+    assert.equal(activity[0]?.status, 'failed');
+    assert.equal(activity[0]?.error_message_short, 'internal timeout');
+  } finally {
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate returns protocol mismatch errors as failed with precise NDJSON message', async () => {
+  await callRoute('DELETE', '/api/agent/activity-log');
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 3000,
+      },
+    },
+  });
+  const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  assert.equal(credentialSave.status, 200);
+
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  providerRegistry.openai.generateToolFirstTurn = async () => ({
+    outputText: '<tool_code>visit("https://example.com")</tool_code>',
+    latencyMs: 1,
+    toolCalls: [],
+  });
+
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(frames.some((line) => line.type === 'error' && String(line.message ?? '').includes('Protocol mismatch') && line.aborted === false), true);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
+    const activity = JSON.parse(activityResponse.body) as Array<{ status: string; tool_failure_reason?: string }>;
+    assert.equal(activity[0]?.status, 'failed');
+    assert.match(activity[0]?.tool_failure_reason ?? '', /Protocol mismatch/i);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+  }
+});
+
 test('agent activity log is runtime-only and resets on restart', async () => {
   await callRoute('DELETE', '/api/agent/activity-log');
   const clearResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');

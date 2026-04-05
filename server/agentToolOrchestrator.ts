@@ -50,6 +50,9 @@ type ToolCallRecord = {
   sources: SearchResult[];
 };
 
+const PSEUDO_TOOL_PATTERN = /open_page|visit|fetch_fetch|<invoke|<tool_code>/i;
+const STRUCTURED_WEB_SEARCH_ALIASES = new Set(['fetch_fetch']);
+
 export type AgentToolOrchestrationResult = {
   toolCalls: ToolCallRecord[];
   allSources: SearchResult[];
@@ -114,6 +117,52 @@ const normalizeToolArgs = (raw: Record<string, unknown>, settings: WebSearchSett
   };
 };
 
+const detectProtocolMismatch = (response: { toolCalls: AgentToolCall[]; outputText: string }) => {
+  const hasStructuredWebSearch = response.toolCalls.some((call) => call.name === 'web_search');
+  if (hasStructuredWebSearch) return false;
+  return PSEUDO_TOOL_PATTERN.test(response.outputText);
+};
+
+const buildAliasWebSearchQuery = (rawUrl: string): string | null => {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!/^https?:$/i.test(parsed.protocol)) return null;
+    const decodedPath = decodeURIComponent(parsed.pathname).replace(/[/_-]+/g, ' ').trim();
+    const pathTopic = decodedPath.split(/\s+/).filter(Boolean).slice(-6).join(' ');
+    return `site:${parsed.hostname}${pathTopic ? ` ${pathTopic}` : ''}`.trim();
+  } catch {
+    return null;
+  }
+};
+
+const maybeMapStructuredAliasToWebSearch = (call: AgentToolCall): AgentToolCall | null => {
+  if (!STRUCTURED_WEB_SEARCH_ALIASES.has(call.name)) return null;
+  const urlValue = call.arguments.url;
+  if (typeof urlValue !== 'string' || !urlValue.trim()) return null;
+  const query = buildAliasWebSearchQuery(urlValue.trim());
+  if (!query) return null;
+  console.warn(`[agent-tool-orchestrator] mapped structured alias "${call.name}" to "web_search"`, {
+    toolCallId: call.id,
+    url: urlValue,
+    query,
+  });
+  return {
+    id: call.id,
+    name: 'web_search',
+    arguments: { query },
+  };
+};
+
+const resolveStructuredWebSearchCall = (calls: AgentToolCall[]): AgentToolCall | null => {
+  const direct = calls.find((call) => call.name === 'web_search');
+  if (direct) return direct;
+  for (const call of calls) {
+    const mapped = maybeMapStructuredAliasToWebSearch(call);
+    if (mapped) return mapped;
+  }
+  return null;
+};
+
 export const runAgentToolOrchestration = async ({
   provider,
   model,
@@ -155,8 +204,28 @@ export const runAgentToolOrchestration = async ({
     generationParams: baseUrl ? { baseUrl } : undefined,
   }, apiKey, signal);
 
+  if (!resolveStructuredWebSearchCall(initialResponse.toolCalls) && detectProtocolMismatch(initialResponse)) {
+    const repairedResponse = await providerRegistry[provider].generateToolFirstTurn({
+      model,
+      inputText: [
+        inputText,
+        '',
+        'Protocol repair: your previous output used pseudo-tool syntax.',
+        'Return exactly one structured function call named web_search.',
+        'Arguments must be valid JSON object and include a non-empty "query" string.',
+        `Previous output:\n${initialResponse.outputText || '(empty output)'}`,
+      ].join('\n'),
+      tools: [WEB_SEARCH_TOOL],
+      generationParams: baseUrl ? { baseUrl } : undefined,
+    }, apiKey, signal);
+    initialResponse = repairedResponse;
+    if (!resolveStructuredWebSearchCall(initialResponse.toolCalls)) {
+      throw new Error('Protocol mismatch: model emitted pseudo-tool content but did not return a structured web_search function call after repair.');
+    }
+  }
+
   for (let i = 0; i < maxToolCalls; i += 1) {
-    const toolCall = initialResponse.toolCalls.find((call) => call.name === 'web_search');
+    const toolCall = resolveStructuredWebSearchCall(initialResponse.toolCalls);
     if (!toolCall) break;
     const args = normalizeToolArgs(toolCall.arguments, settings, domainList);
     const toolCallId = toolCall.id || `web-search-${i + 1}`;

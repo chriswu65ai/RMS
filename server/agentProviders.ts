@@ -263,6 +263,18 @@ const getMiniMaxBaseUrls = (apiKey: string): string[] => {
 };
 
 class MinimaxAdapter implements ProviderAdapter {
+  private static readonly FORCED_WEB_SEARCH_TOOL_CHOICE = {
+    type: 'function',
+    function: { name: 'web_search' },
+  };
+
+  private static readonly WEB_SEARCH_RETRY_SUFFIX = [
+    'Protocol repair: return exactly one structured function call.',
+    'Required function name: web_search.',
+    'Return only the function call with valid JSON arguments containing at least {"query":"..."}',
+    'Do not answer in plain text and do not emit pseudo-tool tags.',
+  ].join('\n');
+
   private async callToolChat(
     requestBody: Record<string, unknown>,
     apiKey: string,
@@ -445,7 +457,7 @@ class MinimaxAdapter implements ProviderAdapter {
   }
 
   async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callToolChat({
+    const baseRequestBody = {
       model: request.model,
       messages: [{ role: 'user', content: request.inputText }],
       tools: request.tools.map((tool) => ({
@@ -456,10 +468,21 @@ class MinimaxAdapter implements ProviderAdapter {
           parameters: tool.input_schema,
         },
       })),
-      tool_choice: 'auto',
+      tool_choice: MinimaxAdapter.FORCED_WEB_SEARCH_TOOL_CHOICE,
       temperature: request.generationParams?.temperature ?? 0.2,
       max_tokens: request.generationParams?.maxTokens,
       stream: false,
+    } as const;
+
+    const firstAttempt = await this.callToolChat(baseRequestBody, apiKey, signal);
+    if (firstAttempt.toolCalls.some((call) => call.name === 'web_search')) return firstAttempt;
+
+    return this.callToolChat({
+      ...baseRequestBody,
+      messages: [{
+        role: 'user',
+        content: `${request.inputText}\n\n${MinimaxAdapter.WEB_SEARCH_RETRY_SUFFIX}`,
+      }],
     }, apiKey, signal);
   }
 
