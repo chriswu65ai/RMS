@@ -430,6 +430,12 @@ function normalizeTaskRow(row: NewResearchTaskRow) {
 
 const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic', 'ollama'];
 const isAgentProvider = (value: unknown): value is AgentProvider => typeof value === 'string' && VALID_PROVIDERS.includes(value as AgentProvider);
+const providerLabel = (provider: AgentProvider) => {
+  if (provider === 'openai') return 'ChatGPT';
+  if (provider === 'anthropic') return 'Claude';
+  if (provider === 'ollama') return 'Ollama';
+  return 'Minimax';
+};
 
 const OLLAMA_BASE_URL_DEFAULT = 'http://localhost:11434';
 
@@ -626,9 +632,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         defaultModel = ollamaRuntime.model;
       }
       if (generationParams?.web_search?.enabled && !supportsToolCalling(provider, defaultModel)) {
+        const providerDisplay = providerLabel(provider);
+        const modelDisplay = defaultModel || 'not selected';
         writeJson(res, 400, {
           error: {
-            message: `Web search requires tool calling support. Select a tool-capable model for ${provider} (current: ${defaultModel || 'not selected'}), or disable web search.`,
+            message: `Web search requires tool calling support when validating the saved default provider/model (${providerDisplay} / ${modelDisplay}). Save a tool-capable default model first, or disable web search.`,
           },
         });
         return true;

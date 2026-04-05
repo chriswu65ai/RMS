@@ -265,6 +265,35 @@ test('AgentPage clears selected model when refreshed list no longer contains it'
   assert.equal(source.includes("const normalizedSelectedModel = selectedModelStillAvailable ? nextSelectedModel : '';"), true);
   assert.equal(source.includes('if (!currentSelectionStillAvailable) {'), true);
 });
+
+test('AgentPage uses section-scoped feedback states for default agent and local runtime cards', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const [defaultAgentFeedbackMessage, setDefaultAgentFeedbackMessage] = useState(\'\');'), true);
+  assert.equal(source.includes('const [localRuntimeFeedbackMessage, setLocalRuntimeFeedbackMessage] = useState(\'\');'), true);
+  assert.equal(source.includes('{defaultAgentFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{defaultAgentFeedbackMessage}</p> : null}'), true);
+  assert.equal(source.includes('{localRuntimeFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{localRuntimeFeedbackMessage}</p> : null}'), true);
+});
+
+test('AgentPage default-save warning copy is provider-aware and no longer hardcodes Ollama text', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.'), false);
+  assert.equal(
+    source.includes('Unsaved local runtime edits are pending. Save local settings first before saving ${providerLabel(provider)} as the default agent to avoid ambiguous runtime context.'),
+    true,
+  );
+});
+
+test('AgentPage blocks web-search save when draft provider/model differs from saved defaults with contextual copy', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Save default agent first. Web search validation uses the saved default provider/model'), true);
+  assert.equal(source.includes('which differs from your current draft'), true);
+});
+
+test('AgentPage mismatch regression copy does not mention stale minimax/ollama internal-ID warning text', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('for minimax'), false);
+  assert.equal(source.includes('for ollama'), false);
+});
 test('AgentPage UI no longer references the top web-search warning banner message', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);

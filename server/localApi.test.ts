@@ -309,6 +309,28 @@ test('saving settings rejects enabled web search when tool-capable model is not 
   assert.equal(response.status, 400);
   const payload = JSON.parse(response.body) as { error?: { message?: string } };
   assert.match(payload.error?.message ?? '', /tool calling support/i);
+  assert.match(payload.error?.message ?? '', /saved default provider\/model/i);
+  assert.match(payload.error?.message ?? '', /ChatGPT/i);
+  assert.match(payload.error?.message ?? '', /not selected/i);
+});
+
+test('web-search validation still uses saved default provider/model when request includes divergent draft context', async () => {
+  const response = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'minimax',
+    default_model: '',
+    draft_provider: 'ollama',
+    draft_model: 'llama3.2:latest',
+    generation_params: {
+      web_search: {
+        enabled: true,
+      },
+    },
+  });
+  assert.equal(response.status, 400);
+  const payload = JSON.parse(response.body) as { error?: { message?: string } };
+  assert.match(payload.error?.message ?? '', /saved default provider\/model/i);
+  assert.match(payload.error?.message ?? '', /Minimax/i);
+  assert.doesNotMatch(payload.error?.message ?? '', /ollama/i);
 });
 
 test('generate rejects when web search is enabled but provider/model lacks tool-calling support', async () => {
