@@ -1,4 +1,5 @@
 import type { AgentSettings, WebSearchDomainPolicy, WebSearchMode, WebSearchProvider, WebSearchRecency } from './types';
+import { normalizeEndpointUrl } from './urlNormalization';
 
 export const WEB_SEARCH_MAX_RESULTS_DEFAULT = 5;
 export const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 5000;
@@ -38,7 +39,7 @@ export const buildWebSearchSettingsPayload = (
   const providerConfig = draft.provider === 'searxng'
     ? {
       searxng: {
-        base_url: draft.searxngBaseUrl.trim() || WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+        base_url: normalizeEndpointUrl(draft.searxngBaseUrl, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT),
         use_json_api: !draft.searxngUseHtmlMode,
       },
     }

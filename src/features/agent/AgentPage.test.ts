@@ -158,6 +158,28 @@ test('web search save payload keeps JSON API enabled when HTML toggle is uncheck
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, true);
 });
 
+test('web search save payload normalizes searxng base URL by removing trailing slashes', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'searxng',
+    mode: 'single',
+    maxResults: '5',
+    timeoutMs: '5000',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://127.0.0.1:8080///',
+    searxngUseHtmlMode: false,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:8080');
+});
+
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
   assert.equal(getWebSearchSourceCitationDefault(undefined), false);
   assert.equal(getWebSearchSourceCitationDefault(false), false);

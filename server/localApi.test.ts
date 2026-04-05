@@ -113,7 +113,7 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
     default_model: 'llama3.2:latest',
     generation_params: {
       local_connection: {
-        base_url: 'http://localhost:11500',
+        base_url: 'http://localhost:11500/',
         model: 'mistral:7b',
         B: 1,
       },
@@ -125,9 +125,10 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
   assert.equal(settingsResponse.status, 200);
   const payload = JSON.parse(settingsResponse.body) as {
     default_model: string;
-    generation_params?: { local_connection?: { model?: string } };
+    generation_params?: { local_connection?: { base_url?: string; model?: string } };
   };
   assert.equal(payload.default_model, 'llama3.2:latest');
+  assert.equal(payload.generation_params?.local_connection?.base_url, 'http://localhost:11500');
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
 });
 
@@ -692,7 +693,7 @@ test('agent settings normalize and persist searxng provider config', async () =>
   };
 
   assert.equal(payload.generation_params?.web_search?.provider, 'searxng');
-  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:9999/');
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:9999');
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, false);
 });
 test('agent generate routes single and deep mode with expected query fan-out', async () => {
