@@ -485,8 +485,8 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.enabled, true);
   assert.equal(payload.generation_params?.web_search?.provider, 'searxng');
   assert.equal(payload.generation_params?.web_search?.mode, 'deep');
-  assert.equal(payload.generation_params?.web_search?.max_results, 5);
-  assert.equal(payload.generation_params?.web_search?.timeout_ms, 5000);
+  assert.equal(payload.generation_params?.web_search?.max_results, 6);
+  assert.equal(payload.generation_params?.web_search?.timeout_ms, 10000);
   assert.equal(payload.generation_params?.web_search?.safe_search, false);
   assert.equal(payload.generation_params?.web_search?.recency, '30d');
   assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
@@ -815,7 +815,7 @@ test('agent settings normalize invalid web search values to defaults', async () 
     mode: 'single',
     max_results: 1,
     timeout_ms: 1,
-    safe_search: true,
+    safe_search: false,
     recency: 'any',
     domain_policy: 'open_web',
     source_citation: false,
@@ -951,11 +951,11 @@ test('agent generate routes single and deep mode with expected query fan-out', a
     assert.equal(deepResponse.status, 200);
     const deepFrames = deepResponse.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     const deepDone = deepFrames.find((line) => line.type === 'done') as { web_search?: { queryCount?: number; mode?: string } } | undefined;
-    assert.deepEqual(seenQueries, ['NVIDIA guidance', 'NVIDIA guidance latest updates']);
+    assert.deepEqual(seenQueries, ['NVIDIA guidance', 'NVIDIA guidance latest updates', 'NVIDIA guidance official source']);
     assert.deepEqual(seenModes, ['deep', 'deep', 'deep']);
     assert.deepEqual(seenSafeSearch, [true, true, true]);
     assert.deepEqual(seenRecency, ['7d', '7d', '7d']);
-    assert.equal(deepDone?.web_search?.queryCount, 2);
+    assert.equal(deepDone?.web_search?.queryCount, 3);
 
     seenQueries.length = 0;
     seenModes.length = 0;

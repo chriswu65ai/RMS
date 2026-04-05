@@ -144,6 +144,16 @@ test('runAgentToolOrchestration keeps guardrails across deep follow-up tool call
           provider: 'searxng',
         },
       }]
+      : request.toolResults.length === 2
+        ? [{
+          id: 'call-3',
+          name: 'web_search',
+          arguments: {
+            query: 'third query',
+            domain_policy: 'open_web',
+            domain_list: ['ignore-third.example'],
+          },
+        }]
       : [],
   });
 
@@ -168,8 +178,8 @@ test('runAgentToolOrchestration keeps guardrails across deep follow-up tool call
       preferredSources: [{ domain: 'trusted.example', weight: 0.7 }],
     });
 
-    assert.deepEqual(capturedPolicies, ['only_list', 'only_list']);
-    assert.deepEqual(capturedDomainLists, [['trusted.example'], ['trusted.example']]);
+    assert.deepEqual(capturedPolicies, ['only_list', 'only_list', 'only_list']);
+    assert.deepEqual(capturedDomainLists, [['trusted.example'], ['trusted.example'], ['trusted.example']]);
   } finally {
     providerRegistry.openai.generateToolFirstTurn = originalFirst;
     providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
@@ -279,6 +289,60 @@ test('runAgentToolOrchestration maps structured fetch_fetch alias URL to determi
     });
     assert.equal(seenQueries.length, 1);
     assert.match(seenQueries[0] ?? '', /^site:docs\.example\.com /);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirst;
+    providerRegistry.openai.generateToolFollowupTurn = originalFollowup;
+    searchProviderRegistry.duckduckgo.search = originalDdgSearch;
+  }
+});
+
+test('runAgentToolOrchestration uses one pass for single mode and up to three passes for deep mode', async () => {
+  const originalFirst = providerRegistry.openai.generateToolFirstTurn;
+  const originalFollowup = providerRegistry.openai.generateToolFollowupTurn;
+  const originalDdgSearch = searchProviderRegistry.duckduckgo.search;
+  const seenQueries: string[] = [];
+
+  providerRegistry.openai.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{ id: 'call-1', name: 'web_search', arguments: { query: 'q1' } }],
+  });
+  providerRegistry.openai.generateToolFollowupTurn = async (request) => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: request.toolResults.length === 1
+      ? [{ id: 'call-2', name: 'web_search', arguments: { query: 'q2' } }]
+      : request.toolResults.length === 2
+        ? [{ id: 'call-3', name: 'web_search', arguments: { query: 'q3' } }]
+        : [],
+  });
+  searchProviderRegistry.duckduckgo.search = async (query) => {
+    seenQueries.push(query);
+    return [{ title: query, url: `https://example.com/${query}`, snippet: 'Snippet', provider: 'duckduckgo' }];
+  };
+
+  try {
+    const single = await runAgentToolOrchestration({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      inputText: 'single',
+      apiKey: 'test-key',
+      settings: { ...baseSettings, mode: 'single' },
+      preferredSources: [],
+    });
+    assert.equal(single.queryCount, 1);
+
+    seenQueries.length = 0;
+    const deep = await runAgentToolOrchestration({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      inputText: 'deep',
+      apiKey: 'test-key',
+      settings: { ...baseSettings, mode: 'deep' },
+      preferredSources: [],
+    });
+    assert.equal(deep.queryCount, 3);
+    assert.deepEqual(seenQueries, ['q1', 'q2', 'q3']);
   } finally {
     providerRegistry.openai.generateToolFirstTurn = originalFirst;
     providerRegistry.openai.generateToolFollowupTurn = originalFollowup;

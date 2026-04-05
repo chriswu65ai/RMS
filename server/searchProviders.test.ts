@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchProviderRegistry, searchUtils } from './searchProviders.js';
+import { searchProviderCapabilities, searchProviderRegistry, searchUtils } from './searchProviders.js';
 
 test('domain policy only_list keeps only matching hostnames and subdomains', () => {
   const results = [
@@ -108,6 +108,17 @@ test('duckduckgo adapter accepts safeSearch and recency options with explicit fa
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('provider capability flags expose unsupported duckduckgo controls and supported searxng controls', () => {
+  assert.deepEqual(searchProviderCapabilities.duckduckgo, {
+    recency: false,
+    safeSearch: false,
+  });
+  assert.deepEqual(searchProviderCapabilities.searxng, {
+    recency: true,
+    safeSearch: true,
+  });
 });
 
 test('duckduckgo adapter normalizes DDG redirect wrapper urls and preserves non-wrapper urls', async () => {

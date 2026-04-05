@@ -31,12 +31,16 @@ import { getSavedLocalRuntime } from './runtimeConfig';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync';
 import {
   buildWebSearchSettingsPayload,
+  convertTimeoutMsToSeconds,
+  getRecommendedPresetForMode,
   getWebSearchSourceCitationDefault,
+  WEB_SEARCH_PROVIDER_CAPABILITIES,
   WEB_SEARCH_MAX_RESULTS_DEFAULT,
   WEB_SEARCH_MODE_OPTIONS,
   WEB_SEARCH_PROVIDER_OPTIONS,
   WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
   WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT,
+  WEB_SEARCH_SAFE_SEARCH_DEFAULT,
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
   shouldShowSearxngConfigFields,
 } from './webSearchSettings';
@@ -114,8 +118,8 @@ export function AgentPage() {
   const [webSearchSearxngUseHtmlMode, setWebSearchSearxngUseHtmlMode] = useState(WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT);
   const [webSearchMode, setWebSearchMode] = useState<WebSearchMode>('single');
   const [webSearchMaxResults, setWebSearchMaxResults] = useState(String(WEB_SEARCH_MAX_RESULTS_DEFAULT));
-  const [webSearchTimeoutMs, setWebSearchTimeoutMs] = useState(String(WEB_SEARCH_TIMEOUT_MS_DEFAULT));
-  const [webSearchSafeSearch, setWebSearchSafeSearch] = useState(true);
+  const [webSearchTimeoutSeconds, setWebSearchTimeoutSeconds] = useState(String(convertTimeoutMsToSeconds(WEB_SEARCH_TIMEOUT_MS_DEFAULT)));
+  const [webSearchSafeSearch, setWebSearchSafeSearch] = useState(WEB_SEARCH_SAFE_SEARCH_DEFAULT);
   const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
   const [webSearchSourceCitation, setWebSearchSourceCitation] = useState(false);
@@ -130,6 +134,8 @@ export function AgentPage() {
   const [editingDomain, setEditingDomain] = useState('');
   const [editingWeight, setEditingWeight] = useState('1');
   const [editingEnabled, setEditingEnabled] = useState(true);
+  const [webSearchMaxResultsOverridden, setWebSearchMaxResultsOverridden] = useState(false);
+  const [webSearchTimeoutOverridden, setWebSearchTimeoutOverridden] = useState(false);
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
@@ -221,13 +227,19 @@ export function AgentPage() {
         setWebSearchProvider(webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo');
         setWebSearchSearxngBaseUrl(normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''));
         setWebSearchSearxngUseHtmlMode(!(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true));
-        setWebSearchMode(webSearchSettings?.mode === 'deep' ? 'deep' : 'single');
-        setWebSearchMaxResults(String(webSearchSettings?.max_results ?? WEB_SEARCH_MAX_RESULTS_DEFAULT));
-        setWebSearchTimeoutMs(String(webSearchSettings?.timeout_ms ?? WEB_SEARCH_TIMEOUT_MS_DEFAULT));
-        setWebSearchSafeSearch(webSearchSettings?.safe_search ?? true);
+        const resolvedMode = webSearchSettings?.mode === 'deep' ? 'deep' : 'single';
+        const recommendedPreset = getRecommendedPresetForMode(resolvedMode);
+        const loadedMaxResults = webSearchSettings?.max_results ?? recommendedPreset.maxResults;
+        const loadedTimeoutSeconds = convertTimeoutMsToSeconds(webSearchSettings?.timeout_ms ?? recommendedPreset.timeoutSeconds * 1000);
+        setWebSearchMode(resolvedMode);
+        setWebSearchMaxResults(String(loadedMaxResults));
+        setWebSearchTimeoutSeconds(String(loadedTimeoutSeconds));
+        setWebSearchSafeSearch(webSearchSettings?.safe_search ?? WEB_SEARCH_SAFE_SEARCH_DEFAULT);
         setWebSearchRecency(webSearchSettings?.recency ?? 'any');
         setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
         setWebSearchSourceCitation(getWebSearchSourceCitationDefault(webSearchSettings?.source_citation));
+        setWebSearchMaxResultsOverridden(loadedMaxResults !== recommendedPreset.maxResults);
+        setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
         setPreferredSources(sources);
 
         const hasCachedModelsForProvider = (modelsByProvider[settings.default_provider] ?? []).length > 0;
@@ -248,7 +260,7 @@ export function AgentPage() {
 
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
   const canSaveLocalDefaults = localBaseUrl.trim().length > 0;
-  const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutMs) > 0;
+  const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0;
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
     if (webSearchDomainPolicy === 'open_web') return 'open_web: Search the web normally, with no preferred-source weighting.';
@@ -260,6 +272,18 @@ export function AgentPage() {
     const matched = WEB_SEARCH_MODE_OPTIONS.find((candidate) => candidate.value === webSearchMode);
     return matched?.helper ?? '';
   }, [webSearchMode]);
+  const webSearchProviderCapabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchProvider];
+  const applyModeRecommendedPreset = (mode: WebSearchMode, force = false) => {
+    const preset = getRecommendedPresetForMode(mode);
+    if (force || !webSearchMaxResultsOverridden) {
+      setWebSearchMaxResults(String(preset.maxResults));
+      setWebSearchMaxResultsOverridden(false);
+    }
+    if (force || !webSearchTimeoutOverridden) {
+      setWebSearchTimeoutSeconds(String(preset.timeoutSeconds));
+      setWebSearchTimeoutOverridden(false);
+    }
+  };
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -402,7 +426,11 @@ export function AgentPage() {
                     className="input"
                     value={webSearchProvider}
                     onChange={(event) => {
-                      setWebSearchProvider(event.target.value as WebSearchProvider);
+                      const nextProvider = event.target.value as WebSearchProvider;
+                      const capabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[nextProvider];
+                      setWebSearchProvider(nextProvider);
+                      if (!capabilities.safeSearch) setWebSearchSafeSearch(false);
+                      if (!capabilities.recency) setWebSearchRecency('any');
                       setWebSearchStatusMessage('');
                     }}
                   >
@@ -430,11 +458,26 @@ export function AgentPage() {
                 ) : null}
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Mode</span>
-                  <select className="input" value={webSearchMode} onChange={(event) => setWebSearchMode(event.target.value as WebSearchMode)}>
+                  <select
+                    className="input"
+                    value={webSearchMode}
+                    onChange={(event) => {
+                      const nextMode = event.target.value as WebSearchMode;
+                      setWebSearchMode(nextMode);
+                      applyModeRecommendedPreset(nextMode);
+                    }}
+                  >
                     {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                   </select>
                   <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
                   <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-slate-700 underline underline-offset-2"
+                    onClick={() => applyModeRecommendedPreset(webSearchMode, true)}
+                  >
+                    Use recommended
+                  </button>
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Max results</span>
@@ -443,24 +486,38 @@ export function AgentPage() {
                     type="number"
                     min={1}
                     value={webSearchMaxResults}
-                    onChange={(event) => setWebSearchMaxResults(event.target.value)}
+                    onChange={(event) => {
+                      setWebSearchMaxResults(event.target.value);
+                      setWebSearchMaxResultsOverridden(true);
+                    }}
                   />
+                  <p className="text-xs text-slate-500">Maximum results requested per search pass before deduplication.</p>
                 </label>
                 <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Timeout (ms)</span>
+                  <span className="text-slate-600">Timeout (seconds)</span>
                   <input
                     className="input"
                     type="number"
                     min={1}
-                    value={webSearchTimeoutMs}
-                    onChange={(event) => setWebSearchTimeoutMs(event.target.value)}
+                    value={webSearchTimeoutSeconds}
+                    onChange={(event) => {
+                      setWebSearchTimeoutSeconds(event.target.value);
+                      setWebSearchTimeoutOverridden(true);
+                    }}
                   />
+                  <p className="text-xs text-slate-500">Maximum wait time per provider request; timed-out passes may return no web evidence.</p>
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Recency</span>
-                  <select className="input" value={webSearchRecency} onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}>
+                  <select
+                    className="input"
+                    value={webSearchRecency}
+                    disabled={!webSearchProviderCapabilities.recency}
+                    onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}
+                  >
                     {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                   </select>
+                  {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Not supported by DuckDuckGo adapter.</p> : null}
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Domain policy</span>
@@ -490,10 +547,12 @@ export function AgentPage() {
                     className={CHECKBOX_INPUT_CLASS}
                     type="checkbox"
                     checked={webSearchSafeSearch}
+                    disabled={!webSearchProviderCapabilities.safeSearch}
                     onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
                   />
                   <span>Safe search</span>
                 </label>
+                {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not supported by DuckDuckGo adapter.</p> : null}
                 <label className={CHECKBOX_WITH_LABEL_CLASS}>
                   <input
                     className={CHECKBOX_INPUT_CLASS}
@@ -532,7 +591,7 @@ export function AgentPage() {
                       provider: webSearchProvider,
                       mode: webSearchMode,
                       maxResults: webSearchMaxResults,
-                      timeoutMs: webSearchTimeoutMs,
+                      timeoutSeconds: webSearchTimeoutSeconds,
                       safeSearch: webSearchSafeSearch,
                       recency: webSearchRecency,
                       domainPolicy: webSearchDomainPolicy,

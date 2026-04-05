@@ -34,6 +34,11 @@ export interface SearchProviderAdapter {
   search(query: string, options?: SearchOptions, signal?: AbortSignal): Promise<SearchResult[]>;
 }
 
+export type SearchProviderCapabilities = {
+  recency: boolean;
+  safeSearch: boolean;
+};
+
 const DEFAULT_RESULT_CAP = 10;
 const MAX_RESULT_CAP = 50;
 
@@ -429,6 +434,21 @@ class UnimplementedSearchAdapter implements SearchProviderAdapter {
     throw new Error(`${this.provider} search adapter is not implemented.`);
   }
 }
+
+export const searchProviderCapabilities: Record<WebSearchProvider, SearchProviderCapabilities> = {
+  duckduckgo: {
+    recency: false,
+    safeSearch: false,
+  },
+  searxng: {
+    recency: true,
+    safeSearch: true,
+  },
+  google: {
+    recency: false,
+    safeSearch: false,
+  },
+};
 
 export const searchProviderRegistry: Record<WebSearchProvider, SearchProviderAdapter> = {
   duckduckgo: new DuckDuckGoSearchAdapter(),
