@@ -55,15 +55,32 @@ const WEB_SEARCH_RECENCY_OPTIONS: Array<{ value: WebSearchRecency; label: string
   { value: '365d', label: 'Last year' },
 ];
 const WEB_SEARCH_DOMAIN_POLICIES: Array<{ value: WebSearchDomainPolicy; label: string }> = [
-  { value: 'open_web', label: 'open_web' },
-  { value: 'prefer_list', label: 'prefer_list' },
-  { value: 'only_list', label: 'only_list' },
+  { value: 'open_web', label: 'Use entire web' },
+  { value: 'prefer_list', label: 'Use entire web + prioritize listed domains' },
+  { value: 'only_list', label: 'Use only listed domains' },
 ];
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const CHECKBOX_WITH_LABEL_CLASS = 'inline-flex items-center gap-2 text-sm text-slate-700';
 const CHECKBOX_INPUT_CLASS = 'h-4 w-4';
+const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {
+  1: 'Low',
+  2: 'Medium-low',
+  3: 'Medium',
+  4: 'High',
+  5: 'Critical',
+};
+const SOURCE_IMPORTANCE_COLORS: Record<number, string> = {
+  1: '#84cc16',
+  2: '#65a30d',
+  3: '#4d7c0f',
+  4: '#3f6212',
+  5: '#365314',
+};
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
+const clampSourceImportance = (value: number) => Math.min(5, Math.max(1, value));
+const getSourceImportanceLabel = (value: number) => SOURCE_IMPORTANCE_LABELS[clampSourceImportance(value)];
+const getSourceImportanceColor = (value: number) => SOURCE_IMPORTANCE_COLORS[clampSourceImportance(value)];
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -263,9 +280,9 @@ export function AgentPage() {
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0;
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
-    if (webSearchDomainPolicy === 'open_web') return 'open_web: Search the web normally, with no preferred-source weighting.';
-    if (webSearchDomainPolicy === 'prefer_list') return 'prefer_list (boost): Search broadly, but boost rankings for enabled preferred sources.';
-    return 'only_list (strict filter): Restrict search results to enabled preferred sources only.';
+    if (webSearchDomainPolicy === 'open_web') return 'Search across the entire web. Listed domains can still receive an importance boost.';
+    if (webSearchDomainPolicy === 'prefer_list') return 'Search across the entire web and prioritize enabled listed domains in ranking.';
+    return 'Restrict search results to enabled listed domains only.';
   }, [webSearchDomainPolicy]);
   const isValidDomain = (value: string) => DOMAIN_PATTERN.test(value.trim());
   const webSearchModeHelperText = useMemo(() => {
@@ -612,10 +629,10 @@ export function AgentPage() {
           </div>
         </section>
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Preferred sources</h2>
+          <h2 className="text-lg font-semibold">Custom domain sources</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
             <p className="text-xs text-slate-500">
-              Weight boosts ranking when domain policy is <code>open_web</code> or <code>prefer_list</code>. Under <code>only_list</code>, sources still filter results but weight does not affect ranking.
+              Source importance helps ranking when domain policy is set to “Use entire web” or “Use entire web + prioritize listed domains.” In “Use only listed domains,” source importance does not change rank; it only filters by domain.
             </p>
             <form
               className="grid gap-4 md:grid-cols-4"
@@ -628,9 +645,10 @@ export function AgentPage() {
                 }
                 setDomainInputError('');
                 try {
+                  const normalizedWeight = clampSourceImportance(Number(newWeight) || 1);
                   const created = await savePreferredSource({
                     domain: canonicalDomain,
-                    weight: Math.max(1, Number(newWeight) || 1),
+                    weight: normalizedWeight,
                     enabled: newEnabled,
                   });
                   setPreferredSources((current) => [...current, created]);
@@ -657,8 +675,23 @@ export function AgentPage() {
                 {domainInputError ? <p className="text-xs text-rose-600">{domainInputError}</p> : null}
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Weight</span>
-                <input className="input" min={1} step={1} type="number" value={newWeight} onChange={(event) => setNewWeight(event.target.value)} />
+                <span className="text-slate-600">Source importance</span>
+                <div className="flex items-center gap-3">
+                  <input
+                    className="h-2 w-full cursor-pointer"
+                    type="range"
+                    min={1}
+                    max={5}
+                    step={1}
+                    value={newWeight}
+                    aria-label="Source importance"
+                    style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}
+                    onChange={(event) => setNewWeight(event.target.value)}
+                  />
+                  <span className="min-w-[7rem] text-xs font-medium text-slate-700">
+                    {getSourceImportanceLabel(Number(newWeight) || 1)}
+                  </span>
+                </div>
               </label>
               <div className="flex items-end">
                 <label className={CHECKBOX_WITH_LABEL_CLASS}>
@@ -676,7 +709,7 @@ export function AgentPage() {
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-600">
                     <th className="py-2 pr-3">Domain</th>
-                    <th className="py-2 pr-3">Weight</th>
+                    <th className="py-2 pr-3">Source importance</th>
                     <th className="py-2 pr-3">Enabled</th>
                     <th className="py-2 pr-3">Controls</th>
                   </tr>
@@ -693,8 +726,28 @@ export function AgentPage() {
                         </td>
                         <td className="py-2 pr-3">
                           {isEditing ? (
-                            <input className="input" min={1} step={1} type="number" value={editingWeight} onChange={(event) => setEditingWeight(event.target.value)} />
-                          ) : source.weight}
+                            <div className="flex items-center gap-3">
+                              <input
+                                className="h-2 w-full cursor-pointer"
+                                type="range"
+                                min={1}
+                                max={5}
+                                step={1}
+                                value={editingWeight}
+                                aria-label="Source importance"
+                                style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}
+                                onChange={(event) => setEditingWeight(event.target.value)}
+                              />
+                              <span className="min-w-[7rem] text-xs font-medium text-slate-700">
+                                {getSourceImportanceLabel(Number(editingWeight) || 1)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span title={`Importance level ${source.weight}`}>
+                              {getSourceImportanceLabel(source.weight)}
+                              <span className="ml-1 text-xs text-slate-400">({source.weight})</span>
+                            </span>
+                          )}
                         </td>
                         <td className="py-2 pr-3">
                           {isEditing ? (
@@ -714,9 +767,10 @@ export function AgentPage() {
                                       return;
                                     }
                                     try {
+                                      const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);
                                       const updated = await savePreferredSourceById(source.id, {
                                         domain: canonicalDomain,
-                                        weight: Math.max(1, Number(editingWeight) || 1),
+                                        weight: normalizedWeight,
                                         enabled: editingEnabled,
                                       });
                                       setPreferredSources((current) => current.map((entry) => (entry.id === source.id ? updated : entry)));
