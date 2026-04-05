@@ -24,6 +24,7 @@ test('attachment upload uses multipart FormData and avoids base64 buffer inflati
 test('file list does not fetch attachment details during render-time list updates', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/files/FileList.tsx'), 'utf8');
 
-  assert.doesNotMatch(source, /listAttachments/);
-  assert.doesNotMatch(source, /attachmentCounts/);
+  assert.match(source, /listAttachmentCounts\('note', visibleNoteIds/);
+  assert.doesNotMatch(source, /visible\.map\([\s\S]*listAttachments/);
+  assert.match(source, /abortController\.abort\(\)/);
 });

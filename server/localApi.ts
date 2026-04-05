@@ -1188,6 +1188,29 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'GET' && url.startsWith('/api/attachments/counts?')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const linkType = coerceLinkType(parsedUrl.searchParams.get('linkType'));
+      const rawIds = parsedUrl.searchParams.get('ids') ?? '';
+      const ids = Array.from(new Set(rawIds.split(',').map((value) => value.trim()).filter(Boolean))).slice(0, 200);
+      if (!linkType || ids.length === 0) {
+        writeJson(res, 400, { error: { message: 'linkType and ids are required.' } });
+        return true;
+      }
+      const idsSql = ids.map((value) => sqlEscape(value)).join(', ');
+      const counts = queryJson<Array<{ link_id: string; count: number }>[number]>(`
+        select l.link_id as link_id, count(*) as count
+        from attachment_links l
+        inner join attachments a on a.id = l.attachment_id
+        where l.link_type = ${sqlEscape(linkType)}
+          and l.link_id in (${idsSql})
+          and a.deleted_at is null
+        group by l.link_id
+      `);
+      writeJson(res, 200, counts);
+      return true;
+    }
+
     if (req.method === 'POST' && /^\/api\/attachments\/[^/]+\/link$/.test(url)) {
       const attachmentId = url.replace('/api/attachments/', '').replace('/link', '').trim();
       const payload = await readJsonBody(req);

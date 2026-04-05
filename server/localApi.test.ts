@@ -341,6 +341,67 @@ test('attachments migration/init and upload/list flow work', async () => {
   assert.equal(listPayload[0]?.id, uploaded.id);
 });
 
+test('attachments counts endpoint batches by link_id across note ids', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  let noteA = bootstrapPayload.files[0]?.id ?? '';
+  let noteB = bootstrapPayload.files[1]?.id ?? '';
+  if (!noteA || !noteB) {
+    await callRoute('POST', '/api/files', {
+      workspaceId: bootstrapPayload.workspace.id,
+      folderId: null,
+      name: 'count-a.md',
+      path: 'count-a.md',
+      content: 'A',
+    });
+    await callRoute('POST', '/api/files', {
+      workspaceId: bootstrapPayload.workspace.id,
+      folderId: null,
+      name: 'count-b.md',
+      path: 'count-b.md',
+      content: 'B',
+    });
+    const refreshed = await callRoute('GET', '/api/bootstrap');
+    const files = (JSON.parse(refreshed.body) as { files: Array<{ id: string }> }).files;
+    noteA = files[0]?.id ?? '';
+    noteB = files[1]?.id ?? '';
+  }
+
+  const uploadForNoteA = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteA,
+    original_name: 'count-a.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'count-a.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('count-a', 'utf8'),
+  });
+  const uploadForNoteB = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteB,
+    original_name: 'count-b.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'count-b.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('count-b', 'utf8'),
+  });
+
+  assert.equal((await callRoute('POST', '/api/attachments/upload', uploadForNoteA.body, uploadForNoteA.headers)).status, 200);
+  assert.equal((await callRoute('POST', '/api/attachments/upload', uploadForNoteA.body, uploadForNoteA.headers)).status, 200);
+  assert.equal((await callRoute('POST', '/api/attachments/upload', uploadForNoteB.body, uploadForNoteB.headers)).status, 200);
+
+  const countsResponse = await callRoute('GET', `/api/attachments/counts?linkType=note&ids=${noteA},${noteB}`);
+  assert.equal(countsResponse.status, 200);
+  const counts = JSON.parse(countsResponse.body) as Array<{ link_id: string; count: number }>;
+  const byId = new Map(counts.map((row) => [row.link_id, Number(row.count)]));
+  assert.equal(byId.get(noteA), 2);
+  assert.equal(byId.get(noteB), 1);
+});
+
 test('unlinking final link soft deletes attachment', async () => {
   const bootstrap = await callRoute('GET', '/api/bootstrap');
   const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };

@@ -1,8 +1,8 @@
-import { FilePlus2, Pencil, Star, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { FilePlus2, Paperclip, Pencil, Star, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { getFileTitleIndicators } from './unsavedIndicators';
-import { createFile, deleteFile, updateFile } from '../../lib/dataApi';
+import { createFile, deleteFile, listAttachmentCounts, updateFile } from '../../lib/dataApi';
 import { toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
@@ -15,6 +15,8 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
+  const [attachmentCountsByNoteId, setAttachmentCountsByNoteId] = useState<Record<string, number>>({});
+  const attachmentRequestSequenceRef = useRef(0);
 
   const visible = useMemo(() => {
     const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
@@ -66,6 +68,31 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
   }, [files, folders, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
+  const visibleNoteIds = useMemo(() => visible.map((file) => file.id), [visible]);
+  const visibleNoteIdsKey = useMemo(() => visibleNoteIds.join('|'), [visibleNoteIds]);
+
+  useEffect(() => {
+    const requestSequence = attachmentRequestSequenceRef.current + 1;
+    attachmentRequestSequenceRef.current = requestSequence;
+    if (visibleNoteIds.length === 0) {
+      setAttachmentCountsByNoteId({});
+      return;
+    }
+    const abortController = new AbortController();
+    void listAttachmentCounts('note', visibleNoteIds, { signal: abortController.signal })
+      .then((counts) => {
+        if (attachmentRequestSequenceRef.current !== requestSequence) return;
+        setAttachmentCountsByNoteId(counts);
+      })
+      .catch((error) => {
+        if ((error as { name?: string } | null)?.name === 'AbortError') return;
+        if (attachmentRequestSequenceRef.current !== requestSequence) return;
+        setAttachmentCountsByNoteId({});
+      });
+    return () => {
+      abortController.abort();
+    };
+  }, [visibleNoteIds, visibleNoteIdsKey]);
 
   const hasDuplicateInFolder = (folderId: string | null, fileName: string, currentFileId?: string) => {
     const normalizedName = fileName.toLowerCase();
@@ -159,6 +186,12 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
               >
                 <p className="flex items-center gap-1 text-sm font-medium">
                   <span>{getDisplayTitle(frontmatter.title, file.name)}</span>
+                  {(attachmentCountsByNoteId[file.id] ?? 0) > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500" aria-label={`${attachmentCountsByNoteId[file.id]} attachment(s)`} title={`${attachmentCountsByNoteId[file.id]} attachment(s)`}>
+                      <Paperclip size={10} />
+                      <span>{attachmentCountsByNoteId[file.id]}</span>
+                    </span>
+                  )}
                   {getFileTitleIndicators({ isStarred: frontmatter.starred === true, isUnsaved: unsavedFileIds.includes(file.id) }).map((indicator) => (
                     indicator === 'starred'
                       ? <span key={`${file.id}-starred`} title="Starred note" aria-label="Starred note"><Star size={12} className="text-amber-500" fill="currentColor" /></span>
