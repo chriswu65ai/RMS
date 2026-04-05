@@ -4,9 +4,18 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unl
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { FALLBACK_MODELS, providerRegistry, selectBestModel, supportsToolCalling, type AgentProvider } from './agentProviders';
+import {
+  FALLBACK_MODELS,
+  providerRegistry,
+  selectBestModel,
+  supportsToolCalling,
+  type AgentProvider,
+  type AgentToolCall,
+  type AgentToolDefinition,
+} from './agentProviders';
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
+import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { processResponseCitations } from './response/citation_pipeline';
 import { secretStore } from './secretStore';
 
@@ -1229,6 +1238,121 @@ const invokeProviderGenerate = (
   },
 ) => providerRegistry[provider].generate(request, apiKey, signal, options);
 
+const extractExplicitConfirm = (inputText: string, payload: Record<string, unknown>): boolean => {
+  if (typeof payload.explicit_confirm === 'boolean') return payload.explicit_confirm;
+  return /\b(confirm|approved?|yes,?\s+do\s+it)\b/i.test(inputText);
+};
+
+const buildChatToolAdapter = (sessionId: string) => ({
+  listTasks: async () => queryJson<NewResearchTaskRow>(
+    'select * from new_research_tasks order by created_at desc',
+  ).map((task) => {
+    const normalized = normalizeTaskRow(task);
+    return {
+      id: normalized.id,
+      title: normalized.title,
+      ticker: normalized.ticker,
+      note_type: normalized.note_type,
+      status: normalized.status,
+      archived: normalized.archived,
+      linked_note_file_id: normalized.linked_note_file_id,
+      linked_note_path: normalized.linked_note_path,
+    };
+  }),
+  createTask: async (input: {
+    ticker: string;
+    title: string;
+    note_type: string;
+    details?: string;
+    assignee?: string;
+    priority?: string;
+    deadline?: string;
+    status?: 'ideas' | 'researching' | 'completed';
+  }) => {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    const ticker = input.ticker.trim().toUpperCase();
+    const noteType = input.note_type.trim().toLowerCase();
+    const priority = VALID_TASK_PRIORITIES.has(input.priority ?? '') ? (input.priority ?? '') : '';
+    execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    recordTaskEvent(id, 'create', `Task created via chat orchestration (${ticker} — ${input.title}).`);
+    const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
+    const normalized = normalizeTaskRow(created);
+    return {
+      id: normalized.id,
+      title: normalized.title,
+      ticker: normalized.ticker,
+      note_type: normalized.note_type,
+      status: normalized.status,
+      archived: normalized.archived,
+      linked_note_file_id: normalized.linked_note_file_id,
+      linked_note_path: normalized.linked_note_path,
+    };
+  },
+  updateTask: async (taskId: string, patch: Record<string, unknown>) => {
+    const existing = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+    if (!existing) throw new Error('Task not found.');
+    const now = new Date().toISOString();
+    const nextTicker = typeof patch.ticker === 'string' ? patch.ticker.trim().toUpperCase() : existing.ticker;
+    const nextNoteType = typeof patch.note_type === 'string' ? patch.note_type.trim().toLowerCase() : existing.note_type;
+    const nextPriorityCandidate = typeof patch.priority === 'string' ? patch.priority.trim().toLowerCase() : existing.priority;
+    const nextPriority = VALID_TASK_PRIORITIES.has(nextPriorityCandidate) ? nextPriorityCandidate : existing.priority;
+    const nextStatus = patch.status === 'ideas' || patch.status === 'researching' || patch.status === 'completed'
+      ? patch.status
+      : existing.status;
+    const nextArchived = typeof patch.archived === 'boolean' ? patch.archived : Boolean(existing.archived);
+    execSql(`update new_research_tasks set
+      title = ${sqlEscape(typeof patch.title === 'string' ? patch.title : existing.title)},
+      details = ${sqlEscape(typeof patch.details === 'string' ? patch.details : existing.details)},
+      ticker = ${sqlEscape(nextTicker)},
+      note_type = ${sqlEscape(nextNoteType)},
+      assignee = ${sqlEscape(typeof patch.assignee === 'string' ? patch.assignee : existing.assignee)},
+      priority = ${sqlEscape(nextPriority)},
+      deadline = ${sqlEscape(typeof patch.deadline === 'string' ? patch.deadline : existing.deadline)},
+      status = ${sqlEscape(nextStatus)},
+      archived = ${sqlEscape(nextArchived ? 1 : 0)},
+      updated_at = ${sqlEscape(now)}
+      where id = ${sqlEscape(taskId)}`);
+    const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+    const normalized = normalizeTaskRow(updated);
+    recordTaskEvent(taskId, 'edit', 'Task updated via chat orchestration.');
+    return {
+      id: normalized.id,
+      title: normalized.title,
+      ticker: normalized.ticker,
+      note_type: normalized.note_type,
+      status: normalized.status,
+      archived: normalized.archived,
+      linked_note_file_id: normalized.linked_note_file_id,
+      linked_note_path: normalized.linked_note_path,
+    };
+  },
+  generateNote: async (input: { instruction: string; taskId?: string; noteId?: string; title?: string }) => {
+    const now = new Date().toISOString();
+    if (input.noteId) {
+      const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(input.noteId)} limit 1`)[0];
+      if (!existing) throw new Error('Note not found.');
+      const nextContent = [existing.content || '', '', `## Chat instruction`, input.instruction].join('\n').trim();
+      execSql(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`);
+      return { note_id: existing.id, action: 'updated' as const };
+    }
+    const workspace = ensureWorkspaceWithStarterContent();
+    const noteId = randomUUID();
+    const inferredTitle = (input.title?.trim() || `Chat Draft ${new Date().toISOString().slice(0, 10)}`);
+    const safeTitle = inferredTitle.replace(/[\\/:*?"<>|]/g, '').trim() || 'Chat Draft';
+    const notePath = `${safeTitle}.md`;
+    execSql(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    if (input.taskId) {
+      execSql(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`);
+      recordTaskEvent(input.taskId, 'link', `Linked generated note via chat orchestration: ${notePath}.`);
+    }
+    return { note_id: noteId, action: 'created' as const };
+  },
+  savePendingActionDraft: async (targetSessionId: string, actionKey: string, draft: Record<string, unknown>, status?: 'pending' | 'confirmed' | 'cancelled') => {
+    savePendingActionDraft(targetSessionId, actionKey, draft, status ?? 'pending');
+  },
+});
+
 const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => {
   if (!raw || typeof raw !== 'object') return null;
   const next = raw as Record<string, unknown>;
@@ -1476,9 +1600,139 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         tool_attempts: 0,
       });
       try {
+        const explicitConfirm = extractExplicitConfirm(inputText, payload as Record<string, unknown>);
+        let toolCallsAttempted = 0;
+        let toolCallsSucceeded = 0;
+        let toolNarrationBefore = '';
+        let toolNarrationAfter = '';
+        let toolMetadata: Record<string, unknown> | null = null;
+        let generationPrompt = contextPayload.prompt;
+        if (supportsToolCalling(preferred, resolvedModel)) {
+          try {
+            const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
+            streamEvents.push(planningStart);
+            writeNdjson(res, planningStart);
+            const planning = await providerRegistry[preferred].generateToolFirstTurn({
+              model: resolvedModel,
+              inputText: contextPayload.prompt,
+              tools: CHAT_TOOLS as unknown as AgentToolDefinition[],
+              generationParams: {
+                ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
+                ...(preferred === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
+              },
+            }, apiKey ?? '', controller.signal);
+            const planFrame = {
+              type: 'tool_planning_result',
+              planned_tool_calls: planning.toolCalls.map((call) => ({ id: call.id, name: call.name })),
+            };
+            streamEvents.push(planFrame);
+            writeNdjson(res, planFrame);
+            const supportedCall = planning.toolCalls.find((call) => isSupportedChatTool(call.name));
+            if (supportedCall) {
+            toolCallsAttempted = 1;
+            const startFrame = {
+              type: 'tool_call_started',
+              tool_call_id: supportedCall.id,
+              tool_name: supportedCall.name,
+              arguments: supportedCall.arguments,
+            };
+            streamEvents.push(startFrame);
+            writeNdjson(res, startFrame);
+            const adapter = buildChatToolAdapter(session.id);
+            const outcome = await runChatToolOrchestration(adapter, {
+              sessionId: session.id,
+              toolCall: supportedCall as AgentToolCall,
+              explicitConfirm,
+            });
+            if (outcome.status === 'executed') {
+              toolCallsSucceeded = 1;
+            }
+            toolNarrationBefore = outcome.narration_before;
+            toolNarrationAfter = outcome.narration_after;
+            toolMetadata = {
+              tool_outcome: outcome.status,
+              missing_fields: outcome.missing_fields ?? null,
+              disambiguation_prompt: outcome.disambiguation_prompt ?? null,
+              result: outcome.result ?? null,
+              explicit_confirm: explicitConfirm,
+            };
+            const resultFrame = {
+              type: 'tool_call_result',
+              tool_call_id: supportedCall.id,
+              tool_name: supportedCall.name,
+              outcome: outcome.status,
+              narration_before: outcome.narration_before,
+              narration_after: outcome.narration_after,
+              missing_fields: outcome.missing_fields,
+              disambiguation_prompt: outcome.disambiguation_prompt,
+              result: outcome.result,
+            };
+            streamEvents.push(resultFrame);
+            writeNdjson(res, resultFrame);
+            if (outcome.status === 'needs_confirmation' || outcome.status === 'needs_disambiguation' || outcome.status === 'rejected') {
+              const toolOnlyText = [
+                outcome.narration_before,
+                outcome.disambiguation_prompt,
+                outcome.narration_after,
+              ].filter(Boolean).join('\n\n');
+              const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
+              streamEvents.push(doneFrame);
+              writeNdjson(res, doneFrame);
+              const persistedIds = persistChatTurnAtomic({
+                sessionId: session.id,
+                userContent: inputText,
+                assistantContent: toolOnlyText,
+                provider: preferred,
+                model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: {
+                  usage: null,
+                  costEstimate: null,
+                  completedAt: new Date().toISOString(),
+                  correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                  context: contextPayload.meta,
+                  tool: toolMetadata,
+                  metrics: {
+                    turn_latency_ms: Date.now() - turnStartedAt,
+                    tool_attempts: toolCallsAttempted,
+                    tool_successes: toolCallsSucceeded,
+                    tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
+                  },
+                },
+              });
+              emitStructuredLog('chat.turn.completed', {
+                correlation_id: turnCorrelationId,
+                session_id: session.id,
+                message_id: persistedIds.assistantMessageId,
+                turn_latency_ms: Date.now() - turnStartedAt,
+                stream_status: 'done',
+                tool_attempts: toolCallsAttempted,
+                tool_successes: toolCallsSucceeded,
+                tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+            generationPrompt = [
+              contextPayload.prompt,
+              '',
+              '[TOOL_ORCHESTRATION]',
+              toolNarrationBefore,
+              toolNarrationAfter,
+              `Tool result JSON: ${JSON.stringify(outcome.result ?? {})}`,
+            ].filter(Boolean).join('\n');
+            }
+          } catch (planningError) {
+            const planningErrorMessage = planningError instanceof Error ? planningError.message : 'Tool planning failed.';
+            const errorFrame = { type: 'tool_planning_failed', message: planningErrorMessage };
+            streamEvents.push(errorFrame);
+            writeNdjson(res, errorFrame);
+          }
+        }
         const result = await providerRegistry[preferred].generate({
           model: resolvedModel,
-          inputText: contextPayload.prompt,
+          inputText: generationPrompt,
           generationParams: {
             ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
             ...(preferred === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
@@ -1508,11 +1762,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             completedAt: new Date().toISOString(),
             correlation: { turn_id: turnCorrelationId, session_id: session.id },
             context: contextPayload.meta,
+            tool: toolMetadata,
             metrics: {
               turn_latency_ms: Date.now() - turnStartedAt,
-              tool_attempts: 0,
-              tool_successes: 0,
-              tool_failures: 0,
+              tool_attempts: toolCallsAttempted,
+              tool_successes: toolCallsSucceeded,
+              tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
             },
           },
         });
@@ -1534,9 +1789,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           message_id: persistedIds.assistantMessageId,
           turn_latency_ms: Date.now() - turnStartedAt,
           stream_status: 'done',
-          tool_attempts: 0,
-          tool_successes: 0,
-          tool_failures: 0,
+          tool_attempts: toolCallsAttempted,
+          tool_successes: toolCallsSucceeded,
+          tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
         });
         persisted = true;
         res.end();
