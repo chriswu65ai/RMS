@@ -218,7 +218,7 @@ export const selectBestModel = (
     return { selected_model: rankedFallback[0].modelId, selection_source: 'provider_fallback' };
   }
 
-  return { selected_model: 'model-not-configured', selection_source: 'provider_fallback' };
+  return { selected_model: '', selection_source: 'provider_fallback' };
 };
 
 const asDiscoveryResult = ({
@@ -1148,9 +1148,9 @@ export const providerRegistry: Record<AgentProvider, ProviderAdapter> = {
 
 export const FALLBACK_MODELS: Record<AgentProvider, ModelListEntry[]> = {
   minimax: [{ modelId: 'MiniMax-M2.5', displayName: 'MiniMax M2.5', B: 1 }],
-  openai: [{ modelId: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', B: 1 }],
-  anthropic: [{ modelId: 'claude-3-5-sonnet-latest', displayName: 'Claude 3.5 Sonnet', B: 1 }],
-  ollama: [{ modelId: 'llama3.2:latest', displayName: 'Llama 3.2', B: 1 }],
+  openai: [],
+  anthropic: [],
+  ollama: [],
 };
 
 export const PROVIDER_CAPABILITIES: Record<AgentProvider, {

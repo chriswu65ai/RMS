@@ -248,6 +248,23 @@ test('web search save payload omits searxng provider_config when provider is duc
   assert.equal(payload.generation_params?.web_search?.provider_config, undefined);
 });
 
+
+test('AgentPage disables model select when no catalog models are available', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const modelOptions = models;'), true);
+  assert.equal(source.includes('disabled={modelState.loading || modelOptions.length === 0}'), true);
+});
+
+test('AgentPage empty-model status message instructs user to refresh live discovery', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('No models available yet. Press Refresh models to run live discovery.'), true);
+});
+
+test('AgentPage clears selected model when refreshed list no longer contains it', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const normalizedSelectedModel = selectedModelStillAvailable ? nextSelectedModel : '';"), true);
+  assert.equal(source.includes('if (!currentSelectionStillAvailable) {'), true);
+});
 test('AgentPage UI no longer references the top web-search warning banner message', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);

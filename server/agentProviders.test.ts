@@ -50,9 +50,9 @@ test('selectBestModel chooses provider-ranked live model when preferred is missi
   assert.equal(selected.selection_source, 'live_catalog');
 });
 
-test('selectBestModel ensures non-empty fallback selection when live catalog is unavailable', () => {
+test('selectBestModel returns empty selection when neither live nor fallback models exist', () => {
   const selected = selectBestModel('anthropic', [], FALLBACK_MODELS.anthropic, 'claude-3-opus');
-  assert.equal(selected.selected_model, FALLBACK_MODELS.anthropic[0]?.modelId);
+  assert.equal(selected.selected_model, '');
   assert.equal(selected.selection_source, 'provider_fallback');
 });
 
@@ -110,7 +110,7 @@ test('empty live list response maps to empty_response and fallback', async () =>
   assert.equal(result.catalog_status, 'failed');
   assert.equal(result.reason_code, 'empty_response');
   assert.equal(result.selection_source, 'provider_fallback');
-  assert.equal(result.selected_model, FALLBACK_MODELS.openai[0]?.modelId);
+  assert.equal(result.selected_model, '');
 });
 
 test('auth failure classification is normalized', async () => {
@@ -119,18 +119,17 @@ test('auth failure classification is normalized', async () => {
   const result = await providerRegistry.anthropic.listModels('bad-key', { fallbackModels: FALLBACK_MODELS.anthropic });
   assert.equal(result.catalog_status, 'failed');
   assert.equal(result.reason_code, 'auth_failed');
-  assert.equal(result.selected_model, FALLBACK_MODELS.anthropic[0]?.modelId);
+  assert.equal(result.selected_model, '');
 });
 
-test('selected_model remains populated whenever fallback has a valid entry', async () => {
+test('selected_model is empty whenever no live or fallback entries exist', async () => {
   globalThis.fetch = async () => {
     throw new Error('network down');
   };
 
   const result = await providerRegistry.openai.listModels('test-key', { fallbackModels: FALLBACK_MODELS.openai });
   assert.equal(result.catalog_status, 'failed');
-  assert.ok(result.selected_model.length > 0);
-  assert.equal(result.selected_model, FALLBACK_MODELS.openai[0]?.modelId);
+  assert.equal(result.selected_model, '');
 });
 
 test('ollama returns explicit unreachable reason when local daemon is down', async () => {
