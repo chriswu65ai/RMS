@@ -69,7 +69,20 @@ export type AgentToolOrchestrationResult = {
 
 export type AgentToolLifecycleEvent =
   | { type: 'tool_call_started'; toolCallId: string; toolName: string; attempt: number; maxAttempts: number; args: WebSearchToolArgs }
-  | { type: 'tool_call_result'; toolCallId: string; toolName: string; attempt: number; sourceCount: number; query: string }
+  | {
+    type: 'tool_call_result';
+    toolCallId: string;
+    toolName: string;
+    attempt: number;
+    maxAttempts: number;
+    sourceCount: number;
+    query: string;
+    latencyMs?: number;
+    sourceMeta: {
+      topDomains: string[];
+      topUrls: string[];
+    };
+  }
   | { type: 'tool_call_failed'; toolCallId: string; toolName: string; attempt: number; reason: string };
 
 const WEB_SEARCH_TOOL: AgentToolDefinition = {
@@ -161,6 +174,34 @@ const resolveStructuredWebSearchCall = (calls: AgentToolCall[]): AgentToolCall |
     if (mapped) return mapped;
   }
   return null;
+};
+
+const normalizeHostname = (value: string): string => value
+  .trim()
+  .toLowerCase()
+  .replace(/^www\./, '');
+
+const getTopSourceMeta = (results: SearchResult[]): { topDomains: string[]; topUrls: string[] } => {
+  const domainCounts = new Map<string, number>();
+  const topUrls: string[] = [];
+  for (const result of results) {
+    const url = result.url?.trim();
+    if (url && topUrls.length < 3) {
+      topUrls.push(url);
+    }
+    try {
+      const domain = normalizeHostname(new URL(result.url).hostname);
+      if (!domain) continue;
+      domainCounts.set(domain, (domainCounts.get(domain) ?? 0) + 1);
+    } catch {
+      // ignore invalid urls
+    }
+  }
+  const topDomains = Array.from(domainCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([domain]) => domain);
+  return { topDomains, topUrls };
 };
 
 export const runAgentToolOrchestration = async ({
@@ -256,6 +297,8 @@ export const runAgentToolOrchestration = async ({
       }, searchTimeoutController.signal);
       appendSearchDiagnostic({ provider: args.provider, mode: args.mode, query: args.query, resultCount: results.length, latencyMs: Date.now() - startedAt });
       if (results.length === 0) throw new Error('web_search returned no sources.');
+      const latencyMs = Date.now() - startedAt;
+      const sourceMeta = getTopSourceMeta(results);
       toolCalls.push({ name: 'web_search', arguments: args, sources: results });
       toolCallsSucceeded += 1;
       onEvent?.({
@@ -263,8 +306,11 @@ export const runAgentToolOrchestration = async ({
         toolCallId,
         toolName: 'web_search',
         attempt: i + 1,
+        maxAttempts: maxToolCalls,
         sourceCount: results.length,
         query: args.query,
+        latencyMs,
+        sourceMeta,
       });
       const followupToolCall: AgentToolCall = { id: toolCallId, name: 'web_search', arguments: args };
       initialResponse = await providerRegistry[provider].generateToolFollowupTurn({
