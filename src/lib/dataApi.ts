@@ -198,22 +198,16 @@ export async function uploadAttachment(params: {
   linkId: string;
   file: File;
 }): Promise<Attachment> {
-  const buffer = await params.file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-  const contentBase64 = btoa(binary);
+  const formData = new FormData();
+  formData.append('workspace_id', params.workspaceId);
+  formData.append('link_type', params.linkType);
+  formData.append('link_id', params.linkId);
+  formData.append('original_name', params.file.name);
+  formData.append('mime_type', params.file.type || 'application/octet-stream');
+  formData.append('file', params.file, params.file.name);
   const response = await fetch('/api/attachments/upload', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      workspace_id: params.workspaceId,
-      link_type: params.linkType,
-      link_id: params.linkId,
-      original_name: params.file.name,
-      mime_type: params.file.type,
-      content_base64: contentBase64,
-    }),
+    body: formData,
   });
   if (!response.ok) throw new Error(await response.text());
   return readJson<Attachment>(response);
