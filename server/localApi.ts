@@ -282,6 +282,74 @@ const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): 
   return queryJson<ChatSessionRow>(`select * from chat_sessions where id = ${sqlEscape(id)} limit 1`)[0];
 };
 
+const DEFAULT_CHAT_USER_ID = 'local-user';
+const DEFAULT_CHAT_SETTINGS_POLICY = {
+  max_context_messages: 40,
+  summarize_after_messages: 80,
+};
+
+const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
+  const existing = queryJson<ChatSettingsRow>(`select * from chat_settings where user_id = ${sqlEscape(userId)} limit 1`)[0];
+  if (existing) return existing;
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  execSql(`
+    insert into chat_settings (id, user_id, policy_json, profile_json, created_at, updated_at)
+    values (
+      ${sqlEscape(id)},
+      ${sqlEscape(userId)},
+      ${sqlEscape(JSON.stringify(DEFAULT_CHAT_SETTINGS_POLICY))},
+      null,
+      ${sqlEscape(now)},
+      ${sqlEscape(now)}
+    )
+  `);
+  return queryJson<ChatSettingsRow>(`select * from chat_settings where id = ${sqlEscape(id)} limit 1`)[0];
+};
+
+const persistChatTurnAtomic = (input: {
+  sessionId: string;
+  userContent: string;
+  assistantContent: string;
+  provider: AgentProvider;
+  model: string;
+  stream: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+}) => {
+  const now = new Date().toISOString();
+  const userId = randomUUID();
+  const assistantId = randomUUID();
+  execSql(`
+    begin;
+    insert into chat_messages (id, session_id, role, content, provider, model, stream_json, metadata_json, created_at)
+    values (
+      ${sqlEscape(userId)},
+      ${sqlEscape(input.sessionId)},
+      'user',
+      ${sqlEscape(input.userContent)},
+      null,
+      null,
+      null,
+      null,
+      ${sqlEscape(now)}
+    );
+    insert into chat_messages (id, session_id, role, content, provider, model, stream_json, metadata_json, created_at)
+    values (
+      ${sqlEscape(assistantId)},
+      ${sqlEscape(input.sessionId)},
+      'assistant',
+      ${sqlEscape(input.assistantContent)},
+      ${sqlEscape(input.provider)},
+      ${sqlEscape(input.model)},
+      ${sqlEscape(input.stream ? JSON.stringify(input.stream) : null)},
+      ${sqlEscape(input.metadata ? JSON.stringify(input.metadata) : null)},
+      ${sqlEscape(now)}
+    );
+    update chat_sessions set updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.sessionId)};
+    commit;
+  `);
+};
+
 type AppendChatMessageInput = {
   sessionId: string;
   role: ChatRole;
@@ -1212,6 +1280,234 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   }
 
   try {
+    if (req.method === 'GET' && url === '/api/chat/session/current') {
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      writeJson(res, 200, session);
+      return true;
+    }
+
+    if (req.method === 'GET' && url.startsWith('/api/chat/session/current/messages')) {
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      const parsedUrl = new URL(url, 'http://localhost');
+      const limit = Number.parseInt(parsedUrl.searchParams.get('limit') ?? '50', 10);
+      const before = parsedUrl.searchParams.get('before') ?? undefined;
+      const messages = loadPaginatedChatMessages(session.id, Number.isFinite(limit) ? limit : 50, before).map((row) => ({
+        ...row,
+        stream: parseJsonOrNull<Record<string, unknown>>(row.stream_json),
+        metadata: parseJsonOrNull<Record<string, unknown>>(row.metadata_json),
+      }));
+      writeJson(res, 200, { session, messages });
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/chat/session/current/messages') {
+      const payload = await readJsonBody(req);
+      const inputText = String(payload.content ?? payload.input_text ?? '').trim();
+      if (!inputText) {
+        writeJson(res, 400, { error: { message: 'content is required.' } });
+        return true;
+      }
+      const settings = getAgentSettings();
+      const preferred = isAgentProvider(payload.provider) ? payload.provider : settings.default_provider;
+      const modelFromPayload = String(payload.model ?? '').trim();
+      const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
+      const fallbackModelId = FALLBACK_MODELS[preferred][0]?.modelId ?? '';
+      const resolvedModel = preferred === 'ollama'
+        ? ollamaRuntime.model
+        : (modelFromPayload || settings.default_model || fallbackModelId);
+      if (!resolvedModel) {
+        writeJson(res, 400, { error: { message: 'Model is required.' } });
+        return true;
+      }
+      const apiKey = secretStore.get(preferred);
+      if (preferred !== 'ollama' && !apiKey) {
+        writeJson(res, 400, { error: { message: 'Missing API key for selected provider.' } });
+        return true;
+      }
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      const controller = new AbortController();
+      let clientAborted = false;
+      req.on('aborted', () => {
+        clientAborted = true;
+        controller.abort();
+      });
+      const streamEvents: Array<Record<string, unknown>> = [{ type: 'status', stage: 'started' }];
+      let assistantText = '';
+      let persisted = false;
+      beginNdjson(res);
+      writeNdjson(res, { type: 'status', stage: 'started' });
+      try {
+        const result = await providerRegistry[preferred].generate({
+          model: resolvedModel,
+          inputText,
+          generationParams: {
+            ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
+            ...(preferred === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
+          },
+        }, apiKey ?? '', controller.signal, {
+          onTextDelta: (deltaText) => {
+            if (!deltaText) return;
+            assistantText += deltaText;
+            const frame = { type: 'delta', deltaText };
+            streamEvents.push(frame);
+            writeNdjson(res, frame);
+          },
+        });
+        const doneFrame = { type: 'done', ...result };
+        streamEvents.push(doneFrame);
+        writeNdjson(res, doneFrame);
+        persistChatTurnAtomic({
+          sessionId: session.id,
+          userContent: inputText,
+          assistantContent: result.outputText,
+          provider: preferred,
+          model: resolvedModel,
+          stream: { events: streamEvents, status: 'done' },
+          metadata: {
+            usage: result.usage ?? null,
+            costEstimate: result.costEstimate ?? null,
+            completedAt: new Date().toISOString(),
+          },
+        });
+        persisted = true;
+        res.end();
+      } catch (error) {
+        const cancelled = clientAborted;
+        const message = cancelled ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.');
+        const errorFrame = { type: 'error', message, aborted: cancelled };
+        streamEvents.push(errorFrame);
+        if (res.headersSent) {
+          writeNdjson(res, errorFrame);
+          res.end();
+        } else {
+          writeJson(res, cancelled ? 499 : 400, { error: { message } });
+        }
+        if (!persisted) {
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: assistantText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: cancelled ? 'cancelled' : 'error' },
+            metadata: {
+              aborted: cancelled,
+              error: message,
+              completedAt: new Date().toISOString(),
+            },
+          });
+          persisted = true;
+        }
+      }
+      return true;
+    }
+
+    if (req.method === 'DELETE' && url.startsWith('/api/chat/session/current/history')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const range = parsedUrl.searchParams.get('range');
+      if (range !== '24h' && range !== '7d' && range !== 'all') {
+        writeJson(res, 400, { error: { message: 'range must be 24h, 7d, or all.' } });
+        return true;
+      }
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      const purgeResult = purgeChatHistoryByRange(session.id, range);
+      if (range === 'all') {
+        execSql(`delete from chat_memory_snapshots where session_id = ${sqlEscape(session.id)}`);
+      }
+      writeJson(res, 200, { session_id: session.id, range, ...purgeResult });
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/chat/session/current/reset-context') {
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      execSql(`
+        delete from chat_pending_actions where session_id = ${sqlEscape(session.id)};
+        delete from chat_memory_snapshots where session_id = ${sqlEscape(session.id)};
+      `);
+      const marker = appendChatMessage({
+        sessionId: session.id,
+        role: 'system',
+        content: 'Context reset by user.',
+        metadata: { source: 'reset-context' },
+      });
+      writeJson(res, 200, { error: null, session_id: session.id, marker });
+      return true;
+    }
+
+    if (req.method === 'GET' && url === '/api/chat/settings') {
+      const row = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+      writeJson(res, 200, {
+        id: row.id,
+        user_id: row.user_id,
+        policy: parseJsonOrNull<Record<string, unknown>>(row.policy_json),
+        profile: parseJsonOrNull<Record<string, unknown>>(row.profile_json),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      });
+      return true;
+    }
+
+    if (req.method === 'PUT' && url === '/api/chat/settings') {
+      const payload = await readJsonBody(req);
+      const existing = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+      const policy = payload.policy && typeof payload.policy === 'object'
+        ? payload.policy as Record<string, unknown>
+        : parseJsonOrNull<Record<string, unknown>>(existing.policy_json) ?? DEFAULT_CHAT_SETTINGS_POLICY;
+      const profile = payload.profile && typeof payload.profile === 'object'
+        ? payload.profile as Record<string, unknown>
+        : parseJsonOrNull<Record<string, unknown>>(existing.profile_json);
+      const now = new Date().toISOString();
+      execSql(`
+        update chat_settings set
+          policy_json = ${sqlEscape(JSON.stringify(policy))},
+          profile_json = ${sqlEscape(profile ? JSON.stringify(profile) : null)},
+          updated_at = ${sqlEscape(now)}
+        where id = ${sqlEscape(existing.id)}
+      `);
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'POST' && url === '/api/chat/profile/reload') {
+      const existing = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+      const currentProfile = parseJsonOrNull<Record<string, unknown>>(existing.profile_json) ?? {};
+      const reloadedProfile = {
+        ...currentProfile,
+        reloaded_at: new Date().toISOString(),
+      };
+      execSql(`
+        update chat_settings set
+          profile_json = ${sqlEscape(JSON.stringify(reloadedProfile))},
+          updated_at = ${sqlEscape(new Date().toISOString())}
+        where id = ${sqlEscape(existing.id)}
+      `);
+      writeJson(res, 200, { error: null, profile: reloadedProfile });
+      return true;
+    }
+
+    if (req.method === 'GET' && url.startsWith('/api/chat/session/current/export')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const format = parsedUrl.searchParams.get('format');
+      if (format !== 'json' && format !== 'markdown') {
+        writeJson(res, 400, { error: { message: 'format must be json or markdown.' } });
+        return true;
+      }
+      const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      const transcript = assembleTranscriptExportPayload(session.id);
+      if (!transcript) {
+        writeJson(res, 404, { error: { message: 'Session not found.' } });
+        return true;
+      }
+      if (format === 'markdown') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.end(transcript.markdown);
+        return true;
+      }
+      writeJson(res, 200, transcript.json);
+      return true;
+    }
+
     if (req.method === 'GET' && url === '/api/agent/settings') {
       writeJson(res, 200, getAgentSettings());
       return true;
