@@ -1932,3 +1932,68 @@ test('chat message streaming persists user+assistant turn and supports exports/h
     providerRegistry.ollama.generate = originalGenerate;
   }
 });
+
+test('chat context builder uses bounded recent turns and rolling summary snapshots', async () => {
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: { max_context_messages: 2, summarize_after_messages: 3, include_pinned_memory: true },
+  });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalGenerate = providerRegistry.ollama.generate;
+  const seenInputs: string[] = [];
+  providerRegistry.ollama.generate = async (request) => {
+    seenInputs.push(request.inputText);
+    return { outputText: 'ack', latencyMs: 1 };
+  };
+  try {
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'm1' });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'm2' });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'm3' });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'm4' });
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+
+  const finalPrompt = seenInputs[3] ?? '';
+  assert.match(finalPrompt, /\[RECENT_TURNS\]/);
+  assert.match(finalPrompt, /\[ROLLING_SUMMARY\]/);
+  assert.match(finalPrompt, /\[USER_INPUT\]\nm4/);
+  assert.equal(finalPrompt.includes('m1'), false);
+});
+
+test('reset-context clears summary snapshot without deleting message history', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'before reset' });
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+  const resetResponse = await callRoute('POST', '/api/chat/session/current/reset-context');
+  assert.equal(resetResponse.status, 200);
+  const listAfter = await callRoute('GET', '/api/chat/session/current/messages');
+  assert.equal(listAfter.status, 200);
+  const payload = JSON.parse(listAfter.body) as { messages: Array<{ content: string }> };
+  assert.equal(payload.messages.some((message) => message.content.includes('Context summary reset by user.')), true);
+  assert.equal(payload.messages.some((message) => message.content.includes('before reset')), true);
+});

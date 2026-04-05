@@ -265,6 +265,91 @@ const parseJsonOrNull = <T>(value: string | null | undefined): T | null => {
   }
 };
 
+type ChatContextPolicy = {
+  max_context_messages: number;
+  summarize_after_messages: number;
+  include_pinned_memory: boolean;
+};
+
+const DEFAULT_CHAT_CONTEXT_POLICY: ChatContextPolicy = {
+  max_context_messages: 40,
+  summarize_after_messages: 80,
+  include_pinned_memory: true,
+};
+
+const asObjectRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+};
+
+const coerceChatContextPolicy = (value: unknown): ChatContextPolicy => {
+  const record = asObjectRecord(value) ?? {};
+  const maxContextMessages = Number(record.max_context_messages);
+  const summarizeAfterMessages = Number(record.summarize_after_messages);
+  return {
+    max_context_messages: Number.isFinite(maxContextMessages) ? Math.max(2, Math.min(80, Math.floor(maxContextMessages))) : DEFAULT_CHAT_CONTEXT_POLICY.max_context_messages,
+    summarize_after_messages: Number.isFinite(summarizeAfterMessages) ? Math.max(10, Math.min(400, Math.floor(summarizeAfterMessages))) : DEFAULT_CHAT_CONTEXT_POLICY.summarize_after_messages,
+    include_pinned_memory: record.include_pinned_memory === undefined ? true : Boolean(record.include_pinned_memory),
+  };
+};
+
+const buildRollingSummaryFromMessages = (messages: ChatMessageRow[], charBudget = 1600): string => {
+  if (messages.length === 0) return '';
+  const lines: string[] = [];
+  let consumed = 0;
+  for (const message of messages) {
+    if (consumed >= charBudget) break;
+    const normalizedRole = message.role.toUpperCase();
+    const compact = message.content.replace(/\s+/g, ' ').trim();
+    const remaining = Math.max(0, charBudget - consumed);
+    if (remaining <= 0) break;
+    const segment = compact.slice(0, Math.min(220, remaining));
+    const next = `- ${normalizedRole}: ${segment}`;
+    lines.push(next);
+    consumed += next.length;
+  }
+  return lines.join('\n');
+};
+
+const buildChatContextInput = (args: {
+  inputText: string;
+  recentMessages: ChatMessageRow[];
+  snapshot: (ChatMemorySnapshotRow & { pinnedMemory: Record<string, unknown> | null }) | null;
+  policy: ChatContextPolicy;
+  profile: Record<string, unknown> | null;
+}): { prompt: string; meta: Record<string, unknown> } => {
+  const sections: string[] = [];
+  const profile = args.profile && Object.keys(args.profile).length > 0 ? args.profile : null;
+  if (profile) sections.push(`[PROFILE]\n${JSON.stringify(profile)}`);
+  const summary = args.snapshot?.rolling_summary?.trim() ?? '';
+  if (summary) sections.push(`[ROLLING_SUMMARY]\n${summary}`);
+  if (args.policy.include_pinned_memory && args.snapshot?.pinnedMemory && Object.keys(args.snapshot.pinnedMemory).length > 0) {
+    sections.push(`[PINNED_MEMORY]\n${JSON.stringify(args.snapshot.pinnedMemory)}`);
+  }
+  if (args.recentMessages.length > 0) {
+    const recentLines = args.recentMessages.map((message) => `${message.role.toUpperCase()}: ${message.content}`);
+    sections.push(`[RECENT_TURNS]\n${recentLines.join('\n')}`);
+  }
+  sections.push(`[USER_INPUT]\n${args.inputText}`);
+  return {
+    prompt: sections.join('\n\n'),
+    meta: {
+      injected_recent_turns: args.recentMessages.length,
+      has_summary: Boolean(summary),
+      has_pinned_memory: Boolean(args.snapshot?.pinnedMemory && Object.keys(args.snapshot.pinnedMemory).length > 0),
+      has_profile: Boolean(profile),
+    },
+  };
+};
+
+const emitStructuredLog = (event: string, payload: Record<string, unknown>) => {
+  console.info(`[local-api:${event}]`, JSON.stringify({
+    event,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  }));
+};
+
 const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): ChatSessionRow => {
   const existing = queryJson<ChatSessionRow>(`
     select * from chat_sessions
@@ -283,10 +368,7 @@ const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): 
 };
 
 const DEFAULT_CHAT_USER_ID = 'local-user';
-const DEFAULT_CHAT_SETTINGS_POLICY = {
-  max_context_messages: 40,
-  summarize_after_messages: 80,
-};
+const DEFAULT_CHAT_SETTINGS_POLICY = DEFAULT_CHAT_CONTEXT_POLICY;
 
 const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
   const existing = queryJson<ChatSettingsRow>(`select * from chat_settings where user_id = ${sqlEscape(userId)} limit 1`)[0];
@@ -315,7 +397,7 @@ const persistChatTurnAtomic = (input: {
   model: string;
   stream: Record<string, unknown> | null;
   metadata: Record<string, unknown> | null;
-}) => {
+}): { userMessageId: string; assistantMessageId: string } => {
   const now = new Date().toISOString();
   const userId = randomUUID();
   const assistantId = randomUUID();
@@ -348,6 +430,7 @@ const persistChatTurnAtomic = (input: {
     update chat_sessions set updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.sessionId)};
     commit;
   `);
+  return { userMessageId: userId, assistantMessageId: assistantId };
 };
 
 type AppendChatMessageInput = {
@@ -1348,21 +1431,54 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
       const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
+      const settingsRow = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+      const policy = coerceChatContextPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
+      const profile = parseJsonOrNull<Record<string, unknown>>(settingsRow.profile_json);
+      const snapshot = loadMemorySnapshot(session.id);
+      const recentMessages = loadPaginatedChatMessages(session.id, policy.max_context_messages);
+      const contextPayload = buildChatContextInput({
+        inputText,
+        recentMessages,
+        snapshot,
+        policy,
+        profile,
+      });
+      const turnCorrelationId = randomUUID();
+      const turnStartedAt = Date.now();
       const controller = new AbortController();
       let clientAborted = false;
       req.on('aborted', () => {
         clientAborted = true;
         controller.abort();
       });
-      const streamEvents: Array<Record<string, unknown>> = [{ type: 'status', stage: 'started' }];
+      const streamEvents: Array<Record<string, unknown>> = [{
+        type: 'status',
+        stage: 'started',
+        correlation: {
+          turn_id: turnCorrelationId,
+          session_id: session.id,
+        },
+      }];
       let assistantText = '';
       let persisted = false;
       beginNdjson(res);
-      writeNdjson(res, { type: 'status', stage: 'started' });
+      writeNdjson(res, {
+        type: 'status',
+        stage: 'started',
+        correlation: { turn_id: turnCorrelationId, session_id: session.id },
+        context: contextPayload.meta,
+      });
+      emitStructuredLog('chat.turn.started', {
+        correlation_id: turnCorrelationId,
+        session_id: session.id,
+        provider: preferred,
+        model: resolvedModel,
+        tool_attempts: 0,
+      });
       try {
         const result = await providerRegistry[preferred].generate({
           model: resolvedModel,
-          inputText,
+          inputText: contextPayload.prompt,
           generationParams: {
             ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),
             ...(preferred === 'ollama' ? { baseUrl: ollamaRuntime.baseUrl } : {}),
@@ -1379,7 +1495,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const doneFrame = { type: 'done', ...result };
         streamEvents.push(doneFrame);
         writeNdjson(res, doneFrame);
-        persistChatTurnAtomic({
+        const persistedIds = persistChatTurnAtomic({
           sessionId: session.id,
           userContent: inputText,
           assistantContent: result.outputText,
@@ -1390,7 +1506,37 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             usage: result.usage ?? null,
             costEstimate: result.costEstimate ?? null,
             completedAt: new Date().toISOString(),
+            correlation: { turn_id: turnCorrelationId, session_id: session.id },
+            context: contextPayload.meta,
+            metrics: {
+              turn_latency_ms: Date.now() - turnStartedAt,
+              tool_attempts: 0,
+              tool_successes: 0,
+              tool_failures: 0,
+            },
           },
+        });
+        const allMessages = queryJson<ChatMessageRow>(`select * from chat_messages where session_id = ${sqlEscape(session.id)} order by created_at asc, id asc`);
+        const shouldSummarize = allMessages.length > policy.summarize_after_messages;
+        if (shouldSummarize) {
+          const olderMessages = allMessages.slice(0, Math.max(0, allMessages.length - policy.max_context_messages));
+          const rollingSummary = buildRollingSummaryFromMessages(olderMessages);
+          saveMemorySnapshot({
+            sessionId: session.id,
+            rollingSummary,
+            pinnedMemory: snapshot?.pinnedMemory ?? null,
+            lastMessageId: persistedIds.assistantMessageId,
+          });
+        }
+        emitStructuredLog('chat.turn.completed', {
+          correlation_id: turnCorrelationId,
+          session_id: session.id,
+          message_id: persistedIds.assistantMessageId,
+          turn_latency_ms: Date.now() - turnStartedAt,
+          stream_status: 'done',
+          tool_attempts: 0,
+          tool_successes: 0,
+          tool_failures: 0,
         });
         persisted = true;
         res.end();
@@ -1399,6 +1545,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const message = cancelled ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.');
         const errorFrame = { type: 'error', message, aborted: cancelled };
         streamEvents.push(errorFrame);
+        emitStructuredLog('chat.turn.stream_error', {
+          correlation_id: turnCorrelationId,
+          session_id: session.id,
+          turn_latency_ms: Date.now() - turnStartedAt,
+          cancelled,
+          message,
+        });
         if (res.headersSent) {
           writeNdjson(res, errorFrame);
           res.end();
@@ -1406,7 +1559,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           writeJson(res, cancelled ? 499 : 400, { error: { message } });
         }
         if (!persisted) {
-          persistChatTurnAtomic({
+          const persistedIds = persistChatTurnAtomic({
             sessionId: session.id,
             userContent: inputText,
             assistantContent: assistantText,
@@ -1417,7 +1570,22 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               aborted: cancelled,
               error: message,
               completedAt: new Date().toISOString(),
+              correlation: { turn_id: turnCorrelationId, session_id: session.id },
+              context: contextPayload.meta,
+              metrics: {
+                turn_latency_ms: Date.now() - turnStartedAt,
+                tool_attempts: 0,
+                tool_successes: 0,
+                tool_failures: 0,
+              },
             },
+          });
+          emitStructuredLog('chat.turn.persisted_with_error', {
+            correlation_id: turnCorrelationId,
+            session_id: session.id,
+            message_id: persistedIds.assistantMessageId,
+            turn_latency_ms: Date.now() - turnStartedAt,
+            stream_status: cancelled ? 'cancelled' : 'error',
           });
           persisted = true;
         }
@@ -1443,14 +1611,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'POST' && url === '/api/chat/session/current/reset-context') {
       const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
-      execSql(`
-        delete from chat_pending_actions where session_id = ${sqlEscape(session.id)};
-        delete from chat_memory_snapshots where session_id = ${sqlEscape(session.id)};
-      `);
+      execSql(`delete from chat_memory_snapshots where session_id = ${sqlEscape(session.id)};`);
       const marker = appendChatMessage({
         sessionId: session.id,
         role: 'system',
-        content: 'Context reset by user.',
+        content: 'Context summary reset by user.',
         metadata: { source: 'reset-context' },
       });
       writeJson(res, 200, { error: null, session_id: session.id, marker });
@@ -1928,6 +2093,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'POST' && url === '/api/agent/generate') {
       const payload = await readJsonBody(req);
+      const actionCorrelationId = randomUUID();
       const provider = payload.provider;
       if (!isAgentProvider(provider)) {
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
@@ -1957,6 +2123,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const now = new Date().toISOString();
       const startedAt = Date.now();
+      emitStructuredLog('agent.generate.started', {
+        correlation_id: actionCorrelationId,
+        action: 'generate',
+        provider,
+        model: resolvedModel,
+      });
       appendAgentActivityLog({
         timestamp: now,
         note_id: String(payload.note_id ?? ''),
@@ -2134,6 +2306,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           toolCallsSucceeded = orchestration.toolCallsSucceeded;
           toolFailureReason = orchestration.toolFailureReason;
           preparedInputText = orchestration.consumedInputText;
+          emitStructuredLog('agent.tools.outcome', {
+            correlation_id: actionCorrelationId,
+            action: 'generate',
+            tool_attempts: toolCallsAttempted,
+            tool_successes: toolCallsSucceeded,
+            tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
+            tool_failure_reason: toolFailureReason,
+          });
         }
         if (normalizedSources.length > 0) {
           writeNdjson(res, { type: 'sources', sources: normalizedSources });
@@ -2194,10 +2374,25 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           citation_events_json: citationResult.citationEvents.length > 0 ? JSON.stringify(citationResult.citationEvents) : null,
         });
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
+        emitStructuredLog('agent.generate.completed', {
+          correlation_id: actionCorrelationId,
+          action: 'generate',
+          turn_latency_ms: Date.now() - startedAt,
+          stream_status: 'done',
+          search_query_count: webSearchMetadata.queryCount,
+          source_count: webSearchMetadata.sourceCount,
+        });
         res.end();
       } catch (error) {
         const cancelled = clientAborted;
         const errorMessage = error instanceof Error ? error.message : 'Generation failed.';
+        emitStructuredLog('agent.generate.stream_error', {
+          correlation_id: actionCorrelationId,
+          action: 'generate',
+          turn_latency_ms: Date.now() - startedAt,
+          cancelled,
+          message: errorMessage,
+        });
         appendAgentActivityLog({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
@@ -2248,6 +2443,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'POST' && url === '/api/research-tasks') {
       const payload = await readJsonBody(req);
+      const actionCorrelationId = randomUUID();
       const ticker = String(payload.ticker ?? '').trim().toUpperCase();
       if (!ticker) {
         writeJson(res, 400, { error: { message: 'Ticker is required.' } });
@@ -2261,12 +2457,19 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
       const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
+      emitStructuredLog('task.create.outcome', {
+        correlation_id: actionCorrelationId,
+        action: 'create',
+        task_id: id,
+        status: 'success',
+      });
       writeJson(res, 200, normalizeTaskRow(created));
       return true;
     }
 
     if (req.method === 'PATCH' && url.startsWith('/api/research-tasks/')) {
       const taskId = url.replace('/api/research-tasks/', '').trim();
+      const actionCorrelationId = randomUUID();
       const payload = await readJsonBody(req);
       const existing = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
       if (!existing) {
@@ -2333,6 +2536,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (changedFields.length > 0) recordTaskEvent(taskId, 'edit', `Updated ${changedFields.join(', ')}.`);
 
       const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      emitStructuredLog('task.update.outcome', {
+        correlation_id: actionCorrelationId,
+        action: nextArchived !== Boolean(existing.archived) && nextArchived ? 'archive' : 'update',
+        task_id: taskId,
+        status: 'success',
+        changed_fields: changedFields,
+      });
       writeJson(res, 200, normalizeTaskRow(updated));
       return true;
     }
