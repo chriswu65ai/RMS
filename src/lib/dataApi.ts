@@ -1,4 +1,6 @@
 import { normalizeFrontmatter } from './frontmatter';
+import { trackAttachmentEndpoint } from './attachmentTelemetry';
+import { createRequestLimiter } from './requestLimiter';
 import {
   Priority,
   TaskStatus,
@@ -20,9 +22,21 @@ type TaskApiRow = Omit<NewResearchTask, 'archived'> & { archived: boolean | numb
 
 const VALID_STATUS = new Set<TaskStatus>(Object.values(TaskStatus));
 const VALID_PRIORITY = new Set<Priority>(Object.values(Priority));
+const attachmentRequestLimiter = createRequestLimiter(4);
 
 async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
+}
+
+async function runAttachmentRequest<T>(endpoint: string, request: () => Promise<Response>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    const response = await attachmentRequestLimiter.schedule(request);
+    if (!response.ok) throw new Error(await response.text());
+    return await readJson<T>(response);
+  } finally {
+    trackAttachmentEndpoint(endpoint, Date.now() - startedAt);
+  }
 }
 
 export function normalizeFrontmatterForApi(frontmatter: Record<string, unknown> | null | undefined) {
@@ -205,38 +219,52 @@ export async function uploadAttachment(params: {
   formData.append('original_name', params.file.name);
   formData.append('mime_type', params.file.type || 'application/octet-stream');
   formData.append('file', params.file, params.file.name);
-  const response = await fetch('/api/attachments/upload', {
+  return runAttachmentRequest<Attachment>('upload', () => fetch('/api/attachments/upload', {
     method: 'POST',
     body: formData,
-  });
-  if (!response.ok) throw new Error(await response.text());
-  return readJson<Attachment>(response);
+  }));
 }
 
 export async function listAttachments(linkType: AttachmentLinkType, linkId: string): Promise<Attachment[]> {
-  const response = await fetch(`/api/attachments?linkType=${encodeURIComponent(linkType)}&linkId=${encodeURIComponent(linkId)}`);
-  if (!response.ok) throw new Error(await response.text());
-  return readJson<Attachment[]>(response);
+  return runAttachmentRequest<Attachment[]>('list', () => fetch(`/api/attachments?linkType=${encodeURIComponent(linkType)}&linkId=${encodeURIComponent(linkId)}`));
+}
+
+export async function listAttachmentCounts(
+  linkType: AttachmentLinkType,
+  ids: string[],
+  options?: { signal?: AbortSignal },
+): Promise<Record<string, number>> {
+  const normalizedIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  if (normalizedIds.length === 0) return {};
+  const params = new URLSearchParams({
+    linkType,
+    ids: normalizedIds.join(','),
+  });
+  const rows = await runAttachmentRequest<Array<{ link_id: string; count: number }>>(
+    'counts',
+    () => fetch(`/api/attachments/counts?${params.toString()}`, { signal: options?.signal }),
+  );
+  const counts: Record<string, number> = {};
+  rows.forEach((row) => {
+    counts[row.link_id] = Number(row.count) || 0;
+  });
+  return counts;
 }
 
 export async function unlinkAttachment(attachmentId: string, linkType: AttachmentLinkType, linkId: string): Promise<ApiResult> {
-  const response = await fetch(`/api/attachments/${attachmentId}`, {
+  return runAttachmentRequest<ApiResult>('unlink', () => fetch(`/api/attachments/${attachmentId}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ link_type: linkType, link_id: linkId }),
-  });
-  if (!response.ok) throw new Error(await response.text());
-  return readJson<ApiResult>(response);
+  }));
 }
 
 export async function linkAttachment(attachmentId: string, linkType: AttachmentLinkType, linkId: string): Promise<ApiResult> {
-  const response = await fetch(`/api/attachments/${attachmentId}/link`, {
+  return runAttachmentRequest<ApiResult>('link', () => fetch(`/api/attachments/${attachmentId}/link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ link_type: linkType, link_id: linkId }),
-  });
-  if (!response.ok) throw new Error(await response.text());
-  return readJson<ApiResult>(response);
+  }));
 }
 
 export async function getAttachmentSettings(): Promise<AttachmentStorageSettings> {
