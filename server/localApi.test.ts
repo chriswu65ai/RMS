@@ -1933,6 +1933,99 @@ test('chat message streaming persists user+assistant turn and supports exports/h
   }
 });
 
+test('chat tool orchestration saves pending draft for missing fields and streams lifecycle events', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'chat-tool-1',
+      name: 'create_task',
+      arguments: { ticker: 'aapl', title: 'Apple follow-up' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'fallback', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'create a task for apple' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'needs_confirmation'), true);
+    assert.equal(frames.some((frame) => frame.type === 'done'), true);
+
+    const exported = await callRoute('GET', '/api/chat/session/current/export?format=json');
+    assert.equal(exported.status, 200);
+    const payload = JSON.parse(exported.body) as { pendingActions?: Array<{ action_key?: string; status?: string }> };
+    assert.equal(payload.pendingActions?.some((action) => action.action_key === 'chat_tool:create_task' && action.status === 'pending'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('chat tool orchestration executes approved action and persists tool metadata', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'chat-tool-2',
+      name: 'create_task',
+      arguments: { ticker: 'msft', title: 'Refresh model', note_type: 'update' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Created and summarized.', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'please create it',
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+    assert.equal(frames.some((frame) => frame.type === 'delta' || frame.type === 'done'), true);
+
+    const tasksResponse = await callRoute('GET', '/api/research-tasks');
+    assert.equal(tasksResponse.status, 200);
+    const tasks = JSON.parse(tasksResponse.body) as Array<{ ticker: string; title: string }>;
+    assert.equal(tasks.some((task) => task.ticker === 'MSFT' && task.title === 'Refresh model'), true);
+
+    const messagesResponse = await callRoute('GET', '/api/chat/session/current/messages');
+    assert.equal(messagesResponse.status, 200);
+    const messagesPayload = JSON.parse(messagesResponse.body) as { messages: Array<{ role: string; metadata?: { tool?: { tool_outcome?: string } } }> };
+    const latestAssistant = [...messagesPayload.messages].reverse().find((message) => message.role === 'assistant');
+    assert.equal(latestAssistant?.metadata?.tool?.tool_outcome, 'executed');
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('chat context builder uses bounded recent turns and rolling summary snapshots', async () => {
   await callRoute('PUT', '/api/chat/settings', {
     policy: { max_context_messages: 2, summarize_after_messages: 3, include_pinned_memory: true },
