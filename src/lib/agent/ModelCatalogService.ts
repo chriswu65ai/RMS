@@ -2,14 +2,14 @@ import { listModels } from '../agentApi';
 import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../../features/agent/types';
 
 export class ModelCatalogService {
-  async listModels(provider: AgentProvider): Promise<{
+  async listModels(provider: AgentProvider, runtimeBaseUrl?: string): Promise<{
     models: ModelListItem[];
     selectedModel: string;
     catalogStatus: 'live' | 'unsupported' | 'failed';
     selectionSource: 'live_catalog' | 'provider_fallback';
     reasonCode: ModelCatalogReasonCode;
   }> {
-    const result = await listModels(provider);
+    const result = await listModels(provider, runtimeBaseUrl);
     return {
       models: result.models,
       selectedModel: result.selected_model,

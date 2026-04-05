@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateText } from './agentApi.js';
+import { generateText, listModels } from './agentApi.js';
 
 const encoder = new TextEncoder();
 
@@ -148,6 +148,32 @@ test('generateText parses split NDJSON chunks and forwards full thinking stream 
     assert.equal(result.outputText, 'hello world');
     assert.deepEqual(seenEvents, ['tool_call_started', 'tool_call_result', 'reasoning']);
     assert.deepEqual(seenProgress, ['hello', 'hello world']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('listModels forwards runtime base URL for ollama refresh without mutating slash behavior in saved settings', async () => {
+  const originalFetch = globalThis.fetch;
+  let seenUrl = '';
+
+  globalThis.fetch = async (input) => {
+    seenUrl = String(input);
+    return new Response(JSON.stringify({
+      models: [],
+      selected_model: '',
+      catalog_status: 'failed',
+      selection_source: 'provider_fallback',
+      reason_code: 'ollama_unreachable',
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+      status: 200,
+    });
+  };
+
+  try {
+    await listModels('ollama', 'http://127.0.0.1:11434');
+    assert.equal(seenUrl, '/api/agent/models?provider=ollama&runtime_base_url=http%3A%2F%2F127.0.0.1%3A11434');
   } finally {
     globalThis.fetch = originalFetch;
   }

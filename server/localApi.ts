@@ -692,6 +692,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const preferredModel = settings.default_provider === provider ? settings.default_model : undefined;
       const fallbackModels = FALLBACK_MODELS[provider];
       const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
+      const runtimeBaseUrlOverride = normalizeEndpointUrl(parsedUrl.searchParams.get('runtime_base_url'), ollamaRuntime.baseUrl);
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
         writeJson(res, 200, {
@@ -704,7 +705,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
 
-      const result = await providerRegistry[provider].listModels(apiKey ?? '', { fallbackModels, preferredModel, baseUrl: ollamaRuntime.baseUrl });
+      const result = await providerRegistry[provider].listModels(apiKey ?? '', {
+        fallbackModels,
+        preferredModel,
+        baseUrl: provider === 'ollama' ? runtimeBaseUrlOverride : ollamaRuntime.baseUrl,
+      });
       if (result.catalog_status !== 'live') {
         console.warn('[agent-models] catalog fallback', { provider, catalog_status: result.catalog_status, reason_code: result.reason_code });
       }
