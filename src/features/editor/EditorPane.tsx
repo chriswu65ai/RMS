@@ -1,6 +1,6 @@
 import { isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { Transaction } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { EditorView, keymap } from '@codemirror/view';
 import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck';
 import CodeMirror from '@uiw/react-codemirror';
 import { Copy, Download, List, ListOrdered, ListTodo, LoaderCircle, Microchip, Minus, Redo2, Save, Share2, Smile, Table, Undo2, X } from 'lucide-react';
@@ -24,6 +24,54 @@ const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_FADE_MS = 1000;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
 
+export type EditorHistorySnapshot = {
+  undoStack: string[];
+  redoStack: string[];
+  lastText: string;
+};
+
+export const pushHistorySnapshot = (
+  history: EditorHistorySnapshot | null,
+  previousText: string,
+  nextText: string,
+): EditorHistorySnapshot => {
+  if (previousText === nextText) {
+    return history ?? { undoStack: [], redoStack: [], lastText: nextText };
+  }
+  const base = history ?? { undoStack: [], redoStack: [], lastText: previousText };
+  return {
+    undoStack: [...base.undoStack, previousText],
+    redoStack: [],
+    lastText: nextText,
+  };
+};
+
+export const undoHistorySnapshot = (history: EditorHistorySnapshot): { history: EditorHistorySnapshot; text: string } | null => {
+  if (history.undoStack.length === 0) return null;
+  const previousText = history.undoStack[history.undoStack.length - 1];
+  return {
+    text: previousText,
+    history: {
+      undoStack: history.undoStack.slice(0, -1),
+      redoStack: [history.lastText, ...history.redoStack],
+      lastText: previousText,
+    },
+  };
+};
+
+export const redoHistorySnapshot = (history: EditorHistorySnapshot): { history: EditorHistorySnapshot; text: string } | null => {
+  if (history.redoStack.length === 0) return null;
+  const [nextText, ...remainingRedo] = history.redoStack;
+  return {
+    text: nextText,
+    history: {
+      undoStack: [...history.undoStack, history.lastText],
+      redoStack: remainingRedo,
+      lastText: nextText,
+    },
+  };
+};
+
 export function EditorPane() {
   const {
     files,
@@ -39,6 +87,8 @@ export function EditorPane() {
     getDraft,
     setDraft,
     clearDraft,
+    getHistoryEntry,
+    setHistoryEntry,
     getGenerateJob,
     clearGenerateJob,
     startGenerate,
@@ -48,6 +98,8 @@ export function EditorPane() {
   const dialog = useDialog();
   const file = files.find((f) => f.id === selectedFileId);
   const viewRef = useRef<EditorView | null>(null);
+  const viewFileIdRef = useRef<string | null>(null);
+  const selectedFileIdRef = useRef<string | null>(selectedFileId);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [selectedEmoji, setSelectedEmoji] = useState<string>('🔥');
   const [showMetadata, setShowMetadata] = useState(false);
@@ -63,21 +115,54 @@ export function EditorPane() {
   const [thinkingStatusByFileId, setThinkingStatusByFileId] = useState<Record<string, ThinkingStatus>>({});
   const [thinkingIsFadingByFileId, setThinkingIsFadingByFileId] = useState<Record<string, boolean>>({});
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
+  const [canUndoByFileId, setCanUndoByFileId] = useState<Record<string, boolean>>({});
+  const [canRedoByFileId, setCanRedoByFileId] = useState<Record<string, boolean>>({});
   const thinkingCloseTimerByFileIdRef = useRef<Record<string, number | null>>({});
   const thinkingFadeTimerByFileIdRef = useRef<Record<string, number | null>>({});
   const thinkingSwapInFlightByFileIdRef = useRef<Record<string, boolean>>({});
-  const originalTextRef = useRef<string | null>(null);
-  const preGenerateVisibleTextRef = useRef<string | null>(null);
+  const originalTextByFileIdRef = useRef<Record<string, string | null>>({});
+  const preGenerateVisibleTextByFileIdRef = useRef<Record<string, string | null>>({});
   const suppressOnChangeRef = useRef(0);
-  const pendingHistoryBaselineRef = useRef<{ fileId: string; beforeVisible: string; afterVisible: string } | null>(null);
+  const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
   const parsed = useMemo(
     () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
     [file?.content, noteTypes, sectors],
   );
   const [body, setBody] = useState(parsed.body);
   const [frontmatter, setFrontmatter] = useState<FrontmatterModel>(parsed.frontmatter);
+
+  useEffect(() => {
+    selectedFileIdRef.current = selectedFileId;
+  }, [selectedFileId]);
+
+  const setCanUndoForFile = (fileId: string, value: boolean) => {
+    setCanUndoByFileId((current) => ({ ...current, [fileId]: value }));
+  };
+
+  const setCanRedoForFile = (fileId: string, value: boolean) => {
+    setCanRedoByFileId((current) => ({ ...current, [fileId]: value }));
+  };
+
+  const updateHistoryAvailabilityForFile = (fileId: string, view: EditorView | null) => {
+    const cachedHistory = getHistoryEntry(fileId);
+    const canUndoFromCache = (cachedHistory?.undoStack.length ?? 0) > 0;
+    const canRedoFromCache = (cachedHistory?.redoStack.length ?? 0) > 0;
+    const canUndoFromView = view ? undoDepth(view.state) > 0 : false;
+    const canRedoFromView = view ? redoDepth(view.state) > 0 : false;
+    setCanUndoForFile(fileId, canUndoFromCache || canUndoFromView);
+    setCanRedoForFile(fileId, canRedoFromCache || canRedoFromView);
+  };
+
+  const recordHistoryChange = (fileId: string, previousText: string, nextText: string) => {
+    const nextHistory = pushHistorySnapshot(getHistoryEntry(fileId), previousText, nextText);
+    if (nextHistory.lastText === previousText && previousText === nextText) return;
+    setHistoryEntry(fileId, {
+      ...nextHistory,
+      updatedAt: Date.now(),
+    });
+    setCanUndoForFile(fileId, nextHistory.undoStack.length > 0);
+    setCanRedoForFile(fileId, nextHistory.redoStack.length > 0);
+  };
 
   useEffect(() => {
     if (!file) {
@@ -111,17 +196,22 @@ export function EditorPane() {
 
   useEffect(() => {
     // Force toolbar state to match the active note immediately when switching.
-    // A keyed CodeMirror remount will reset history; until remount completes, disable actions.
+    // A keyed CodeMirror remount will reset history; until remount completes, use cached note-specific state.
     viewRef.current = null;
-    setCanUndo(false);
-    setCanRedo(false);
+    viewFileIdRef.current = null;
+    if (file?.id) {
+      updateHistoryAvailabilityForFile(file.id, null);
+    }
   }, [file?.id]);
 
-  const dispatchEditorContent = (nextText: string, addToHistory: boolean, isolate = false) => {
+  const dispatchEditorContent = (targetFileId: string, nextText: string, addToHistory: boolean, isolate = false) => {
     const view = viewRef.current;
-    if (!view) return false;
+    if (!view || viewFileIdRef.current !== targetFileId || selectedFileIdRef.current !== targetFileId) return false;
     const currentText = view.state.doc.toString();
     if (currentText === nextText) return true;
+    if (addToHistory) {
+      recordHistoryChange(targetFileId, currentText, nextText);
+    }
     suppressOnChangeRef.current += 1;
     const nextAnchor = Math.min(view.state.selection.main.anchor, nextText.length);
     view.dispatch({
@@ -130,8 +220,7 @@ export function EditorPane() {
       annotations: [Transaction.addToHistory.of(addToHistory), ...(isolate ? [isolateHistory.of('full')] : [])],
       scrollIntoView: true,
     });
-    setCanUndo(undoDepth(view.state) > 0);
-    setCanRedo(redoDepth(view.state) > 0);
+    updateHistoryAvailabilityForFile(targetFileId, view);
     return true;
   };
 
@@ -244,6 +333,8 @@ export function EditorPane() {
     showMetadata ? composeMarkdown(nextFrontmatter, nextBody) : nextBody;
   const dirty = merged !== file.content;
   const generatedSources = generatedSourcesByFileId[file.id] ?? [];
+  const canUndo = canUndoByFileId[file.id] ?? false;
+  const canRedo = canRedoByFileId[file.id] ?? false;
   const isSourcesBubbleClosed = sourcesBubbleClosedByFileId[file.id] ?? false;
   const thinkingVisibleLines = thinkingVisibleLinesByFileId[file.id] ?? [];
   const isThinkingBubbleClosed = thinkingBubbleClosedByFileId[file.id] ?? false;
@@ -556,20 +647,46 @@ export function EditorPane() {
   };
 
   const onUndo = () => {
+    const targetFileId = file.id;
+    const history = getHistoryEntry(targetFileId);
+    if (history) {
+      const undoResult = undoHistorySnapshot(history);
+      if (undoResult) {
+        const { history: nextHistory, text: previousText } = undoResult;
+        setHistoryEntry(targetFileId, { ...nextHistory, updatedAt: Date.now() });
+        dispatchEditorContent(targetFileId, previousText, false);
+        setCanUndoForFile(targetFileId, nextHistory.undoStack.length > 0);
+        setCanRedoForFile(targetFileId, nextHistory.redoStack.length > 0);
+        viewRef.current?.focus();
+        return;
+      }
+    }
     const view = viewRef.current;
-    if (!view || !canUndo) return;
+    if (!view || viewFileIdRef.current !== targetFileId || !canUndo) return;
     undo(view);
-    setCanUndo(undoDepth(view.state) > 0);
-    setCanRedo(redoDepth(view.state) > 0);
+    updateHistoryAvailabilityForFile(targetFileId, view);
     view.focus();
   };
 
   const onRedo = () => {
+    const targetFileId = file.id;
+    const history = getHistoryEntry(targetFileId);
+    if (history) {
+      const redoResult = redoHistorySnapshot(history);
+      if (redoResult) {
+        const { history: nextHistory, text: nextText } = redoResult;
+        setHistoryEntry(targetFileId, { ...nextHistory, updatedAt: Date.now() });
+        dispatchEditorContent(targetFileId, nextText, false);
+        setCanUndoForFile(targetFileId, nextHistory.undoStack.length > 0);
+        setCanRedoForFile(targetFileId, nextHistory.redoStack.length > 0);
+        viewRef.current?.focus();
+        return;
+      }
+    }
     const view = viewRef.current;
-    if (!view || !canRedo) return;
+    if (!view || viewFileIdRef.current !== targetFileId || !canRedo) return;
     redo(view);
-    setCanUndo(undoDepth(view.state) > 0);
-    setCanRedo(redoDepth(view.state) > 0);
+    updateHistoryAvailabilityForFile(targetFileId, view);
     view.focus();
   };
 
@@ -637,14 +754,15 @@ export function EditorPane() {
       return;
     }
 
+    const targetFileId = file.id;
     const originalText = merged;
     const preGenerateVisibleText = editorValue;
-    originalTextRef.current = originalText;
-    preGenerateVisibleTextRef.current = preGenerateVisibleText;
-    pendingHistoryBaselineRef.current = null;
-    clearThinkingCloseTimer(file.id);
-    clearThinkingFadeTimer(file.id);
-    thinkingSwapInFlightByFileIdRef.current[file.id] = false;
+    originalTextByFileIdRef.current[targetFileId] = originalText;
+    preGenerateVisibleTextByFileIdRef.current[targetFileId] = preGenerateVisibleText;
+    pendingHistoryBaselineByFileIdRef.current[targetFileId] = null;
+    clearThinkingCloseTimer(targetFileId);
+    clearThinkingFadeTimer(targetFileId);
+    thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
     setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: [] }));
     setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
     setThinkingQueueByFileId((current) => ({ ...current, [file.id]: [] }));
@@ -654,20 +772,27 @@ export function EditorPane() {
     setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
     setSearchWarningMessage(null);
     try {
-      const outputText = await startGenerate(file.id, {
+      const outputText = await startGenerate(targetFileId, {
         inputText: originalText,
         provider: defaultProvider,
         model: defaultModel,
         onProgress: (nextOutputText) => {
           const nextParsed = splitFrontmatter(nextOutputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
-          dispatchEditorContent(toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
-          setFrontmatter(nextParsed.frontmatter);
-          setBody(nextParsed.body);
-          updateDraftCache(nextParsed.body, nextParsed.frontmatter, 'generate');
+          if (selectedFileIdRef.current === targetFileId) {
+            dispatchEditorContent(targetFileId, toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
+            setFrontmatter(nextParsed.frontmatter);
+            setBody(nextParsed.body);
+          }
+          setDraft(targetFileId, {
+            body: nextParsed.body,
+            frontmatter: nextParsed.frontmatter,
+            source: 'generate',
+            updatedAt: Date.now(),
+          });
         },
         onSources: (sources) => {
-          setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: sources }));
-          setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
+          setGeneratedSourcesByFileId((current) => ({ ...current, [targetFileId]: sources }));
+          setSourcesBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: false }));
         },
         onSearchWarning: (message) => {
           setSearchWarningMessage(message);
@@ -676,85 +801,103 @@ export function EditorPane() {
           const normalized = normalizeThinkingEvent(event);
           if (!normalized) return;
           setThinkingQueueByFileId((current) => {
-            const existing = current[file.id] ?? [];
-            return { ...current, [file.id]: [...existing, normalized] };
+            const existing = current[targetFileId] ?? [];
+            return { ...current, [targetFileId]: [...existing, normalized] };
           });
         },
       });
       const finalParsed = splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
       const finalVisibleText = toVisibleEditorText(finalParsed.body, finalParsed.frontmatter);
-      if (preGenerateVisibleTextRef.current) {
-        const didApplyInEditor = dispatchEditorContent(preGenerateVisibleTextRef.current, false);
+      const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
+      if (baselineText) {
+        const didApplyInEditor = dispatchEditorContent(targetFileId, baselineText, false);
         if (didApplyInEditor) {
-          dispatchEditorContent(finalVisibleText, true, true);
+          dispatchEditorContent(targetFileId, finalVisibleText, true, true);
           const view = viewRef.current;
           if (view && undo(view)) {
             const undoneText = view.state.doc.toString();
-            if (undoneText !== preGenerateVisibleTextRef.current) {
+            if (undoneText !== baselineText) {
               console.warn('Generate undo checkpoint mismatch.', {
-                expected: preGenerateVisibleTextRef.current,
+                expected: baselineText,
                 actual: undoneText,
               });
             }
             redo(view);
-            setCanUndo(undoDepth(view.state) > 0);
-            setCanRedo(redoDepth(view.state) > 0);
+            updateHistoryAvailabilityForFile(targetFileId, view);
           }
         } else {
-          pendingHistoryBaselineRef.current = {
-            fileId: file.id,
-            beforeVisible: preGenerateVisibleTextRef.current,
+          pendingHistoryBaselineByFileIdRef.current[targetFileId] = {
+            beforeVisible: baselineText,
             afterVisible: finalVisibleText,
           };
+          recordHistoryChange(targetFileId, baselineText, finalVisibleText);
         }
       }
-      const generatedDraft = getDraft(file.id);
-      setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'completed' }));
-      clearThinkingCloseTimer(file.id);
-      thinkingCloseTimerByFileIdRef.current[file.id] = window.setTimeout(() => {
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
+      const generatedDraft = getDraft(targetFileId);
+      setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'completed' }));
+      clearThinkingCloseTimer(targetFileId);
+      thinkingCloseTimerByFileIdRef.current[targetFileId] = window.setTimeout(() => {
+        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
       }, THINKING_SUCCESS_AUTO_CLOSE_MS);
-      if (generatedDraft) {
+      if (generatedDraft && selectedFileIdRef.current === targetFileId) {
         setFrontmatter(generatedDraft.frontmatter);
         setBody(generatedDraft.body);
       }
-      setShowGeneratedDraftNotice(true);
+      if (selectedFileIdRef.current === targetFileId) {
+        setShowGeneratedDraftNotice(true);
+      }
     } catch (error) {
       const isCancelled = error instanceof Error && error.name === 'AbortError';
       if (isCancelled) {
-        if (originalTextRef.current) {
-          const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
-          dispatchEditorContent(toVisibleEditorText(restored.body, restored.frontmatter), false);
-          setFrontmatter(restored.frontmatter);
-          setBody(restored.body);
-          updateDraftCache(restored.body, restored.frontmatter, 'manual');
+        const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
+        if (originalTextForFile) {
+          const restored = splitFrontmatter(originalTextForFile, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          if (selectedFileIdRef.current === targetFileId) {
+            dispatchEditorContent(targetFileId, toVisibleEditorText(restored.body, restored.frontmatter), false);
+            setFrontmatter(restored.frontmatter);
+            setBody(restored.body);
+          }
+          setDraft(targetFileId, {
+            body: restored.body,
+            frontmatter: restored.frontmatter,
+            source: 'manual',
+            updatedAt: Date.now(),
+          });
         }
-        setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
-        clearThinkingCloseTimer(file.id);
-        clearThinkingFadeTimer(file.id);
-        thinkingSwapInFlightByFileIdRef.current[file.id] = false;
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
-        setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
+        setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'cancelled' }));
+        clearThinkingCloseTimer(targetFileId);
+        clearThinkingFadeTimer(targetFileId);
+        thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
+        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
+        setThinkingIsFadingByFileId((current) => ({ ...current, [targetFileId]: false }));
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
-        if (originalTextRef.current) {
-          const restored = splitFrontmatter(originalTextRef.current, { knownSectors: sectors, knownNoteTypes: noteTypes });
-          dispatchEditorContent(toVisibleEditorText(restored.body, restored.frontmatter), false);
-          setFrontmatter(restored.frontmatter);
-          setBody(restored.body);
-          updateDraftCache(restored.body, restored.frontmatter, 'manual');
+        const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
+        if (originalTextForFile) {
+          const restored = splitFrontmatter(originalTextForFile, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          if (selectedFileIdRef.current === targetFileId) {
+            dispatchEditorContent(targetFileId, toVisibleEditorText(restored.body, restored.frontmatter), false);
+            setFrontmatter(restored.frontmatter);
+            setBody(restored.body);
+          }
+          setDraft(targetFileId, {
+            body: restored.body,
+            frontmatter: restored.frontmatter,
+            source: 'manual',
+            updatedAt: Date.now(),
+          });
         }
-        setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'cancelled' }));
-        clearThinkingCloseTimer(file.id);
-        clearThinkingFadeTimer(file.id);
-        thinkingSwapInFlightByFileIdRef.current[file.id] = false;
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
-        setThinkingIsFadingByFileId((current) => ({ ...current, [file.id]: false }));
+        setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'cancelled' }));
+        clearThinkingCloseTimer(targetFileId);
+        clearThinkingFadeTimer(targetFileId);
+        thinkingSwapInFlightByFileIdRef.current[targetFileId] = false;
+        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
+        setThinkingIsFadingByFileId((current) => ({ ...current, [targetFileId]: false }));
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
-      originalTextRef.current = null;
-      preGenerateVisibleTextRef.current = null;
+      originalTextByFileIdRef.current[targetFileId] = null;
+      preGenerateVisibleTextByFileIdRef.current[targetFileId] = null;
     }
   };
 
@@ -941,17 +1084,42 @@ export function EditorPane() {
               value={editorValue}
               className="editor-scroll min-h-0 flex-1"
               height="100%"
-              extensions={editorExtensions}
+              extensions={[
+                ...editorExtensions,
+                keymap.of([
+                  { key: 'Mod-z', run: () => { onUndo(); return true; } },
+                  { key: 'Mod-Shift-z', run: () => { onRedo(); return true; } },
+                  { key: 'Mod-y', run: () => { onRedo(); return true; } },
+                ]),
+              ]}
               onCreateEditor={(view) => {
                 viewRef.current = view;
-                const pendingBaseline = pendingHistoryBaselineRef.current;
-                if (pendingBaseline && pendingBaseline.fileId === file.id) {
-                  dispatchEditorContent(pendingBaseline.beforeVisible, false);
-                  dispatchEditorContent(pendingBaseline.afterVisible, true, true);
-                  pendingHistoryBaselineRef.current = null;
+                viewFileIdRef.current = file.id;
+                const pendingBaseline = pendingHistoryBaselineByFileIdRef.current[file.id];
+                if (pendingBaseline) {
+                  dispatchEditorContent(file.id, pendingBaseline.beforeVisible, false);
+                  dispatchEditorContent(file.id, pendingBaseline.afterVisible, true, true);
+                  pendingHistoryBaselineByFileIdRef.current[file.id] = null;
                 }
-                setCanUndo(undoDepth(view.state) > 0);
-                setCanRedo(redoDepth(view.state) > 0);
+                const restoredHistory = getHistoryEntry(file.id);
+                if (restoredHistory) {
+                  const currentDoc = view.state.doc.toString();
+                  if (restoredHistory.lastText && restoredHistory.lastText !== currentDoc) {
+                    dispatchEditorContent(file.id, restoredHistory.lastText, false);
+                  }
+                  setCanUndoForFile(file.id, restoredHistory.undoStack.length > 0);
+                  setCanRedoForFile(file.id, restoredHistory.redoStack.length > 0);
+                } else {
+                  setHistoryEntry(file.id, {
+                    undoStack: [],
+                    redoStack: [],
+                    lastText: view.state.doc.toString(),
+                    updatedAt: Date.now(),
+                  });
+                  setCanUndoForFile(file.id, false);
+                  setCanRedoForFile(file.id, false);
+                }
+                updateHistoryAvailabilityForFile(file.id, view);
               }}
               onChange={(v) => {
                 if (suppressOnChangeRef.current > 0) {
@@ -969,8 +1137,16 @@ export function EditorPane() {
                 updateDraftCache(v, frontmatter, 'manual');
               }}
               onUpdate={(viewUpdate) => {
-                setCanUndo(undoDepth(viewUpdate.state) > 0);
-                setCanRedo(redoDepth(viewUpdate.state) > 0);
+                if (viewFileIdRef.current !== file.id) return;
+                const shouldRecordHistory = viewUpdate.transactions.some(
+                  (transaction) => transaction.docChanged && transaction.annotation(Transaction.addToHistory) !== false,
+                );
+                if (shouldRecordHistory && suppressOnChangeRef.current === 0) {
+                  const previousText = getHistoryEntry(file.id)?.lastText ?? '';
+                  const nextText = viewUpdate.state.doc.toString();
+                  recordHistoryChange(file.id, previousText, nextText);
+                }
+                updateHistoryAvailabilityForFile(file.id, viewUpdate.view);
               }}
             />
           </div>
