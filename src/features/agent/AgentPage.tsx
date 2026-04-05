@@ -69,10 +69,19 @@ const providerLabel = (provider: AgentProvider) => {
 const statusLabel = (status: AgentActivityLog['status']) => status.charAt(0).toUpperCase() + status.slice(1);
 const formatDuration = (durationMs: number | null) => (durationMs && durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '—');
 const formatUsd = (amount: number | null) => (typeof amount === 'number' ? `$${amount.toFixed(4)}` : '—');
-const catalogStatusBannerMessage = (catalogStatus: 'live' | 'unsupported' | 'failed' | null) => {
+const catalogStatusBannerMessage = ({
+  catalogStatus,
+  modelCount,
+}: {
+  catalogStatus: 'live' | 'unsupported' | 'failed' | null;
+  modelCount: number;
+}) => {
   if (catalogStatus === 'live') return 'Model catalog loaded.';
-  if (catalogStatus === 'unsupported') return 'Catalog unsupported; fallback auto-selected.';
-  if (catalogStatus === 'failed') return 'Failed to retrieve model catalog: fallback to auto-selected.';
+  if (modelCount === 0 && (catalogStatus === 'unsupported' || catalogStatus === 'failed')) {
+    return 'No models available yet. Press Refresh models to run live discovery.';
+  }
+  if (catalogStatus === 'unsupported') return 'Catalog unsupported; using configured fallback models.';
+  if (catalogStatus === 'failed') return 'Failed to retrieve model catalog; using configured fallback models.';
   return null;
 };
 
@@ -126,11 +135,7 @@ export function AgentPage() {
     loading: modelLoadingByProvider[provider],
     ...(catalogStatusByProvider[provider] ?? { catalogStatus: null, selectionSource: null, reasonCode: null }),
   };
-  const modelOptions = models.length > 0
-    ? models
-    : (selectedProviderModel.trim()
-      ? [{ modelId: selectedProviderModel, displayName: selectedProviderModel }]
-      : []);
+  const modelOptions = models;
   const localModelValue = ollamaRuntimeModelDraft;
   const localModelOptions = (provider === 'ollama' && models.length > 0)
     ? models
@@ -172,9 +177,18 @@ export function AgentPage() {
         reasonCode: nextReasonCode,
       });
       if (nextProvider === 'ollama') invalidateAgentOllamaModelsForBaseUrl(runtimeBaseUrl);
+      const selectedModelStillAvailable = nextModels.some((model) => model.modelId === nextSelectedModel);
+      const normalizedSelectedModel = selectedModelStillAvailable ? nextSelectedModel : '';
       if (applySelection) {
-        setAgentSelectedModel(nextProvider, nextSelectedModel);
-        if (nextProvider === 'ollama') setAgentOllamaRuntimeModelDraft(nextSelectedModel);
+        setAgentSelectedModel(nextProvider, normalizedSelectedModel);
+        if (nextProvider === 'ollama') setAgentOllamaRuntimeModelDraft(normalizedSelectedModel);
+      } else {
+        const currentSelectedModel = selectedModelByProvider[nextProvider] ?? '';
+        const currentSelectionStillAvailable = nextModels.some((model) => model.modelId === currentSelectedModel);
+        if (!currentSelectionStillAvailable) {
+          setAgentSelectedModel(nextProvider, normalizedSelectedModel);
+          if (nextProvider === 'ollama') setAgentOllamaRuntimeModelDraft(normalizedSelectedModel);
+        }
       }
     } catch {
       setAgentProviderModels(nextProvider, [], {
@@ -232,7 +246,7 @@ export function AgentPage() {
   }, []);
 
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
-  const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && localModelValue.trim().length > 0;
+  const canSaveLocalDefaults = localBaseUrl.trim().length > 0;
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutMs) > 0;
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
@@ -312,7 +326,7 @@ export function AgentPage() {
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
               {modelState.loading ? <span>Refreshing models…</span> : null}
               {!modelState.loading && modelState.catalogStatus
-                ? <span>{catalogStatusBannerMessage(modelState.catalogStatus)}</span>
+                ? <span>{catalogStatusBannerMessage({ catalogStatus: modelState.catalogStatus, modelCount: modelOptions.length })}</span>
                 : null}
               {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                 ? <span>Could not connect to Ollama at {localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT}.</span>
@@ -792,22 +806,14 @@ export function AgentPage() {
             {!hasUnsavedLocalChanges && localSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{localSaveMessage}</p> : null}
             <div className="mt-3 flex gap-2">
               <button
-                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
-                onClick={() => {
-                  if (provider !== 'ollama') setProvider('ollama');
-                  void refreshModels('ollama', true, normalizeLocalBaseUrl(localBaseUrl));
-                }}
-              >
-                Refresh models
-              </button>
-              <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 disabled={!canSaveLocalDefaults}
                 onClick={async () => {
                   try {
                     const settings = await getAgentSettings();
                     const canonicalBaseUrl = normalizeLocalBaseUrl(localBaseUrl);
-                    const canonicalModel = localModelValue.trim();
+                    const persistedModel = settings.generation_params?.local_connection?.model?.trim() ?? '';
+                    const canonicalModel = localModelValue.trim() || persistedModel;
                     await saveAgentSettings({
                       ...settings,
                       generation_params: {
@@ -818,7 +824,7 @@ export function AgentPage() {
                           B: settings.generation_params?.local_connection?.B ?? 1,
                         },
                       },
-                      ...(settings.default_provider === 'ollama' ? { default_model: canonicalModel } : {}),
+                      ...(settings.default_provider === 'ollama' && canonicalModel ? { default_model: canonicalModel } : {}),
                     });
                     setSavedLocalRuntime({ baseUrl: canonicalBaseUrl, model: canonicalModel });
                     setAgentOllamaRuntimeModelDraft(canonicalModel);
@@ -832,6 +838,15 @@ export function AgentPage() {
                 }}
               >
                 Save local settings
+              </button>
+              <button
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                onClick={() => {
+                  if (provider !== 'ollama') setProvider('ollama');
+                  void refreshModels('ollama', true, normalizeLocalBaseUrl(localBaseUrl));
+                }}
+              >
+                Refresh models
               </button>
             </div>
           </div>

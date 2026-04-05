@@ -248,6 +248,40 @@ test('web search save payload omits searxng provider_config when provider is duc
   assert.equal(payload.generation_params?.web_search?.provider_config, undefined);
 });
 
+
+test('AgentPage disables model select when no catalog models are available', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const modelOptions = models;'), true);
+  assert.equal(source.includes('disabled={modelState.loading || modelOptions.length === 0}'), true);
+});
+
+test('AgentPage empty-model status message instructs user to refresh live discovery', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('No models available yet. Press Refresh models to run live discovery.'), true);
+});
+
+test('AgentPage clears selected model when refreshed list no longer contains it', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const normalizedSelectedModel = selectedModelStillAvailable ? nextSelectedModel : '';"), true);
+  assert.equal(source.includes('if (!currentSelectionStillAvailable) {'), true);
+});
+
+
+test('local runtime save button requires only base URL so URL can be persisted before model discovery succeeds', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const canSaveLocalDefaults = localBaseUrl.trim().length > 0;'), true);
+  assert.equal(source.includes("const canonicalModel = localModelValue.trim() || persistedModel;"), true);
+});
+
+test('local runtime actions render Save local settings before Refresh models', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  const localActionsStart = source.indexOf('<div className="mt-3 flex gap-2">');
+  const saveIndex = source.indexOf('Save local settings', localActionsStart);
+  const refreshIndex = source.indexOf('Refresh models', localActionsStart);
+  assert.ok(localActionsStart >= 0);
+  assert.ok(saveIndex > localActionsStart);
+  assert.ok(refreshIndex > saveIndex);
+});
 test('AgentPage UI no longer references the top web-search warning banner message', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);
