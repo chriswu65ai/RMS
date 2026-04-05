@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { processResponseCitations } from './citation_pipeline';
 
-test('citation mode ON normalizes variants, remaps by appearance, validates indices, and appends lack citation for invalid references', async () => {
+test('citation mode ON normalizes citation variants and remaps numbering by first appearance', async () => {
   const result = await processResponseCitations({
-    outputText: 'Claim one (2). Claim two source 2 and superscript ¹. Bad cite [9].',
+    outputText: 'Claim one source 2. Claim two (1) and superscript ².',
     sourceCitationEnabled: true,
     sources: [
       { title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
@@ -12,13 +12,25 @@ test('citation mode ON normalizes variants, remaps by appearance, validates indi
     ],
   });
 
-  assert.match(result.normalizedText, /\[1\]/);
-  assert.match(result.normalizedText, /\[lack citation\]/);
-  assert.match(result.outputText, /Sources/);
-  assert.match(result.outputText, /\[2\] \[Beta\]\(https:\/\/example.com\/b\)/);
+  assert.match(result.normalizedText, /Claim one \[1\]/);
+  assert.match(result.normalizedText, /Claim two \[2\]/);
+  assert.deepEqual(result.citationIndices, [1, 2]);
+  assert.equal(result.citationEvents.some((event) => event.event_type === 'normalization_applied'), true);
 });
 
-test('citation mode ON performs exactly one retry pass when validation fails', async () => {
+test('citation mode ON output includes inline [n] markers and source list for referenced citations', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Answer with cite 【1】.',
+    sourceCitationEnabled: true,
+    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+  });
+
+  assert.match(result.outputText, /Answer with cite \[1\]\./);
+  assert.match(result.outputText, /Sources/);
+  assert.match(result.outputText, /\[1\] \[Alpha\]\(https:\/\/example.com\/a\)/);
+});
+
+test('citation mode ON performs one retry then marks unsupported spans with [lack citation] without blocking output', async () => {
   let retryCount = 0;
   const result = await processResponseCitations({
     outputText: 'Unsupported cite [44].',
@@ -26,29 +38,32 @@ test('citation mode ON performs exactly one retry pass when validation fails', a
     sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
     retryCanonicalize: async () => {
       retryCount += 1;
-      return 'Retried answer 【1】.';
+      return 'Retried answer [44].';
     },
   });
 
   assert.equal(retryCount, 1);
   assert.equal(result.retryUsed, true);
-  assert.match(result.outputText, /Retried answer \[1\]\./);
-  assert.doesNotMatch(result.outputText, /lack citation/);
+  assert.match(result.outputText, /Retried answer \[1\]\[lack citation\]\./);
+  assert.equal(result.citationEvents.some((event) => event.event_type === 'retry_invoked'), true);
+  assert.equal(result.citationEvents.some((event) => event.event_type === 'unsupported_span_marked_lack_citation'), true);
 });
 
-test('citation mode OFF strips rendered source sections and emits no inline source list', async () => {
+test('citation mode OFF excludes inline [n] and source list from output', async () => {
   const result = await processResponseCitations({
-    outputText: 'Body text\n\nSources:\n[1] [Alpha](https://example.com/a)',
+    outputText: 'Body text [1]\n\nSources:\n[1] [Alpha](https://example.com/a)',
     sourceCitationEnabled: false,
     sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
   });
 
   assert.equal(result.outputText, 'Body text');
   assert.doesNotMatch(result.outputText, /Sources/i);
+  assert.doesNotMatch(result.outputText, /\[\d+\]/);
   assert.deepEqual(result.citationIndices, []);
+  assert.equal(result.citationEvents.some((event) => event.event_type === 'citation_off_rewrite_invoked'), true);
 });
 
-test('citation mode OFF conditionally rewrites table citation columns and inline markers', async () => {
+test('citation mode OFF removes citation table columns cleanly', async () => {
   const result = await processResponseCitations({
     outputText: [
       'Findings [1] show improved latency [2].',
@@ -71,6 +86,7 @@ test('citation mode OFF conditionally rewrites table citation columns and inline
   assert.doesNotMatch(result.outputText, /References/i);
   assert.match(result.outputText, /Faster startup/);
   assert.doesNotMatch(result.outputText, /Benchmarks \|\s*\[1\]/);
+  assert.equal(result.citationEvents.some((event) => event.event_type === 'citation_leakage_prevented'), true);
 });
 
 test('citation mode OFF skips rewrite when detector does not fire', async () => {
@@ -82,4 +98,15 @@ test('citation mode OFF skips rewrite when detector does not fire', async () => 
   });
 
   assert.equal(result.outputText, input);
+  assert.deepEqual(result.citationEvents, []);
+});
+
+test('citation mode ON marks unresolved non-canonical citations with [lack citation]', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Unknown marker source 77.',
+    sourceCitationEnabled: true,
+    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+  });
+
+  assert.match(result.normalizedText, /\[1\]\[lack citation\]/);
 });
