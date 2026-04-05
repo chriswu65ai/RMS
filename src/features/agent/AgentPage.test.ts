@@ -253,6 +253,12 @@ test('AgentPage UI no longer references the top web-search warning banner messag
   assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);
 });
 
+test('AgentPage does not render a generic warning/error paragraph below the Activity log section', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('{message ? <p className="text-sm text-rose-700">{message}</p> : null}'), false);
+  assert.equal(source.includes('setActivityLogFeedbackMessage'), true);
+});
+
 test('preferred source domain placeholder and validation copy use google.com examples', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('placeholder="google.com"'), true);

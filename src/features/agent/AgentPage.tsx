@@ -93,7 +93,9 @@ export function AgentPage() {
   const [activity, setActivity] = useState<AgentActivityLog[]>([]);
   const [statusByProvider, setStatusByProvider] = useState<Record<CloudAgentProvider, boolean>>({ minimax: false, openai: false, anthropic: false });
   const [draftKeyByProvider, setDraftKeyByProvider] = useState<Record<CloudAgentProvider, string>>({ minimax: '', openai: '', anthropic: '' });
-  const [message, setMessage] = useState('');
+  const [modelFeedbackMessage, setModelFeedbackMessage] = useState('');
+  const [credentialFeedbackMessage, setCredentialFeedbackMessage] = useState('');
+  const [activityLogFeedbackMessage, setActivityLogFeedbackMessage] = useState('');
   const [defaultSaveMessage, setDefaultSaveMessage] = useState('');
   const [localSaveMessage, setLocalSaveMessage] = useState('');
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
@@ -223,7 +225,7 @@ export function AgentPage() {
         const statuses = await Promise.all(CLOUD_AGENT_PROVIDERS.map(async (candidate) => ({ provider: candidate, has: (await getCredentialStatus(candidate)).has_key })));
         setStatusByProvider(statuses.reduce((acc, row) => ({ ...acc, [row.provider]: row.has }), { minimax: false, openai: false, anthropic: false }));
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
+        setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed loading Agent settings.');
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -326,7 +328,7 @@ export function AgentPage() {
                 onClick={async () => {
                   setDefaultSaveMessage('');
                   if (provider !== 'ollama' && hasUnsavedLocalChanges) {
-                    setMessage('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.');
+                    setModelFeedbackMessage('Unsaved Ollama runtime changes detected. Save local settings first to avoid ambiguity.');
                     return;
                   }
                   try {
@@ -341,14 +343,16 @@ export function AgentPage() {
                     }
                     setAgentSelectedModel(provider, canonicalModel);
                     setDefaultSaveMessage('Default provider/model saved.');
+                    setModelFeedbackMessage('');
                   } catch (error) {
-                    setMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
+                    setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed saving defaults.');
                   }
                 }}
               >
                 Save default agent
               </button>
               {defaultSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{defaultSaveMessage}</p> : null}
+              {modelFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{modelFeedbackMessage}</p> : null}
             </div>
           </div>
         </section>
@@ -509,7 +513,6 @@ export function AgentPage() {
                   } catch (error) {
                     const message = error instanceof Error ? error.message : 'Failed saving web search settings.';
                     setWebSearchStatusMessage(message);
-                    setMessage(message);
                   }
                 }}
               >
@@ -546,7 +549,7 @@ export function AgentPage() {
                   setNewWeight('1');
                   setNewEnabled(true);
                 } catch (error) {
-                  setMessage(error instanceof Error ? error.message : 'Failed creating preferred source.');
+                  setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed creating preferred source.');
                 }
               }}
             >
@@ -617,7 +620,7 @@ export function AgentPage() {
                                   onClick={async () => {
                                     const canonicalDomain = editingDomain.trim().toLowerCase();
                                     if (!isValidDomain(canonicalDomain)) {
-                                      setMessage('Domain must be valid, such as google.com.');
+                                      setPreferredSourcesMessage('Domain must be valid, such as google.com.');
                                       return;
                                     }
                                     try {
@@ -630,7 +633,7 @@ export function AgentPage() {
                                       setEditingSourceId(null);
                                       setPreferredSourcesMessage(`Updated ${updated.domain}.`);
                                     } catch (error) {
-                                      setMessage(error instanceof Error ? error.message : 'Failed updating preferred source.');
+                                      setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed updating preferred source.');
                                     }
                                   }}
                                 >
@@ -659,7 +662,7 @@ export function AgentPage() {
                                       setPreferredSources((current) => current.filter((entry) => entry.id !== source.id));
                                       setPreferredSourcesMessage(`Deleted ${source.domain}.`);
                                     } catch (error) {
-                                      setMessage(error instanceof Error ? error.message : 'Failed deleting preferred source.');
+                                      setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed deleting preferred source.');
                                     }
                                   }}
                                 >
@@ -680,7 +683,9 @@ export function AgentPage() {
                 </tbody>
               </table>
             </div>
-            {preferredSourcesMessage ? <p className="text-xs text-emerald-700">{preferredSourcesMessage}</p> : null}
+            {preferredSourcesMessage ? (
+              <p className={`text-xs ${preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'text-rose-700' : 'text-emerald-700'}`}>{preferredSourcesMessage}</p>
+            ) : null}
           </div>
         </section>
 
@@ -710,9 +715,9 @@ export function AgentPage() {
                           setStatusByProvider((prev) => ({ ...prev, [candidate]: true }));
                           setDraftKeyByProvider((prev) => ({ ...prev, [candidate]: '' }));
                           if (candidate === provider) await refreshModels(provider);
-                          setMessage(`${providerLabel(candidate)} credential saved securely.`);
+                          setCredentialFeedbackMessage(`${providerLabel(candidate)} credential saved securely.`);
                         } catch (error) {
-                          setMessage(error instanceof Error ? error.message : 'Failed saving credential.');
+                          setCredentialFeedbackMessage(error instanceof Error ? error.message : 'Failed saving credential.');
                         }
                       }}
                     >
@@ -723,6 +728,9 @@ export function AgentPage() {
                 </div>
               ))}
             </div>
+            {credentialFeedbackMessage ? (
+              <p className={`mt-3 text-xs ${credentialFeedbackMessage.toLowerCase().includes('saved securely') ? 'text-emerald-700' : 'text-rose-700'}`}>{credentialFeedbackMessage}</p>
+            ) : null}
           </div>
         </section>
 
@@ -817,8 +825,9 @@ export function AgentPage() {
                     setAgentSelectedModel('ollama', canonicalModel);
                     if (provider === 'ollama') setAgentSelectedModel(provider, canonicalModel);
                     setLocalSaveMessage('Local settings saved.');
+                    setModelFeedbackMessage('');
                   } catch (error) {
-                    setMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
+                    setModelFeedbackMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
                   }
                 }}
               >
@@ -837,9 +846,9 @@ export function AgentPage() {
                 try {
                   await clearActivityLog();
                   setActivity([]);
-                  setMessage('Activity log cleared.');
+                  setActivityLogFeedbackMessage('Activity log cleared.');
                 } catch (error) {
-                  setMessage(error instanceof Error ? error.message : 'Failed clearing activity log.');
+                  setActivityLogFeedbackMessage(error instanceof Error ? error.message : 'Failed clearing activity log.');
                 }
               }}
             >
@@ -847,6 +856,9 @@ export function AgentPage() {
             </button>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
+            {activityLogFeedbackMessage ? (
+              <p className={`mb-3 text-xs ${activityLogFeedbackMessage.toLowerCase().includes('cleared') ? 'text-emerald-700' : 'text-rose-700'}`}>{activityLogFeedbackMessage}</p>
+            ) : null}
             <ul className="max-h-[26rem] space-y-2 overflow-y-auto pr-1 text-sm text-slate-700">
               {latestSummary.map((entry) => (
                 <li key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -867,7 +879,6 @@ export function AgentPage() {
           </div>
         </section>
 
-        {message ? <p className="text-sm text-rose-700">{message}</p> : null}
       </div>
     </div>
   );
