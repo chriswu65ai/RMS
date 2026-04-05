@@ -173,6 +173,60 @@ type AttachmentSettingsRow = {
   retention_days: number;
 };
 
+type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
+
+type ChatSessionRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  is_primary: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatMessageRow = {
+  id: string;
+  session_id: string;
+  role: ChatRole;
+  content: string;
+  provider: string | null;
+  model: string | null;
+  stream_json: string | null;
+  metadata_json: string | null;
+  created_at: string;
+};
+
+type ChatPendingActionRow = {
+  id: string;
+  session_id: string;
+  action_key: string;
+  draft_json: string;
+  status: 'pending' | 'confirmed' | 'cancelled';
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatMemorySnapshotRow = {
+  id: string;
+  session_id: string;
+  rolling_summary: string;
+  pinned_memory_json: string | null;
+  last_message_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatSettingsRow = {
+  id: string;
+  user_id: string;
+  policy_json: string | null;
+  profile_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChatPurgeRange = '24h' | '7d' | 'all';
+
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
 const attachmentsRootPath = path.resolve(process.cwd(), 'data/attachments');
@@ -200,6 +254,245 @@ const queryJson = <T>(sql: string): T[] => {
   const out = execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8' });
   const trimmed = out.trim();
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+};
+
+const parseJsonOrNull = <T>(value: string | null | undefined): T | null => {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+};
+
+const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): ChatSessionRow => {
+  const existing = queryJson<ChatSessionRow>(`
+    select * from chat_sessions
+    where user_id = ${sqlEscape(userId)} and is_primary = 1
+    order by created_at asc
+    limit 1
+  `)[0];
+  if (existing) return existing;
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  execSql(`
+    insert into chat_sessions (id, user_id, title, is_primary, created_at, updated_at)
+    values (${sqlEscape(id)}, ${sqlEscape(userId)}, ${sqlEscape(title)}, 1, ${sqlEscape(now)}, ${sqlEscape(now)})
+  `);
+  return queryJson<ChatSessionRow>(`select * from chat_sessions where id = ${sqlEscape(id)} limit 1`)[0];
+};
+
+type AppendChatMessageInput = {
+  sessionId: string;
+  role: ChatRole;
+  content: string;
+  provider?: string | null;
+  model?: string | null;
+  stream?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+const appendChatMessage = (input: AppendChatMessageInput): ChatMessageRow => {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  execSql(`
+    insert into chat_messages (id, session_id, role, content, provider, model, stream_json, metadata_json, created_at)
+    values (
+      ${sqlEscape(id)},
+      ${sqlEscape(input.sessionId)},
+      ${sqlEscape(input.role)},
+      ${sqlEscape(input.content)},
+      ${sqlEscape(input.provider ?? null)},
+      ${sqlEscape(input.model ?? null)},
+      ${sqlEscape(input.stream ? JSON.stringify(input.stream) : null)},
+      ${sqlEscape(input.metadata ? JSON.stringify(input.metadata) : null)},
+      ${sqlEscape(now)}
+    );
+    update chat_sessions set updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.sessionId)};
+  `);
+  return queryJson<ChatMessageRow>(`select * from chat_messages where id = ${sqlEscape(id)} limit 1`)[0];
+};
+
+const loadPaginatedChatMessages = (sessionId: string, limit = 50, beforeCreatedAt?: string): ChatMessageRow[] => {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 50;
+  const beforeClause = beforeCreatedAt ? `and created_at < ${sqlEscape(beforeCreatedAt)}` : '';
+  return queryJson<ChatMessageRow>(`
+    select * from chat_messages
+    where session_id = ${sqlEscape(sessionId)} ${beforeClause}
+    order by created_at desc, id desc
+    limit ${safeLimit}
+  `).reverse();
+};
+
+const savePendingActionDraft = (
+  sessionId: string,
+  actionKey: string,
+  draft: Record<string, unknown>,
+  status: ChatPendingActionRow['status'] = 'pending',
+): ChatPendingActionRow => {
+  const now = new Date().toISOString();
+  const existing = queryJson<Pick<ChatPendingActionRow, 'id'>>(
+    `select id from chat_pending_actions where session_id = ${sqlEscape(sessionId)} and action_key = ${sqlEscape(actionKey)} limit 1`,
+  )[0];
+  const id = existing?.id ?? randomUUID();
+  execSql(`
+    insert into chat_pending_actions (id, session_id, action_key, draft_json, status, created_at, updated_at)
+    values (${sqlEscape(id)}, ${sqlEscape(sessionId)}, ${sqlEscape(actionKey)}, ${sqlEscape(JSON.stringify(draft))}, ${sqlEscape(status)}, ${sqlEscape(now)}, ${sqlEscape(now)})
+    on conflict(id) do update set
+      draft_json = excluded.draft_json,
+      status = excluded.status,
+      updated_at = excluded.updated_at;
+  `);
+  return queryJson<ChatPendingActionRow>(`select * from chat_pending_actions where id = ${sqlEscape(id)} limit 1`)[0];
+};
+
+const loadPendingActionDraft = (sessionId: string, actionKey: string): (ChatPendingActionRow & { draft: Record<string, unknown> | null }) | null => {
+  const row = queryJson<ChatPendingActionRow>(
+    `select * from chat_pending_actions where session_id = ${sqlEscape(sessionId)} and action_key = ${sqlEscape(actionKey)} limit 1`,
+  )[0];
+  if (!row) return null;
+  return { ...row, draft: parseJsonOrNull<Record<string, unknown>>(row.draft_json) };
+};
+
+type SaveMemorySnapshotInput = {
+  sessionId: string;
+  rollingSummary: string;
+  pinnedMemory?: Record<string, unknown> | null;
+  lastMessageId?: string | null;
+};
+
+const saveMemorySnapshot = (input: SaveMemorySnapshotInput): ChatMemorySnapshotRow => {
+  const now = new Date().toISOString();
+  const existing = queryJson<Pick<ChatMemorySnapshotRow, 'id'>>(`select id from chat_memory_snapshots where session_id = ${sqlEscape(input.sessionId)} limit 1`)[0];
+  const id = existing?.id ?? randomUUID();
+  execSql(`
+    insert into chat_memory_snapshots (id, session_id, rolling_summary, pinned_memory_json, last_message_id, created_at, updated_at)
+    values (
+      ${sqlEscape(id)},
+      ${sqlEscape(input.sessionId)},
+      ${sqlEscape(input.rollingSummary)},
+      ${sqlEscape(input.pinnedMemory ? JSON.stringify(input.pinnedMemory) : null)},
+      ${sqlEscape(input.lastMessageId ?? null)},
+      ${sqlEscape(now)},
+      ${sqlEscape(now)}
+    )
+    on conflict(id) do update set
+      rolling_summary = excluded.rolling_summary,
+      pinned_memory_json = excluded.pinned_memory_json,
+      last_message_id = excluded.last_message_id,
+      updated_at = excluded.updated_at;
+  `);
+  return queryJson<ChatMemorySnapshotRow>(`select * from chat_memory_snapshots where id = ${sqlEscape(id)} limit 1`)[0];
+};
+
+const loadMemorySnapshot = (sessionId: string): (ChatMemorySnapshotRow & { pinnedMemory: Record<string, unknown> | null }) | null => {
+  const row = queryJson<ChatMemorySnapshotRow>(`select * from chat_memory_snapshots where session_id = ${sqlEscape(sessionId)} limit 1`)[0];
+  if (!row) return null;
+  return { ...row, pinnedMemory: parseJsonOrNull<Record<string, unknown>>(row.pinned_memory_json) };
+};
+
+const purgeChatHistoryByRange = (sessionId: string, range: ChatPurgeRange): { deletedMessages: number; deletedPendingActions: number } => {
+  const cutoff = range === 'all'
+    ? null
+    : new Date(Date.now() - (range === '24h' ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000)).toISOString();
+  const rangeClause = cutoff ? `and created_at >= ${sqlEscape(cutoff)}` : '';
+  const pendingRangeClause = cutoff ? `and updated_at >= ${sqlEscape(cutoff)}` : '';
+  const deletedMessages = queryJson<{ total: number }>(`
+    select count(*) as total from chat_messages where session_id = ${sqlEscape(sessionId)} ${rangeClause}
+  `)[0]?.total ?? 0;
+  const deletedPendingActions = queryJson<{ total: number }>(`
+    select count(*) as total from chat_pending_actions where session_id = ${sqlEscape(sessionId)} ${pendingRangeClause}
+  `)[0]?.total ?? 0;
+  execSql(`
+    delete from chat_messages where session_id = ${sqlEscape(sessionId)} ${rangeClause};
+    delete from chat_pending_actions where session_id = ${sqlEscape(sessionId)} ${pendingRangeClause};
+  `);
+  return { deletedMessages, deletedPendingActions };
+};
+
+type ChatTranscriptExportPayload = {
+  session: ChatSessionRow;
+  settings: {
+    row: ChatSettingsRow | null;
+    policy: Record<string, unknown> | null;
+    profile: Record<string, unknown> | null;
+  };
+  messages: Array<ChatMessageRow & { stream: Record<string, unknown> | null; metadata: Record<string, unknown> | null }>;
+  pendingActions: Array<ChatPendingActionRow & { draft: Record<string, unknown> | null }>;
+  memorySnapshot: (ChatMemorySnapshotRow & { pinnedMemory: Record<string, unknown> | null }) | null;
+};
+
+const assembleTranscriptExportPayload = (sessionId: string): { json: ChatTranscriptExportPayload; markdown: string } | null => {
+  const session = queryJson<ChatSessionRow>(`select * from chat_sessions where id = ${sqlEscape(sessionId)} limit 1`)[0];
+  if (!session) return null;
+  const settingsRow = queryJson<ChatSettingsRow>(`select * from chat_settings where user_id = ${sqlEscape(session.user_id)} limit 1`)[0] ?? null;
+  const policy = parseJsonOrNull<Record<string, unknown>>(settingsRow?.policy_json);
+  const profile = parseJsonOrNull<Record<string, unknown>>(settingsRow?.profile_json);
+  const messages = queryJson<ChatMessageRow>(
+    `select * from chat_messages where session_id = ${sqlEscape(sessionId)} order by created_at asc, id asc`,
+  ).map((row) => ({
+    ...row,
+    stream: parseJsonOrNull<Record<string, unknown>>(row.stream_json),
+    metadata: parseJsonOrNull<Record<string, unknown>>(row.metadata_json),
+  }));
+  const pendingActions = queryJson<ChatPendingActionRow>(
+    `select * from chat_pending_actions where session_id = ${sqlEscape(sessionId)} order by created_at asc, id asc`,
+  ).map((row) => ({ ...row, draft: parseJsonOrNull<Record<string, unknown>>(row.draft_json) }));
+  const memorySnapshot = loadMemorySnapshot(sessionId);
+
+  const json: ChatTranscriptExportPayload = {
+    session,
+    settings: { row: settingsRow, policy, profile },
+    messages,
+    pendingActions,
+    memorySnapshot,
+  };
+
+  const markdownLines: string[] = [
+    `# Chat Transcript: ${session.title}`,
+    '',
+    `- Session ID: \`${session.id}\``,
+    `- User ID: \`${session.user_id}\``,
+    `- Created: ${session.created_at}`,
+    `- Updated: ${session.updated_at}`,
+    '',
+    '## Messages',
+    '',
+  ];
+
+  if (!messages.length) {
+    markdownLines.push('_No messages_');
+  } else {
+    for (const message of messages) {
+      markdownLines.push(`### ${message.role.toUpperCase()} — ${message.created_at}`);
+      if (message.provider || message.model) {
+        markdownLines.push(`_${message.provider ?? 'unknown'} / ${message.model ?? 'unknown'}_`);
+      }
+      markdownLines.push('', message.content || '_Empty_', '');
+    }
+  }
+
+  markdownLines.push('## Pending Actions', '');
+  if (!pendingActions.length) {
+    markdownLines.push('_No pending actions_', '');
+  } else {
+    for (const action of pendingActions) {
+      markdownLines.push(`- **${action.action_key}** (${action.status})`);
+      markdownLines.push(`  - Updated: ${action.updated_at}`);
+      markdownLines.push(`  - Draft: \`${JSON.stringify(action.draft)}\``);
+    }
+    markdownLines.push('');
+  }
+
+  markdownLines.push('## Memory Snapshot', '');
+  if (!memorySnapshot) {
+    markdownLines.push('_No memory snapshot_');
+  } else {
+    markdownLines.push(memorySnapshot.rolling_summary || '_No summary_');
+    markdownLines.push('', `Pinned: \`${JSON.stringify(memorySnapshot.pinnedMemory)}\``);
+  }
+
+  return { json, markdown: markdownLines.join('\n') };
 };
 
 const coerceLinkType = (value: unknown): 'task' | 'note' | null => (value === 'task' || value === 'note' ? value : null);
@@ -425,6 +718,56 @@ const ensureInitialized = () => {
     id integer primary key check (id = 1),
     quota_mb integer not null default 500,
     retention_days integer not null default 30
+  );
+  create table if not exists chat_sessions (
+    id text primary key,
+    user_id text not null,
+    title text not null default 'Primary chat',
+    is_primary integer not null default 0,
+    created_at text not null,
+    updated_at text not null
+  );
+  create unique index if not exists idx_chat_sessions_primary_user on chat_sessions(user_id) where is_primary = 1;
+  create index if not exists idx_chat_sessions_user_updated on chat_sessions(user_id, updated_at desc);
+  create table if not exists chat_messages (
+    id text primary key,
+    session_id text not null,
+    role text not null,
+    content text not null default '',
+    provider text,
+    model text,
+    stream_json text,
+    metadata_json text,
+    created_at text not null
+  );
+  create index if not exists idx_chat_messages_session_created on chat_messages(session_id, created_at asc);
+  create table if not exists chat_pending_actions (
+    id text primary key,
+    session_id text not null,
+    action_key text not null,
+    draft_json text not null,
+    status text not null default 'pending',
+    created_at text not null,
+    updated_at text not null,
+    unique(session_id, action_key)
+  );
+  create index if not exists idx_chat_pending_actions_session_updated on chat_pending_actions(session_id, updated_at desc);
+  create table if not exists chat_memory_snapshots (
+    id text primary key,
+    session_id text not null unique,
+    rolling_summary text not null default '',
+    pinned_memory_json text,
+    last_message_id text,
+    created_at text not null,
+    updated_at text not null
+  );
+  create table if not exists chat_settings (
+    id text primary key,
+    user_id text not null unique,
+    policy_json text,
+    profile_json text,
+    created_at text not null,
+    updated_at text not null
   );
   `);
   execSql(`insert or ignore into agent_settings (id, default_provider, default_model, generation_params_json) values (1, 'minimax', '', null);`);
