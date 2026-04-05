@@ -144,9 +144,12 @@ export function composeMarkdown(frontmatter: FrontmatterModel, body: string): st
 
 export function fileToNoteModel(file: ResearchNote): Note {
   const { frontmatter } = splitFrontmatter(file.content);
+  const fallbackTitle = typeof frontmatter.title === 'string' && frontmatter.title.trim().length > 0
+    ? frontmatter.title.trim()
+    : file.name.replace(/\.md$/i, '');
   return {
     id: file.id,
-    title: frontmatter.title || file.name,
+    title: fallbackTitle,
     type: frontmatter.type || '—',
     date: frontmatter.date || '',
     assignee: frontmatter.assignee || '—',
