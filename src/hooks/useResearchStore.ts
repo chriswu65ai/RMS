@@ -6,7 +6,7 @@ import { splitFrontmatter } from '../lib/frontmatter';
 import { deriveUnsavedFileIds } from '../features/files/unsavedIndicators';
 import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../features/agent/types';
 import { GenerateUseCase } from '../features/agent/GenerateUseCase';
-import type { StreamSource, ThinkingEvent } from '../lib/agentApi';
+import type { IngestionDiagnostics, StreamSource, ThinkingEvent } from '../lib/agentApi';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
 import {
   createPersistWriteGuard,
@@ -108,8 +108,9 @@ export type StartGeneratePayload = {
   onSources?: (sources: StreamSource[]) => void;
   onSearchWarning?: (message: string) => void;
   onThinkingEvent?: (event: ThinkingEvent) => void;
+  onIngestionDiagnostics?: (diagnostics: IngestionDiagnostics) => void;
 };
-type ActiveGenerateStreamCallbacks = Pick<StartGeneratePayload, 'onProgress' | 'onSources' | 'onSearchWarning' | 'onThinkingEvent'>;
+type ActiveGenerateStreamCallbacks = Pick<StartGeneratePayload, 'onProgress' | 'onSources' | 'onSearchWarning' | 'onThinkingEvent' | 'onIngestionDiagnostics'>;
 export type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
 export type ThinkingPhase = 'waiting' | 'reasoning' | 'tool_running' | 'tool_completed' | 'tool_failed';
 export type ThinkingFeedEvent = {
@@ -195,6 +196,7 @@ type Store = {
   clearGenerateJob: (fileId: string) => void;
   getGenerateJob: (fileId: string) => GenerateJob;
   startGenerate: (fileId: string, payload: StartGeneratePayload) => Promise<string>;
+  preflightGenerate: (fileId: string, payload: Pick<StartGeneratePayload, 'inputText' | 'provider' | 'model'>) => Promise<{ diagnostics: IngestionDiagnostics; predicted_truncation: boolean }>;
   cancelGenerate: (fileId: string) => void;
   resetGenerateTransientStateForFile: (fileId: string) => void;
   mergeIncomingSourcesForFile: (fileId: string, incoming: StreamSource[]) => void;
@@ -477,6 +479,7 @@ export const useResearchStore = create<Store>()(
           onSources: payload.onSources,
           onSearchWarning: payload.onSearchWarning,
           onThinkingEvent: payload.onThinkingEvent,
+          onIngestionDiagnostics: payload.onIngestionDiagnostics,
         });
         get().markGenerateRunning(fileId);
         try {
@@ -490,6 +493,7 @@ export const useResearchStore = create<Store>()(
             onSources: (sources) => activeGenerationCallbacksByFileId.get(fileId)?.onSources?.(sources),
             onSearchWarning: (message) => activeGenerationCallbacksByFileId.get(fileId)?.onSearchWarning?.(message),
             onThinkingEvent: (event) => activeGenerationCallbacksByFileId.get(fileId)?.onThinkingEvent?.(event),
+            onIngestionDiagnostics: (diagnostics) => activeGenerationCallbacksByFileId.get(fileId)?.onIngestionDiagnostics?.(diagnostics),
           });
           get().completeGenerate(fileId, result.outputText);
           return result.outputText;
@@ -509,6 +513,12 @@ export const useResearchStore = create<Store>()(
       cancelGenerate: (fileId) => {
         activeGenerationControllersByFileId.get(fileId)?.abort();
       },
+      preflightGenerate: async (fileId, payload) => generateUseCase.preflight({
+        noteId: fileId,
+        inputText: payload.inputText,
+        provider: payload.provider,
+        model: payload.model,
+      }),
       resetGenerateTransientStateForFile: (fileId) => set((state) => ({
         generatedSourcesByFileId: {
           ...state.generatedSourcesByFileId,

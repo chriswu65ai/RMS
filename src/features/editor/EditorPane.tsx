@@ -18,7 +18,7 @@ import { MetadataPanel } from '../metadata/MetadataPanel';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
-import type { StreamSource, ThinkingEvent } from '../../lib/agentApi';
+import type { IngestionDiagnostics, StreamSource, ThinkingEvent } from '../../lib/agentApi';
 import { reconcileDraftFrontmatterWithSaved } from '../files/effectiveNoteState';
 import { runUiAsync } from '../../lib/uiAsync';
 
@@ -32,6 +32,14 @@ const SYNTHETIC_PROGRESS_MESSAGES = {
   refining: 'LLM: Refining structure',
   finalizing: 'LLM: Finalizing note',
 } as const;
+
+export const hasIngestionTruncationOrExclusion = (diagnostics: IngestionDiagnostics | null): boolean => (
+  Boolean(diagnostics)
+  && (
+    (diagnostics?.partially_included_attachments ?? 0) > 0
+    || (diagnostics?.excluded_attachments ?? 0) > 0
+  )
+);
 
 
 type ThinkingStatusUi = {
@@ -356,6 +364,7 @@ export function EditorPane() {
     getGenerateJob,
     clearGenerateJob,
     startGenerate,
+    preflightGenerate,
     cancelGenerate: cancelGenerateByFileId,
     generatedSourcesByFileId,
     sourcesBubbleClosedByFileId,
@@ -394,6 +403,9 @@ export function EditorPane() {
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
   const [thinkingClockTick, setThinkingClockTick] = useState(0);
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
+  const [ingestionDiagnosticsWarning, setIngestionDiagnosticsWarning] = useState<IngestionDiagnostics | null>(null);
+  const [pendingPreflightDiagnostics, setPendingPreflightDiagnostics] = useState<IngestionDiagnostics | null>(null);
+  const [showWarningDetails, setShowWarningDetails] = useState(false);
   const [canUndoByFileId, setCanUndoByFileId] = useState<Record<string, boolean>>({});
   const [canRedoByFileId, setCanRedoByFileId] = useState<Record<string, boolean>>({});
   const thinkingCloseTimerByFileIdRef = useRef<Record<string, number | null>>({});
@@ -405,6 +417,7 @@ export function EditorPane() {
   const streamFailureAlertShownByFileIdRef = useRef<Record<string, boolean>>({});
   const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
   const editorStateByFileIdRef = useRef<Record<string, EditorState | null>>({});
+  const skipPreflightOnceRef = useRef(false);
   const parsed = useMemo(
     () => splitFrontmatter(file?.content ?? '', { knownSectors: sectors, knownNoteTypes: noteTypes }),
     [file?.content, noteTypes, sectors],
@@ -1053,6 +1066,19 @@ export function EditorPane() {
       await dialog.alert('Generate unavailable', 'Set a default provider/model in Agent settings first.');
       return;
     }
+    if (!skipPreflightOnceRef.current) {
+      const preflightResult = await preflightGenerate(file.id, {
+        inputText: merged,
+        provider: defaultProvider,
+        model: defaultModel,
+      });
+      if (preflightResult.predicted_truncation) {
+        setPendingPreflightDiagnostics(preflightResult.diagnostics);
+        setShowWarningDetails(false);
+        return;
+      }
+    }
+    skipPreflightOnceRef.current = false;
 
     const targetFileId = file.id;
     const originalText = merged;
@@ -1063,6 +1089,9 @@ export function EditorPane() {
     clearThinkingCloseTimer(targetFileId);
     resetGenerateTransientStateForFile(file.id);
     setSearchWarningMessage(null);
+    setIngestionDiagnosticsWarning(null);
+    setPendingPreflightDiagnostics(null);
+    setShowWarningDetails(false);
     streamPreviewControllerRef.current?.cancel();
     streamPreviewControllerRef.current = null;
     streamFailureAlertShownByFileIdRef.current[targetFileId] = false;
@@ -1219,6 +1248,11 @@ export function EditorPane() {
         },
         onSearchWarning: (message) => {
           setSearchWarningMessage(message);
+        },
+        onIngestionDiagnostics: (diagnostics) => {
+          if (hasIngestionTruncationOrExclusion(diagnostics)) {
+            setIngestionDiagnosticsWarning(diagnostics);
+          }
         },
         onThinkingEvent: (event) => {
           sawExplicitProviderThinkingEvent = true;
@@ -1423,10 +1457,51 @@ export function EditorPane() {
               </div>
             </div>
           )}
-          {searchWarningMessage && (
-            <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Warning</span>
-              <span>{searchWarningMessage}</span>
+          {(searchWarningMessage || pendingPreflightDiagnostics || ingestionDiagnosticsWarning) && (
+            <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <div className="flex items-start justify-between gap-2">
+                <div className="inline-flex items-center gap-2">
+                  <span className="rounded-full bg-amber-200 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">Warning</span>
+                  <span>
+                    {pendingPreflightDiagnostics
+                      ? 'Some attachments may be truncated or excluded based on token budget.'
+                      : 'Generation completed with warning details.'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {(pendingPreflightDiagnostics || ingestionDiagnosticsWarning) && (
+                    <button type="button" className="rounded border border-amber-300 px-2 py-0.5 text-[11px]" onClick={() => setShowWarningDetails((value) => !value)}>
+                      {showWarningDetails ? 'Hide details' : 'Show details'}
+                    </button>
+                  )}
+                  {pendingPreflightDiagnostics && (
+                    <>
+                      <button type="button" className="rounded border border-amber-300 px-2 py-0.5 text-[11px]" onClick={() => setPendingPreflightDiagnostics(null)}>Cancel</button>
+                      <button
+                        type="button"
+                        className="rounded border border-amber-500 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold"
+                        onClick={() => {
+                          skipPreflightOnceRef.current = true;
+                          setPendingPreflightDiagnostics(null);
+                          void runGenerate();
+                        }}
+                      >
+                        Continue
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {showWarningDetails && (pendingPreflightDiagnostics || ingestionDiagnosticsWarning) && (
+                <ul className="mt-2 list-disc space-y-0.5 pl-4">
+                  {(pendingPreflightDiagnostics ?? ingestionDiagnosticsWarning)?.files
+                    .filter((entry) => entry.reason !== 'included_full')
+                    .map((entry) => (
+                      <li key={`${entry.attachment_id}-${entry.reason}`}>{entry.filename}: {entry.reason.replace('_', ' ')}</li>
+                    ))}
+                </ul>
+              )}
+              {searchWarningMessage && <div className="mt-1">{searchWarningMessage}</div>}
             </div>
           )}
           {generatedSources.length > 0 && !isSourcesBubbleClosed && (
