@@ -106,6 +106,8 @@ const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(val
 const clampSourceImportance = (value: number) => Math.min(5, Math.max(1, value));
 const getSourceImportanceLabel = (value: number) => SOURCE_IMPORTANCE_LABELS[clampSourceImportance(value)];
 const getSourceImportanceColor = (value: number) => SOURCE_IMPORTANCE_COLORS[clampSourceImportance(value)];
+type FeedbackKind = 'success' | 'error';
+type FeedbackState = { kind: FeedbackKind; text: string };
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -402,9 +404,9 @@ export function AgentPage() {
   const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
   const [webSearchSourceCitation, setWebSearchSourceCitation] = useState(false);
-  const [webSearchStatusMessage, setWebSearchStatusMessage] = useState('');
+  const [webSearchStatusFeedback, setWebSearchStatusFeedback] = useState<FeedbackState | null>(null);
   const [preferredSources, setPreferredSources] = useState<PreferredSource[]>([]);
-  const [preferredSourcesMessage, setPreferredSourcesMessage] = useState('');
+  const [preferredSourcesFeedback, setPreferredSourcesFeedback] = useState<FeedbackState | null>(null);
   const [newDomain, setNewDomain] = useState('');
   const [newWeight, setNewWeight] = useState('1');
   const [newEnabled, setNewEnabled] = useState(true);
@@ -424,7 +426,7 @@ export function AgentPage() {
   const [chatReloadProfileEveryMessage, setChatReloadProfileEveryMessage] = useState(false);
   const [chatCommandPrefixMode, setChatCommandPrefixMode] = useState(false);
   const [chatCommandPrefixMap, setChatCommandPrefixMap] = useState<ChatCommandPrefixMap>(DEFAULT_CHAT_COMMAND_PREFIX_MAP);
-  const [chatSettingsMessage, setChatSettingsMessage] = useState('');
+  const [chatSettingsFeedback, setChatSettingsFeedback] = useState<FeedbackState | null>(null);
   const [chatSettingsValidationError, setChatSettingsValidationError] = useState('');
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
@@ -741,7 +743,7 @@ export function AgentPage() {
                   value={chatActionMode}
                   onChange={(event) => {
                     setChatActionMode(event.target.value as ChatActionMode);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                     setChatSettingsValidationError('');
                   }}
                 >
@@ -756,7 +758,7 @@ export function AgentPage() {
                   value={chatProfileSource}
                   onChange={(event) => {
                     setChatProfileSource(event.target.value as ChatProfileSource);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                     setChatSettingsValidationError('');
                   }}
                 >
@@ -772,7 +774,7 @@ export function AgentPage() {
                   placeholder="/absolute/or/workspace/path/to/profile.md"
                   onChange={(event) => {
                     setChatProfileFilePath(event.target.value);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                     setChatSettingsValidationError('');
                   }}
                 />
@@ -789,7 +791,7 @@ export function AgentPage() {
                   checked={chatAskWhenMissing}
                   onChange={(event) => {
                     setChatAskWhenMissing(event.target.checked);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                   }}
                 />
                 <span>Ask when required info missing</span>
@@ -801,7 +803,7 @@ export function AgentPage() {
                   checked={chatAnnounceActions}
                   onChange={(event) => {
                     setChatAnnounceActions(event.target.checked);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                   }}
                 />
                 <span>Announce actions in chat</span>
@@ -813,7 +815,7 @@ export function AgentPage() {
                   checked={chatShowDetailedToolSteps}
                   onChange={(event) => {
                     setChatShowDetailedToolSteps(event.target.checked);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                   }}
                 />
                 <span>Show detailed tool steps</span>
@@ -825,7 +827,7 @@ export function AgentPage() {
                   checked={chatReloadProfileEveryMessage}
                   onChange={(event) => {
                     setChatReloadProfileEveryMessage(event.target.checked);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                   }}
                 />
                 <span>Reload profile every message (immediate per-turn)</span>
@@ -837,7 +839,7 @@ export function AgentPage() {
                   checked={chatCommandPrefixMode}
                   onChange={(event) => {
                     setChatCommandPrefixMode(event.target.checked);
-                    setChatSettingsMessage('');
+                    setChatSettingsFeedback(null);
                   }}
                 />
                 <span>Enable command prefix mode for tool execution</span>
@@ -856,7 +858,7 @@ export function AgentPage() {
                       onChange={(event) => {
                         const nextPrefix = event.target.value;
                         setChatCommandPrefixMap((current) => ({ ...current, [commandName]: nextPrefix }));
-                        setChatSettingsMessage('');
+                        setChatSettingsFeedback(null);
                       }}
                     />
                   </label>
@@ -887,7 +889,7 @@ export function AgentPage() {
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white"
                 onClick={async () => {
-                  setChatSettingsMessage('');
+                  setChatSettingsFeedback(null);
                   setChatSettingsValidationError('');
                   const normalizedPath = chatProfileFilePath.trim();
                   if (chatProfilePathRequired && !normalizedPath) {
@@ -911,10 +913,10 @@ export function AgentPage() {
                     if (chatReloadProfileEveryMessage) {
                       await reloadChatProfile();
                     }
-                    setChatSettingsMessage('Chat settings saved. New turns will use this configuration.');
+                    setChatSettingsFeedback({ kind: 'success', text: 'Chat settings saved. New turns will use this configuration.' });
                   } catch (error) {
                     const message = error instanceof Error ? error.message : 'Failed saving chat settings.';
-                    setChatSettingsMessage(message);
+                    setChatSettingsFeedback({ kind: 'error', text: message });
                   }
                 }}
               >
@@ -927,38 +929,165 @@ export function AgentPage() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Web Search</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <WebSearchControls
-              webSearchEnabled={webSearchEnabled}
-              setWebSearchEnabled={setWebSearchEnabled}
-              webSearchProvider={webSearchProvider}
-              setWebSearchProvider={setWebSearchProvider}
-              webSearchMode={webSearchMode}
-              setWebSearchMode={setWebSearchMode}
-              webSearchModeHelperText={webSearchModeHelperText}
-              applyModeRecommendedPreset={applyModeRecommendedPreset}
-              webSearchMaxResults={webSearchMaxResults}
-              setWebSearchMaxResults={setWebSearchMaxResults}
-              setWebSearchMaxResultsOverridden={setWebSearchMaxResultsOverridden}
-              webSearchTimeoutSeconds={webSearchTimeoutSeconds}
-              setWebSearchTimeoutSeconds={setWebSearchTimeoutSeconds}
-              setWebSearchTimeoutOverridden={setWebSearchTimeoutOverridden}
-              webSearchRecency={webSearchRecency}
-              setWebSearchRecency={setWebSearchRecency}
-              webSearchDomainPolicy={webSearchDomainPolicy}
-              setWebSearchDomainPolicy={setWebSearchDomainPolicy}
-              domainPolicyHelperText={domainPolicyHelperText}
-              webSearchSafeSearch={webSearchSafeSearch}
-              setWebSearchSafeSearch={setWebSearchSafeSearch}
-              webSearchSourceCitation={webSearchSourceCitation}
-              setWebSearchSourceCitation={setWebSearchSourceCitation}
-              webSearchProviderCapabilities={webSearchProviderCapabilities}
-              webSearchSearxngBaseUrl={webSearchSearxngBaseUrl}
-              setWebSearchSearxngBaseUrl={setWebSearchSearxngBaseUrl}
-              searxngBaseUrlValidationError={searxngBaseUrlValidationError}
-              webSearchSearxngUseHtmlMode={webSearchSearxngUseHtmlMode}
-              setWebSearchSearxngUseHtmlMode={setWebSearchSearxngUseHtmlMode}
-              setWebSearchStatusMessage={setWebSearchStatusMessage}
-            />
+            <div className="space-y-4">
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={webSearchEnabled}
+                  onChange={(event) => {
+                    setWebSearchEnabled(event.target.checked);
+                    setWebSearchStatusFeedback(null);
+                  }}
+                />
+                <span>Enable web search</span>
+              </label>
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Provider</span>
+                  <select
+                    className="input"
+                    value={webSearchProvider}
+                    onChange={(event) => {
+                      const nextProvider = event.target.value as WebSearchProvider;
+                      const capabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[nextProvider];
+                      setWebSearchProvider(nextProvider);
+                      if (!capabilities.safeSearch) setWebSearchSafeSearch(false);
+                      if (!capabilities.recency) setWebSearchRecency('any');
+                      setWebSearchStatusFeedback(null);
+                    }}
+                  >
+                    {WEB_SEARCH_PROVIDER_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                </label>
+                {shouldShowSearxngConfigFields(webSearchProvider) ? (
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">SearXNG base URL</span>
+                    <input
+                      className="input"
+                      type="text"
+                      value={webSearchSearxngBaseUrl}
+                      placeholder={WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT}
+                      onChange={(event) => {
+                        setWebSearchSearxngBaseUrl(event.target.value);
+                        setWebSearchStatusFeedback(null);
+                      }}
+                      onBlur={(event) => {
+                        const normalized = normalizeSearxngBaseUrlInput(event.target.value);
+                        setWebSearchSearxngBaseUrl(normalized);
+                      }}
+                    />
+                    {searxngBaseUrlValidationError ? <p className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p> : null}
+                  </label>
+                ) : null}
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Mode</span>
+                  <select
+                    className="input"
+                    value={webSearchMode}
+                    onChange={(event) => {
+                      const nextMode = event.target.value as WebSearchMode;
+                      setWebSearchMode(nextMode);
+                      applyModeRecommendedPreset(nextMode);
+                    }}
+                  >
+                    {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                  <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
+                  <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-slate-700 underline underline-offset-2"
+                    onClick={() => applyModeRecommendedPreset(webSearchMode, true)}
+                  >
+                    Use recommended
+                  </button>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Max results</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={webSearchMaxResults}
+                    onChange={(event) => {
+                      setWebSearchMaxResults(event.target.value);
+                      setWebSearchMaxResultsOverridden(true);
+                    }}
+                  />
+                  <p className="text-xs text-slate-500">Maximum results requested per search pass before deduplication.</p>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Timeout (seconds)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    value={webSearchTimeoutSeconds}
+                    onChange={(event) => {
+                      setWebSearchTimeoutSeconds(event.target.value);
+                      setWebSearchTimeoutOverridden(true);
+                    }}
+                  />
+                  <p className="text-xs text-slate-500">Maximum wait time per provider request; timed-out passes may return no web evidence.</p>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Recency</span>
+                  <select
+                    className="input"
+                    value={webSearchRecency}
+                    disabled={!webSearchProviderCapabilities.recency}
+                    onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}
+                  >
+                    {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                  {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Not supported by DuckDuckGo adapter.</p> : null}
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">Domain policy</span>
+                  <select className="input" value={webSearchDomainPolicy} onChange={(event) => setWebSearchDomainPolicy(event.target.value as WebSearchDomainPolicy)}>
+                    {WEB_SEARCH_DOMAIN_POLICIES.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
+                  </select>
+                  <p className="text-xs text-slate-500">{domainPolicyHelperText}</p>
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                {shouldShowSearxngConfigFields(webSearchProvider) ? (
+                  <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                    <input
+                      className={CHECKBOX_INPUT_CLASS}
+                      type="checkbox"
+                      checked={webSearchSearxngUseHtmlMode}
+                      onChange={(event) => {
+                        setWebSearchSearxngUseHtmlMode(event.target.checked);
+                        setWebSearchStatusFeedback(null);
+                      }}
+                    />
+                    <span>HTML instead of JSON API</span>
+                  </label>
+                ) : null}
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchSafeSearch}
+                    disabled={!webSearchProviderCapabilities.safeSearch}
+                    onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
+                  />
+                  <span>Safe search</span>
+                </label>
+                {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not supported by DuckDuckGo adapter.</p> : null}
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchSourceCitation}
+                    onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
+                  />
+                  <span>Source citation</span>
+                </label>
+              </div>
+            </div>
             <div className="mt-2 min-h-[1.25rem]">
               {webSearchStatusMessage
                 ? (
@@ -978,9 +1107,9 @@ export function AgentPage() {
                 disabled={!canSaveWebSearch}
                 onClick={async () => {
                   try {
-                    setWebSearchStatusMessage('');
+                    setWebSearchStatusFeedback(null);
                     if (searxngBaseUrlValidationError) {
-                      setWebSearchStatusMessage(searxngBaseUrlValidationError);
+                      setWebSearchStatusFeedback({ kind: 'error', text: searxngBaseUrlValidationError });
                       return;
                     }
                     const settings = await getAgentSettings();
@@ -988,9 +1117,10 @@ export function AgentPage() {
                     const defaultModelMatchesDraft = settings.default_model.trim() === draftModelForProvider;
                     const defaultProviderMatchesDraft = settings.default_provider === provider;
                     if (!defaultProviderMatchesDraft || !defaultModelMatchesDraft) {
-                      setWebSearchStatusMessage(
-                        'Select an agent before saving web search settings.',
-                      );
+                      setWebSearchStatusFeedback({
+                        kind: 'error',
+                        text: 'Select an agent before saving web search settings.',
+                      });
                       return;
                     }
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
@@ -1006,10 +1136,10 @@ export function AgentPage() {
                       searxngBaseUrl: webSearchSearxngBaseUrl,
                       searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
                     }));
-                    setWebSearchStatusMessage('Web search settings saved.');
+                    setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });
                   } catch (error) {
                     const message = error instanceof Error ? error.message : 'Failed saving web search settings.';
-                    setWebSearchStatusMessage(message);
+                    setWebSearchStatusFeedback({ kind: 'error', text: message });
                   }
                 }}
               >
@@ -1042,12 +1172,12 @@ export function AgentPage() {
                     enabled: newEnabled,
                   });
                   setPreferredSources((current) => [...current, created]);
-                  setPreferredSourcesMessage(`Added ${created.domain}.`);
+                  setPreferredSourcesFeedback({ kind: 'success', text: `Added ${created.domain}.` });
                   setNewDomain('');
                   setNewWeight('1');
                   setNewEnabled(true);
                 } catch (error) {
-                  setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed creating preferred source.');
+                  setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed creating preferred source.' });
                 }
               }}
             >
@@ -1153,7 +1283,7 @@ export function AgentPage() {
                                   onClick={async () => {
                                     const canonicalDomain = editingDomain.trim().toLowerCase();
                                     if (!isValidDomain(canonicalDomain)) {
-                                      setPreferredSourcesMessage('Domain must be valid, such as google.com.');
+                                      setPreferredSourcesFeedback({ kind: 'error', text: 'Domain must be valid, such as google.com.' });
                                       return;
                                     }
                                     try {
@@ -1165,9 +1295,9 @@ export function AgentPage() {
                                       });
                                       setPreferredSources((current) => current.map((entry) => (entry.id === source.id ? updated : entry)));
                                       setEditingSourceId(null);
-                                      setPreferredSourcesMessage(`Updated ${updated.domain}.`);
+                                      setPreferredSourcesFeedback({ kind: 'success', text: `Updated ${updated.domain}.` });
                                     } catch (error) {
-                                      setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed updating preferred source.');
+                                      setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed updating preferred source.' });
                                     }
                                   }}
                                 >
@@ -1194,9 +1324,9 @@ export function AgentPage() {
                                     try {
                                       await deletePreferredSource(source.id);
                                       setPreferredSources((current) => current.filter((entry) => entry.id !== source.id));
-                                      setPreferredSourcesMessage(`Deleted ${source.domain}.`);
+                                      setPreferredSourcesFeedback({ kind: 'success', text: `Deleted ${source.domain}.` });
                                     } catch (error) {
-                                      setPreferredSourcesMessage(error instanceof Error ? error.message : 'Failed deleting preferred source.');
+                                      setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed deleting preferred source.' });
                                     }
                                   }}
                                 >

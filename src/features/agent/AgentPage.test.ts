@@ -397,6 +397,34 @@ test('AgentPage save chat settings payload includes command prefix mode and comm
   assert.equal(source.includes('command_prefix_map: chatCommandPrefixMap,'), true);
 });
 
+test('chat settings feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [chatSettingsFeedback, setChatSettingsFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setChatSettingsFeedback({ kind: 'success', text: 'Chat settings saved. New turns will use this configuration.' });"), true);
+  assert.equal(source.includes("setChatSettingsFeedback({ kind: 'error', text: message });"), true);
+  assert.equal(source.includes("chatSettingsFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
+test('web search feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [webSearchStatusFeedback, setWebSearchStatusFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: message });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: searxngBaseUrlValidationError });"), true);
+  assert.equal(source.includes("webSearchStatusFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
+test('preferred source feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [preferredSourcesFeedback, setPreferredSourcesFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Added ${created.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Updated ${updated.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Deleted ${source.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed creating preferred source.' });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'error', text: 'Domain must be valid, such as google.com.' });"), true);
+  assert.equal(source.includes("preferredSourcesFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
 test('preferred source domain placeholder and validation copy use google.com examples', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('placeholder="google.com"'), true);
