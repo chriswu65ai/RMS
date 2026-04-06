@@ -2116,10 +2116,11 @@ const buildChatToolAdapter = (sessionId: string) => ({
     if (!existing) throw new Error('Task not found.');
     const now = new Date().toISOString();
     const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+    const sanitizedPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
     const validation = validateAndNormalizeTaskContractPayload({
       ...existing,
-      ...patch,
-      archived: patch.archived === undefined ? Boolean(existing.archived) : patch.archived,
+      ...sanitizedPatch,
+      archived: sanitizedPatch.archived === undefined ? Boolean(existing.archived) : sanitizedPatch.archived,
     }, allowedNoteTypes);
     if (validation.missingRequiredFields.length > 0) throw new Error(formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields));
     if (validation.invalidFields.includes('note_type')) throw new Error(formatInvalidTaskNoteTypeMessage(allowedNoteTypes));
