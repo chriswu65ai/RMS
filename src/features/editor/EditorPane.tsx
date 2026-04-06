@@ -1355,9 +1355,18 @@ export function EditorPane() {
               </div>
               <ul className="mt-1 space-y-1">
                 {generatedSources.map((source, index) => (
-                  <li key={`${source.url}-${index}`}>
-                    <span className="mr-1 font-mono text-[10px] text-slate-500">[{index + 1}]</span>
-                    <a className="text-blue-700 hover:underline" href={source.url} target="_blank" rel="noreferrer">{source.title || source.url}</a>
+                  <li key={source.kind === 'web' ? `${source.url}-${index}` : `${source.attachment_id}-${index}`}>
+                    {source.kind === 'web' ? (
+                      <>
+                        <span className="mr-1 font-mono text-[10px] text-slate-500">[{index + 1}]</span>
+                        <a className="text-blue-700 hover:underline" href={source.url} target="_blank" rel="noreferrer">{source.title || source.url}</a>
+                      </>
+                    ) : (
+                      <>
+                        <span className="mr-1 inline-flex rounded bg-violet-100 px-1.5 py-0.5 font-mono text-[10px] text-violet-700">[{source.label}]</span>
+                        <span className="font-medium text-violet-800">{source.label}</span>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

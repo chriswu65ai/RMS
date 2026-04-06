@@ -17,6 +17,11 @@ import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { processResponseCitations } from './response/citation_pipeline';
+import {
+  toAttachmentGenerationSource,
+  toWebGenerationSource,
+  type GenerationSource,
+} from './response/generation_sources';
 import { decideWebSearchRouting } from './chatRoutingHeuristics';
 import {
   normalizeChatSettingsPolicy,
@@ -1293,13 +1298,7 @@ const normalizePreferredSourceRow = (row: PreferredSourceRow) => ({
   enabled: Boolean(row.enabled),
 });
 
-const normalizeStreamingSources = (sources: SearchResult[]) => sources.map((source) => ({
-  title: source.title,
-  url: source.url,
-  snippet: source.snippet,
-  provider: source.provider,
-  ...(source.published_at ? { published_at: source.published_at } : {}),
-}));
+const normalizeStreamingSources = (sources: SearchResult[]): GenerationSource[] => sources.map((source) => toWebGenerationSource(source));
 
 const buildProviderGenerationParams = (
   provider: AgentProvider,
@@ -3372,7 +3371,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           queryCount,
           sourceCount,
         };
-        let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
+        let normalizedSources: GenerationSource[] = [];
         const userInputBlock = inputText;
         let attachmentContextBlock = '';
         let toolOutputsBlock = '';
@@ -3405,6 +3404,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             const nextChunk = attachment.parsed_text.slice(0, chunkBudgetChars);
             const nextTokens = estimateTokens(nextChunk);
             consumed += nextTokens;
+            normalizedSources.push(toAttachmentGenerationSource(attachment));
             contextLines.push(`### Source ${index + 1}: ${attachment.original_name} [attachment:${attachment.id}]`);
             contextLines.push(nextChunk);
           });
@@ -3441,7 +3441,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 writeNdjson(res, { type: event.type, ...event });
               },
             });
-            normalizedSources = normalizeStreamingSources(orchestration.allSources);
+            normalizedSources = [...normalizeStreamingSources(orchestration.allSources), ...normalizedSources.filter((source) => source.kind === 'attachment')];
             toolCallsAttempted = orchestration.toolCallsAttempted;
             toolCallsSucceeded = orchestration.toolCallsSucceeded;
             queryCount = orchestration.queryCount;
