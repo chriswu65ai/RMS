@@ -7,6 +7,7 @@ import { toLocalDateInputValue, useResearchStore } from '../../hooks/useResearch
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
 import { resolveEffectiveNoteState } from './effectiveNoteState';
+import { runUiAsync } from '../../lib/uiAsync';
 
 const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
@@ -137,6 +138,15 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     return normalizeFileNameInput(fileNameInput);
   };
 
+  const runFileMutation = async (action: () => Promise<void>, fallbackMessage: string, title = 'Action failed') => {
+    await runUiAsync(action, {
+      fallbackMessage,
+      onError: async (message) => {
+        await dialog.alert(title, message);
+      },
+    });
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="space-y-2 border-b border-slate-200 p-3">
@@ -163,9 +173,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                 ...(identity?.type ? { type: identity.type } : {}),
               };
               const content = composeMarkdown(frontmatter, '');
-              const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
-              if (error) return dialog.alert('Create failed', error.message);
-              await refresh();
+              await runFileMutation(async () => {
+                const { error } = await createFile({ workspaceId: workspace.id, folderId: folder?.id ?? null, folderPath: folder?.path ?? null, name: fileName, content, frontmatter });
+                if (error) throw error;
+                await refresh();
+              }, 'Failed to create note.', 'Create failed');
             }}
           >
             <FilePlus2 className="mr-1 inline" size={14} />New note
@@ -211,8 +223,10 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                     const nextStarred = !frontmatter.starred;
                     if (nextStarred) nextFrontmatter.starred = true;
                     else delete nextFrontmatter.starred;
-                    await updateFile(file.id, { content: composeMarkdown(nextFrontmatter, parsed.body), frontmatter_json: nextFrontmatter, is_template: !!nextFrontmatter.template });
-                    await refresh();
+                    await runFileMutation(async () => {
+                      await updateFile(file.id, { content: composeMarkdown(nextFrontmatter, parsed.body), frontmatter_json: nextFrontmatter, is_template: !!nextFrontmatter.template });
+                      await refresh();
+                    }, 'Failed to update note star state.');
                   }}
                   title={frontmatter.starred === true ? 'Unstar note' : 'Star note'}
                 >
@@ -227,8 +241,10 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   const folder = folders.find((f) => f.id === file.folder_id) ?? null;
                   const path = `${folder?.path ? `${folder.path}/` : ''}${name}`;
                   if (hasDuplicateInFolder(folder?.id ?? null, name, file.id)) return dialog.alert('Duplicate path', 'Another file already uses this path.');
-                  await updateFile(file.id, { name, path });
-                  await refresh();
+                  await runFileMutation(async () => {
+                    await updateFile(file.id, { name, path });
+                    await refresh();
+                  }, 'Failed to rename note.');
                 }}><Pencil size={14} /></button>
                 <button className="rounded p-1 text-slate-500 hover:bg-slate-100" onClick={() => {
                   setMoveFileId(file.id);
@@ -238,8 +254,10 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   className="rounded p-1 text-slate-500 hover:bg-slate-100"
                   onClick={async () => {
                     if (!(await dialog.confirm('Delete file', `Delete ${file.name}?`))) return;
-                    await deleteFile(file.id);
-                    await refresh();
+                    await runFileMutation(async () => {
+                      await deleteFile(file.id);
+                      await refresh();
+                    }, 'Failed to delete note.');
                   }}
                 >
                   <Trash2 size={14} />
@@ -272,9 +290,11 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                     await dialog.alert('Duplicate path', 'Another file already uses this path.');
                     return;
                   }
-                  await updateFile(moveFile.id, { folder_id: dest?.id ?? null, path });
-                  await refresh();
-                  setMoveFileId(null);
+                  await runFileMutation(async () => {
+                    await updateFile(moveFile.id, { folder_id: dest?.id ?? null, path });
+                    await refresh();
+                    setMoveFileId(null);
+                  }, 'Failed to move note.');
                 }}
               >
                 Move
