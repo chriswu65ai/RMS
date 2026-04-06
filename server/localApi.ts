@@ -2459,6 +2459,10 @@ const appendAgentActivityLogAsync = async (entry: Omit<AgentActivityLogRow, 'id'
   `);
 };
 
+const clearAgentActivityLog = () => {
+  execSql('delete from agent_activity_log');
+};
+
 const getAttachmentSettings = () => {
   const row = queryJson<AttachmentSettingsRow>('select id, quota_mb, retention_days from attachment_settings where id = 1 limit 1')[0];
   return {
@@ -4148,7 +4152,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     }
 
     if (req.method === 'DELETE' && url === '/api/agent/activity-log') {
-      execSql('delete from agent_activity_log');
+      clearAgentActivityLog();
       writeJson(res, 200, { error: null });
       return true;
     }
