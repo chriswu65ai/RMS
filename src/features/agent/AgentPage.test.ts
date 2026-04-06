@@ -481,16 +481,25 @@ test('preferred source payload clamps numeric input to canonical 1-100 before su
   assert.equal(source.includes('weight: normalizedWeight,'), true);
 });
 
-test('web search controls render in expected order with checkbox row grouped at the bottom', () => {
+test('configure agent section is renamed and groups web search toggles before save action', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  const enableIndex = source.indexOf('<span>Enable web search</span>');
-  const settingsGridIndex = source.indexOf('grid-cols-1 md:grid-cols-2 xl:grid-cols-3');
-  const checkboxRowIndex = source.indexOf('flex flex-wrap items-center gap-x-6 gap-y-3');
-  const safeSearchIndex = source.indexOf('<span>Safe search</span>');
-  assert.ok(enableIndex >= 0);
-  assert.ok(settingsGridIndex > enableIndex);
-  assert.ok(checkboxRowIndex > settingsGridIndex);
-  assert.ok(safeSearchIndex > checkboxRowIndex);
+  const configureHeadingIndex = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
+  const chooseHeadingIndex = source.indexOf('<h2 className="text-lg font-semibold">Choose agent</h2>');
+  const configureSectionStart = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
+  const enableIndex = source.indexOf('<span>Enable web search</span>', configureSectionStart);
+  const citationIndex = source.indexOf('<span>Source citation</span>', configureSectionStart);
+  const saveDefaultAgentIndex = source.indexOf('Save default agent', configureSectionStart);
+  const webSearchSectionStart = source.indexOf('<h2 className="text-lg font-semibold">Web Search</h2>');
+  const enableInWebSearchIndex = source.indexOf('<span>Enable web search</span>', webSearchSectionStart);
+  const citationInWebSearchIndex = source.indexOf('<span>Source citation</span>', webSearchSectionStart);
+
+  assert.ok(configureHeadingIndex >= 0);
+  assert.equal(chooseHeadingIndex, -1);
+  assert.ok(enableIndex > configureSectionStart);
+  assert.ok(citationIndex > enableIndex);
+  assert.ok(saveDefaultAgentIndex > citationIndex);
+  assert.equal(enableInWebSearchIndex, -1);
+  assert.equal(citationInWebSearchIndex, -1);
 });
 
 test('web search component keeps common control DOM order stable when provider changes', () => {

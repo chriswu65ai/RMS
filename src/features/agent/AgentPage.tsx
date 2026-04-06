@@ -640,7 +640,7 @@ export function AgentPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mx-auto max-w-6xl space-y-6">
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Choose agent</h2>
+          <h2 className="text-lg font-semibold">Configure Agent</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-sm">
@@ -694,6 +694,29 @@ export function AgentPage() {
               {!modelState.loading && !modelState.catalogStatus
                 ? <span>Models shown from saved settings. Press Refresh models to fetch latest options.</span>
                 : null}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={webSearchEnabled}
+                  onChange={(event) => {
+                    setWebSearchEnabled(event.target.checked);
+                    setWebSearchStatusFeedback(null);
+                  }}
+                />
+                <span>Enable web search</span>
+              </label>
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={webSearchSourceCitation}
+                  onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
+                />
+                <span>Source citation</span>
+              </label>
             </div>
             <div className="mt-3">
               <button
@@ -932,18 +955,6 @@ export function AgentPage() {
           <h2 className="text-lg font-semibold">Web Search</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="space-y-4">
-              <label className={CHECKBOX_WITH_LABEL_CLASS}>
-                <input
-                  className={CHECKBOX_INPUT_CLASS}
-                  type="checkbox"
-                  checked={webSearchEnabled}
-                  onChange={(event) => {
-                    setWebSearchEnabled(event.target.checked);
-                    setWebSearchStatusFeedback(null);
-                  }}
-                />
-                <span>Enable web search</span>
-              </label>
               <div className="grid gap-4 md:grid-cols-3">
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Provider</span>
@@ -1080,15 +1091,6 @@ export function AgentPage() {
                   <span>Safe search</span>
                 </label>
                 {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
-                <label className={CHECKBOX_WITH_LABEL_CLASS}>
-                  <input
-                    className={CHECKBOX_INPUT_CLASS}
-                    type="checkbox"
-                    checked={webSearchSourceCitation}
-                    onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
-                  />
-                  <span>Source citation</span>
-                </label>
               </div>
             </div>
             <div className="mt-2 min-h-[1.25rem]">
