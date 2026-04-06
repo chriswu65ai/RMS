@@ -1,5 +1,5 @@
-import { AgentSettingsSurface } from '../agent/components/AgentSettingsSurface';
+import { AgentPage } from '../agent/AgentPage';
 
 export function SettingsAIPage() {
-  return <AgentSettingsSurface />;
+  return <AgentPage />;
 }
