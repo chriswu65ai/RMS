@@ -13,6 +13,7 @@ import {
   getTableSizeError,
   getThinkingStatusUi,
   isUrlLikeSelection,
+  mergeSourcesForBubble,
   shouldShowThinkingBubble,
 } from './EditorPane.js';
 
@@ -259,6 +260,33 @@ test('stream preview complete applies full output exactly once, even when done f
   controller.complete('final output');
 
   assert.deepEqual(applied, ['draft', 'final output']);
+});
+
+test('sources bubble merge keeps injected attachments visible even if later updates omit them', () => {
+  const injectedAttachment = { kind: 'attachment', attachment_id: 'doc-7', label: 'appendix.pdf' } as const;
+  const first = mergeSourcesForBubble([], [injectedAttachment]);
+  const second = mergeSourcesForBubble(first, [{ kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }]);
+
+  assert.equal(second.some((source) => source.kind === 'attachment' && source.attachment_id === 'doc-7'), true);
+  assert.equal(second.some((source) => source.kind === 'web' && source.url === 'https://example.com/a'), true);
+});
+
+test('sources bubble merge deduplicates repeated attachment and web entries', () => {
+  const merged = mergeSourcesForBubble(
+    [
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'attachment', attachment_id: 'doc-1', label: 'one.pdf' },
+    ],
+    [
+      { kind: 'web', title: 'Alpha duplicate title', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'attachment', attachment_id: 'doc-1', label: 'one-renamed.pdf' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
+    ],
+  );
+
+  assert.equal(merged.filter((source) => source.kind === 'web' && source.url === 'https://example.com/a').length, 1);
+  assert.equal(merged.filter((source) => source.kind === 'attachment' && source.attachment_id === 'doc-1').length, 1);
+  assert.equal(merged.some((source) => source.kind === 'web' && source.url === 'https://example.com/b'), true);
 });
 
 test('malformed or interrupted chunk sequence errors are tolerated and future updates still apply', () => {
