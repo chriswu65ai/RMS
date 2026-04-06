@@ -18,6 +18,7 @@ import { useDialog } from '../../components/ui/DialogProvider';
 import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
 import type { StreamSource, ThinkingEvent } from '../../lib/agentApi';
+import { reconcileDraftFrontmatterWithSaved } from '../files/effectiveNoteState';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
@@ -334,8 +335,16 @@ export function EditorPane() {
     }
     const cachedDraft = getDraft(file.id);
     if (cachedDraft) {
+      const reconciledFrontmatter = reconcileDraftFrontmatterWithSaved(cachedDraft.frontmatter, parsed.frontmatter);
+      if (reconciledFrontmatter !== cachedDraft.frontmatter) {
+        setDraft(file.id, {
+          ...cachedDraft,
+          frontmatter: reconciledFrontmatter,
+          updatedAt: Date.now(),
+        });
+      }
       setBody(cachedDraft.body);
-      setFrontmatter(cachedDraft.frontmatter);
+      setFrontmatter(reconciledFrontmatter);
       const generateJob = getGenerateJob(file.id);
       setShowGeneratedDraftNotice(generateJob.status === 'completed' && cachedDraft.source === 'generate');
       return;

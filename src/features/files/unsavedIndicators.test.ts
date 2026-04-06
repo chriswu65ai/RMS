@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type { DraftEntry } from '../../hooks/useResearchStore.js';
 import type { Folder, ResearchNote } from '../../types/models.js';
 import { deriveFoldersWithUnsavedFiles } from '../folders/unsavedFolders.js';
+import { reconcileDraftFrontmatterWithSaved, resolveEffectiveNoteState } from './effectiveNoteState.js';
 import { deriveUnsavedFileIds, getFileTitleIndicators } from './unsavedIndicators.js';
 
 const makeFile = (overrides: Partial<ResearchNote> = {}): ResearchNote => ({
@@ -84,4 +85,46 @@ test('unsaved indicator is removed after successful save', () => {
   const unsavedFileIds = deriveUnsavedFileIds(files, { 'file-1': draft });
 
   assert.deepEqual(unsavedFileIds, []);
+});
+
+test('star in metadata draft is used as effective frontmatter for file list state', () => {
+  const files = [
+    makeFile({
+      id: 'file-starred',
+      content: '---\ntitle: Saved title\nstarred: false\n---\nsaved body',
+    }),
+  ];
+  const draftByFileId = {
+    'file-starred': makeDraft({
+      frontmatter: { title: 'Draft title', starred: true },
+      body: 'draft body',
+    }),
+  };
+
+  const effective = resolveEffectiveNoteState(files[0], draftByFileId);
+
+  assert.equal(effective.frontmatter.starred, true);
+  assert.equal(effective.frontmatter.title, 'Draft title');
+});
+
+test('star toggle from file list reconciles into metadata draft frontmatter when draft exists', () => {
+  const existingDraft = makeDraft({
+    frontmatter: {
+      title: 'Unsaved draft title',
+      template: true,
+      starred: false,
+    },
+    body: 'unsaved body',
+  });
+  const savedFrontmatter = {
+    title: 'Saved title',
+    template: false,
+    starred: true,
+  };
+
+  const reconciled = reconcileDraftFrontmatterWithSaved(existingDraft.frontmatter, savedFrontmatter);
+
+  assert.equal(reconciled.starred, true);
+  assert.equal(reconciled.template, false);
+  assert.equal(reconciled.title, 'Unsaved draft title');
 });
