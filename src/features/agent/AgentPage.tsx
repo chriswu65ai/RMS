@@ -1113,16 +1113,6 @@ export function AgentPage() {
                       return;
                     }
                     const settings = await getAgentSettings();
-                    const draftModelForProvider = selectedModelByProvider[provider]?.trim() ?? '';
-                    const defaultModelMatchesDraft = settings.default_model.trim() === draftModelForProvider;
-                    const defaultProviderMatchesDraft = settings.default_provider === provider;
-                    if (!defaultProviderMatchesDraft || !defaultModelMatchesDraft) {
-                      setWebSearchStatusFeedback({
-                        kind: 'error',
-                        text: 'Select an agent before saving web search settings.',
-                      });
-                      return;
-                    }
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
                       enabled: webSearchEnabled,
                       provider: webSearchProvider,
@@ -1138,8 +1128,10 @@ export function AgentPage() {
                     }));
                     setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });
                   } catch (error) {
-                    const message = error instanceof Error ? error.message : 'Failed saving web search settings.';
-                    setWebSearchStatusFeedback({ kind: 'error', text: message });
+                    const message = error instanceof Error
+                      ? error.message
+                      : 'Unable to save web search settings. Review the form values and your saved default agent model, then try again.';
+                    setWebSearchStatusMessage(message);
                   }
                 }}
               >
