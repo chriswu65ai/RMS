@@ -53,6 +53,35 @@ type StreamSourceAttachment = {
 
 export type StreamSource = StreamSourceWeb | StreamSourceAttachment;
 
+export type IngestionDiagnosticReason =
+  | 'included_full'
+  | 'budget_exceeded'
+  | 'parse_pending'
+  | 'parse_failed'
+  | 'unsupported_type'
+  | 'deleted'
+  | 'missing';
+
+export type IngestionDiagnosticFile = {
+  attachment_id: string;
+  filename: string;
+  reason: IngestionDiagnosticReason;
+  included_tokens: number;
+  estimated_tokens: number;
+  fully_included: boolean;
+  partially_included: boolean;
+};
+
+export type IngestionDiagnostics = {
+  total_eligible_attachments: number;
+  fully_included_attachments: number;
+  partially_included_attachments: number;
+  excluded_attachments: number;
+  token_budget: number;
+  tokens_consumed: number;
+  files: IngestionDiagnosticFile[];
+};
+
 export type ThinkingEvent =
   | {
     type: 'tool_call_started';
@@ -99,6 +128,7 @@ type StreamPayload = {
   stage?: string;
   detail?: string;
   provider?: string;
+  diagnostics?: IngestionDiagnostics;
 } & Record<string, unknown>;
 
 const pickToolName = (payload: StreamPayload): string | undefined => (
@@ -325,6 +355,7 @@ export async function generateText(params: {
   onSources?: (sources: StreamSource[]) => void;
   onSearchWarning?: (message: string) => void;
   onThinkingEvent?: (event: ThinkingEvent) => void;
+  onIngestionDiagnostics?: (diagnostics: IngestionDiagnostics) => void;
 }): Promise<{ outputText: string }> {
   const response = await fetch('/api/agent/generate', {
     method: 'POST',
@@ -377,6 +408,9 @@ export async function generateText(params: {
       if (payload.type === 'search_warning') {
         params.onSearchWarning?.(payload.message ?? 'Web search failed.');
       }
+      if (payload.type === 'ingestion_diagnostics' && payload.diagnostics) {
+        params.onIngestionDiagnostics?.(payload.diagnostics);
+      }
       const thinkingEvent = buildThinkingEvent(payload);
       if (thinkingEvent) {
         params.onThinkingEvent?.(thinkingEvent);
@@ -392,4 +426,34 @@ export async function generateText(params: {
     }
   }
   return { outputText };
+}
+
+export async function preflightGenerateIngestion(params: {
+  provider: AgentProvider;
+  model: string;
+  noteId: string;
+  taskId?: string;
+  attachmentIds?: string[];
+  inputText: string;
+  triggerSource: TriggerSource;
+  saveMode: SaveMode;
+}): Promise<{ diagnostics: IngestionDiagnostics; predicted_truncation: boolean }> {
+  const response = await fetch('/api/agent/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      note_id: params.noteId,
+      task_id: params.taskId ?? '',
+      attachment_ids: params.attachmentIds ?? [],
+      input_text: params.inputText,
+      trigger_source: params.triggerSource,
+      save_mode: params.saveMode,
+      initiated_by: 'user',
+      preflight_only: true,
+    }),
+  });
+  if (!response.ok) throw new Error(await asErrorMessage(response));
+  return response.json() as Promise<{ diagnostics: IngestionDiagnostics; predicted_truncation: boolean }>;
 }
