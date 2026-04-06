@@ -189,6 +189,8 @@ export function EditorPane() {
   const lastAppliedAtRef = useRef(0);
   const lastAppliedStreamTextRef = useRef('');
   const streamFlushTimerRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
+  const streamFailureAlertShownByFileIdRef = useRef<Record<string, boolean>>({});
   const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
   const editorStateByFileIdRef = useRef<Record<string, EditorState | null>>({});
   const parsed = useMemo(
@@ -366,6 +368,7 @@ export function EditorPane() {
   }, []);
 
   useEffect(() => () => {
+    isMountedRef.current = false;
     if (streamFlushTimerRef.current !== null) {
       window.clearTimeout(streamFlushTimerRef.current);
       streamFlushTimerRef.current = null;
@@ -912,31 +915,134 @@ export function EditorPane() {
     streamBufferRef.current = '';
     lastAppliedAtRef.current = 0;
     lastAppliedStreamTextRef.current = '';
+    streamFailureAlertShownByFileIdRef.current[targetFileId] = false;
     if (streamFlushTimerRef.current !== null) {
       window.clearTimeout(streamFlushTimerRef.current);
       streamFlushTimerRef.current = null;
     }
 
-    const flushStreamBuffer = (force: boolean) => {
-      const bufferedText = streamBufferRef.current;
-      if (!bufferedText || (!force && bufferedText === lastAppliedStreamTextRef.current)) return null;
-      const now = Date.now();
-      if (!force && now - lastAppliedAtRef.current < STREAM_UI_THROTTLE_MS) return null;
-      const nextParsed = splitFrontmatter(bufferedText, { knownSectors: sectors, knownNoteTypes: noteTypes });
-      if (selectedFileIdRef.current === targetFileId) {
-        dispatchEditorContent(targetFileId, toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
-        setFrontmatter(nextParsed.frontmatter);
-        setBody(nextParsed.body);
+    const clearStreamRuntime = () => {
+      if (streamFlushTimerRef.current !== null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
       }
-      setDraft(targetFileId, {
-        body: nextParsed.body,
-        frontmatter: nextParsed.frontmatter,
-        source: 'generate',
-        updatedAt: now,
+      streamBufferRef.current = '';
+      lastAppliedAtRef.current = 0;
+      lastAppliedStreamTextRef.current = '';
+    };
+
+    const reportGeneratePhaseError = async (phase: 'stream_update' | 'finalize', error: unknown) => {
+      console.error('Research generation phase failed', {
+        provider: defaultProvider,
+        model: defaultModel,
+        fileId: targetFileId,
+        phase,
+        error,
       });
+      if (streamFailureAlertShownByFileIdRef.current[targetFileId] || !isMountedRef.current) return;
+      streamFailureAlertShownByFileIdRef.current[targetFileId] = true;
+      await dialog.alert(
+        'Generate encountered an issue',
+        'We hit a temporary streaming issue. Your prior content has been preserved.',
+      );
+    };
+
+    const applyStreamingPreviewText = async (nextOutputText: string) => {
+      try {
+        if (!isMountedRef.current) return;
+        const view = viewRef.current;
+        if (view && viewFileIdRef.current === targetFileId && selectedFileIdRef.current === targetFileId) {
+          const nextState = applyTextToEditorState(view.state, nextOutputText, false);
+          if (nextState !== view.state) {
+            suppressOnChangeRef.current += 1;
+            view.setState(nextState);
+            editorStateByFileIdRef.current[targetFileId] = nextState;
+            updateHistoryAvailabilityForFile(targetFileId, nextState);
+          }
+          return;
+        }
+        const cachedState = editorStateByFileIdRef.current[targetFileId];
+        if (!cachedState) return;
+        const nextState = applyTextToEditorState(cachedState, nextOutputText, false);
+        editorStateByFileIdRef.current[targetFileId] = nextState;
+        updateHistoryAvailabilityForFile(targetFileId, nextState);
+      } catch (error) {
+        const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
+        if (baselineText && isMountedRef.current) {
+          dispatchEditorContent(targetFileId, baselineText, false);
+        }
+        await reportGeneratePhaseError('stream_update', error);
+      }
+    };
+
+    const finalizeGeneratedOutput = async (outputText: string) => {
+      try {
+        const finalParsed = splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+        const finalVisibleText = toVisibleEditorText(finalParsed.body, finalParsed.frontmatter);
+        const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
+        if (baselineText) {
+          const didApplyInEditor = dispatchEditorContent(targetFileId, baselineText, false);
+          if (didApplyInEditor) {
+            dispatchEditorContent(targetFileId, finalVisibleText, true, true);
+            const view = viewRef.current;
+            if (view && undo(view)) {
+              const undoneText = view.state.doc.toString();
+              if (undoneText !== baselineText) {
+                console.warn('Generate undo checkpoint mismatch.', {
+                  expected: baselineText,
+                  actual: undoneText,
+                });
+              }
+              redo(view);
+              editorStateByFileIdRef.current[targetFileId] = view.state;
+              updateHistoryAvailabilityForFile(targetFileId, view.state);
+            }
+          } else {
+            const cachedState = editorStateByFileIdRef.current[targetFileId];
+            if (cachedState) {
+              const stateWithBaseline = applyTextToEditorState(cachedState, baselineText, false);
+              const stateWithGeneratedOutput = applyTextToEditorState(stateWithBaseline, finalVisibleText, true, true);
+              editorStateByFileIdRef.current[targetFileId] = stateWithGeneratedOutput;
+              updateHistoryAvailabilityForFile(targetFileId, stateWithGeneratedOutput);
+            } else {
+              pendingHistoryBaselineByFileIdRef.current[targetFileId] = {
+                beforeVisible: baselineText,
+                afterVisible: finalVisibleText,
+              };
+            }
+          }
+        }
+        setDraft(targetFileId, {
+          body: finalParsed.body,
+          frontmatter: finalParsed.frontmatter,
+          source: 'generate',
+          updatedAt: Date.now(),
+        });
+        if (selectedFileIdRef.current === targetFileId && isMountedRef.current) {
+          setFrontmatter(finalParsed.frontmatter);
+          setBody(finalParsed.body);
+        }
+      } catch (error) {
+        const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
+        if (originalTextForFile && isMountedRef.current) {
+          const restored = splitFrontmatter(originalTextForFile, { knownSectors: sectors, knownNoteTypes: noteTypes });
+          dispatchEditorContent(targetFileId, toVisibleEditorText(restored.body, restored.frontmatter), false);
+          setFrontmatter(restored.frontmatter);
+          setBody(restored.body);
+        }
+        await reportGeneratePhaseError('finalize', error);
+        throw error;
+      }
+    };
+
+    const flushStreamBuffer = () => {
+      const bufferedText = streamBufferRef.current;
+      if (!bufferedText || bufferedText === lastAppliedStreamTextRef.current) return;
+      const now = Date.now();
+      if (now - lastAppliedAtRef.current < STREAM_UI_THROTTLE_MS) return;
       lastAppliedAtRef.current = now;
       lastAppliedStreamTextRef.current = bufferedText;
-      return nextParsed;
+      void applyStreamingPreviewText(bufferedText);
     };
 
     const scheduleStreamFlush = () => {
@@ -945,7 +1051,7 @@ export function EditorPane() {
       const delay = Math.max(0, STREAM_UI_THROTTLE_MS - elapsedSinceApply);
       streamFlushTimerRef.current = window.setTimeout(() => {
         streamFlushTimerRef.current = null;
-        flushStreamBuffer(false);
+        flushStreamBuffer();
       }, delay);
     };
 
@@ -956,6 +1062,7 @@ export function EditorPane() {
         model: defaultModel,
         onProgress: (nextOutputText) => {
           streamBufferRef.current = nextOutputText;
+          flushStreamBuffer();
           scheduleStreamFlush();
         },
         onSources: (sources) => {
@@ -988,47 +1095,8 @@ export function EditorPane() {
           });
         },
       });
-      if (streamFlushTimerRef.current !== null) {
-        window.clearTimeout(streamFlushTimerRef.current);
-        streamFlushTimerRef.current = null;
-      }
-      streamBufferRef.current = outputText;
-      const finalParsed = flushStreamBuffer(true)
-        ?? splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
-      const finalVisibleText = toVisibleEditorText(finalParsed.body, finalParsed.frontmatter);
-      const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
-      if (baselineText) {
-        const didApplyInEditor = dispatchEditorContent(targetFileId, baselineText, false);
-        if (didApplyInEditor) {
-          dispatchEditorContent(targetFileId, finalVisibleText, true, true);
-          const view = viewRef.current;
-          if (view && undo(view)) {
-            const undoneText = view.state.doc.toString();
-            if (undoneText !== baselineText) {
-              console.warn('Generate undo checkpoint mismatch.', {
-                expected: baselineText,
-                actual: undoneText,
-              });
-            }
-            redo(view);
-            editorStateByFileIdRef.current[targetFileId] = view.state;
-            updateHistoryAvailabilityForFile(targetFileId, view.state);
-          }
-        } else {
-          const cachedState = editorStateByFileIdRef.current[targetFileId];
-          if (cachedState) {
-            const stateWithBaseline = applyTextToEditorState(cachedState, baselineText, false);
-            const stateWithGeneratedOutput = applyTextToEditorState(stateWithBaseline, finalVisibleText, true, true);
-            editorStateByFileIdRef.current[targetFileId] = stateWithGeneratedOutput;
-            updateHistoryAvailabilityForFile(targetFileId, stateWithGeneratedOutput);
-          } else {
-            pendingHistoryBaselineByFileIdRef.current[targetFileId] = {
-              beforeVisible: baselineText,
-              afterVisible: finalVisibleText,
-            };
-          }
-        }
-      }
+      clearStreamRuntime();
+      await finalizeGeneratedOutput(outputText);
       const generatedDraft = getDraft(targetFileId);
       setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'completed' }));
       clearThinkingCloseTimer(targetFileId);
@@ -1043,10 +1111,7 @@ export function EditorPane() {
         setShowGeneratedDraftNotice(true);
       }
     } catch (error) {
-      if (streamFlushTimerRef.current !== null) {
-        window.clearTimeout(streamFlushTimerRef.current);
-        streamFlushTimerRef.current = null;
-      }
+      clearStreamRuntime();
       const isCancelled = error instanceof Error && error.name === 'AbortError';
       if (isCancelled) {
         const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
@@ -1090,12 +1155,18 @@ export function EditorPane() {
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
+      clearStreamRuntime();
       originalTextByFileIdRef.current[targetFileId] = null;
       preGenerateVisibleTextByFileIdRef.current[targetFileId] = null;
     }
   };
 
   const cancelGenerate = () => {
+    if (streamFlushTimerRef.current !== null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
+    streamBufferRef.current = '';
     cancelGenerateByFileId(file.id);
   };
 
