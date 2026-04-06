@@ -253,6 +253,12 @@ const MAX_LINKS_PER_ENTITY = 5;
 const DEFAULT_ATTACHMENT_QUOTA_MB = 500;
 const DEFAULT_ATTACHMENT_RETENTION_DAYS = 30;
 const ATTACHMENT_CONTEXT_TOKEN_BUDGET = 1_500;
+const DEFAULT_PENDING_ACTION_TTL_MS = 30 * 60 * 1000;
+const pendingActionTtlMs = (() => {
+  const rawMinutes = Number(process.env.PENDING_ACTION_TTL_MINUTES ?? '30');
+  if (!Number.isFinite(rawMinutes) || rawMinutes <= 0) return DEFAULT_PENDING_ACTION_TTL_MS;
+  return Math.floor(rawMinutes * 60 * 1000);
+})();
 let initialized = false;
 
 const sqlEscape = (value: unknown) => {
@@ -584,20 +590,60 @@ const savePendingActionDraft = (
     on conflict(id) do update set
       draft_json = excluded.draft_json,
       status = excluded.status,
+      created_at = excluded.created_at,
       updated_at = excluded.updated_at;
   `);
   return queryJson<ChatPendingActionRow>(`select * from chat_pending_actions where id = ${sqlEscape(id)} limit 1`)[0];
 };
 
+const cancelExpiredPendingActionDrafts = (sessionId: string): number => {
+  const cutoff = new Date(Date.now() - pendingActionTtlMs).toISOString();
+  const expiredCount = queryJson<{ total: number }>(`
+    select count(*) as total from chat_pending_actions
+    where session_id = ${sqlEscape(sessionId)}
+      and status = 'pending'
+      and updated_at < ${sqlEscape(cutoff)}
+  `)[0]?.total ?? 0;
+  if (!expiredCount) return 0;
+  execSql(`
+    update chat_pending_actions
+    set status = 'cancelled',
+        updated_at = ${sqlEscape(new Date().toISOString())}
+    where session_id = ${sqlEscape(sessionId)}
+      and status = 'pending'
+      and updated_at < ${sqlEscape(cutoff)};
+  `);
+  return expiredCount;
+};
+
+const cancelAllPendingActionDrafts = (sessionId: string): number => {
+  const pendingCount = queryJson<{ total: number }>(`
+    select count(*) as total from chat_pending_actions
+    where session_id = ${sqlEscape(sessionId)}
+      and status = 'pending'
+  `)[0]?.total ?? 0;
+  if (!pendingCount) return 0;
+  execSql(`
+    update chat_pending_actions
+    set status = 'cancelled',
+        updated_at = ${sqlEscape(new Date().toISOString())}
+    where session_id = ${sqlEscape(sessionId)}
+      and status = 'pending';
+  `);
+  return pendingCount;
+};
+
 const loadPendingActionDraft = (sessionId: string, actionKey: string): (ChatPendingActionRow & { draft: Record<string, unknown> | null }) | null => {
+  cancelExpiredPendingActionDrafts(sessionId);
   const row = queryJson<ChatPendingActionRow>(
-    `select * from chat_pending_actions where session_id = ${sqlEscape(sessionId)} and action_key = ${sqlEscape(actionKey)} limit 1`,
+    `select * from chat_pending_actions where session_id = ${sqlEscape(sessionId)} and action_key = ${sqlEscape(actionKey)} and status = 'pending' limit 1`,
   )[0];
   if (!row) return null;
   return { ...row, draft: parseJsonOrNull<Record<string, unknown>>(row.draft_json) };
 };
 
 const loadLatestPendingChatToolDraft = (sessionId: string): (ChatPendingActionRow & { draft: Record<string, unknown> | null }) | null => {
+  cancelExpiredPendingActionDrafts(sessionId);
   const row = queryJson<ChatPendingActionRow>(`
     select * from chat_pending_actions
     where session_id = ${sqlEscape(sessionId)}
@@ -1447,6 +1493,8 @@ const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
   };
 };
 
+const isSlashCancelCommand = (inputText: string): boolean => /^\/cancel\b/i.test(inputText.trim());
+
 const extractExplicitConfirm = (
   parsedConfirm: ParsedConfirmCommand,
   payload: Record<string, unknown>,
@@ -1929,10 +1977,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           res.end();
           return true;
         }
-        if (isPrefixModeOn && parsedPrefixedCommand?.command === 'cancel') {
-          const pendingDraft = loadLatestPendingChatToolDraft(session.id);
-          if (pendingDraft) savePendingActionDraft(session.id, pendingDraft.action_key, pendingDraft.draft ?? {}, 'cancelled');
-          const cancelledText = pendingDraft ? 'Okay — cancelled the pending action draft.' : 'There is no pending action draft to cancel.';
+        const expiredPendingCount = cancelExpiredPendingActionDrafts(session.id);
+        const isCancelCommand = (isPrefixModeOn && parsedPrefixedCommand?.command === 'cancel') || isSlashCancelCommand(inputText);
+        if (isCancelCommand) {
+          const cancelledCount = cancelAllPendingActionDrafts(session.id);
+          const cancelledText = cancelledCount > 0
+            ? `Okay — cancelled ${cancelledCount === 1 ? 'the pending action draft' : `${cancelledCount} pending action drafts`}.`
+            : 'There are no pending action drafts to cancel.';
           const doneFrame = { type: 'done', outputText: cancelledText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
           writeNdjson(res, doneFrame);
@@ -1968,6 +2019,35 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           return true;
         }
         const pendingToolDraft = loadLatestPendingChatToolDraft(session.id);
+        if (!pendingToolDraft?.draft && explicitConfirm && expiredPendingCount > 0) {
+          const expiredText = `Your pending draft expired after ${Math.floor(pendingActionTtlMs / 60000)} minutes and was cancelled. Please recreate the action draft, then confirm again.`;
+          const doneFrame = { type: 'done', outputText: expiredText, latencyMs: Date.now() - turnStartedAt };
+          streamEvents.push(doneFrame);
+          writeNdjson(res, doneFrame);
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: expiredText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: 'done' },
+            metadata: {
+              usage: null,
+              costEstimate: null,
+              completedAt: new Date().toISOString(),
+              correlation: { turn_id: turnCorrelationId, session_id: session.id },
+              context: contextPayload.meta,
+              pending_action: {
+                expired: true,
+                expired_count: expiredPendingCount,
+                ttl_minutes: Math.floor(pendingActionTtlMs / 60000),
+              },
+            },
+          });
+          persisted = true;
+          res.end();
+          return true;
+        }
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
         const pendingRequirement = pendingToolDraft?.draft ? coercePendingConfirmRequirement(pendingToolDraft.draft) : null;
         if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null && pendingRequirement?.tier !== 'C') {

@@ -2113,6 +2113,147 @@ test('chat tool orchestration saves pending draft for missing fields and streams
   }
 });
 
+test('pending draft TTL expiry auto-cancels and notifies user to recreate', async () => {
+  process.env.PENDING_ACTION_TTL_MINUTES = '0.001';
+  await callRouteAfterRestart('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRouteAfterRestart('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'ttl-pending-create',
+        name: 'create_task',
+        arguments: { ticker: 'IBM', title: 'TTL pending draft' },
+      }],
+    });
+    const first = await callRouteAfterRestart('POST', '/api/chat/session/current/messages', { content: 'create ttl task draft' });
+    assert.equal(first.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+    const confirm = await callRouteAfterRestart('POST', '/api/chat/session/current/messages', { content: '/confirm' });
+    assert.equal(confirm.status, 200);
+    assert.match(confirm.body, /pending draft expired/i);
+    assert.match(confirm.body, /recreate/i);
+
+    const exported = await callRouteAfterRestart('GET', '/api/chat/session/current/export?format=json');
+    const payload = JSON.parse(exported.body) as { pendingActions?: Array<{ action_key?: string; status?: string }> };
+    const draft = payload.pendingActions?.find((entry) => entry.action_key === 'chat_tool:create_task');
+    assert.equal(draft?.status, 'cancelled');
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+    delete process.env.PENDING_ACTION_TTL_MINUTES;
+    await callRouteAfterRestart('GET', '/api/chat/session/current/messages');
+  }
+});
+
+test('/cancel clears all pending drafts for the current session', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'cancel-pending-create',
+        name: 'create_task',
+        arguments: { ticker: 'AMD', title: 'Cancel pending create' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'create pending create draft' });
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'cancel-pending-note',
+        name: 'generate_note',
+        arguments: { instruction: 'Cancel pending note draft', title: 'Pending note' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'draft pending note' });
+
+    const cancelled = await callRoute('POST', '/api/chat/session/current/messages', { content: '/cancel' });
+    assert.equal(cancelled.status, 200);
+    assert.match(cancelled.body, /cancelled 2 pending action drafts/i);
+
+    const exported = await callRoute('GET', '/api/chat/session/current/export?format=json');
+    const payload = JSON.parse(exported.body) as { pendingActions?: Array<{ status?: string }> };
+    const pendingCount = payload.pendingActions?.filter((entry) => entry.status === 'pending').length ?? 0;
+    assert.equal(pendingCount, 0);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('saving newer pending draft replaces older pending entry for same action type', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'replace-pending-1',
+        name: 'create_task',
+        arguments: { ticker: 'NVDA', title: 'Original pending title' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'create first pending draft' });
+
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'replace-pending-2',
+        name: 'create_task',
+        arguments: { ticker: 'NVDA', title: 'Replacement pending title' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'create replacement pending draft' });
+
+    const exported = await callRoute('GET', '/api/chat/session/current/export?format=json');
+    const payload = JSON.parse(exported.body) as {
+      pendingActions?: Array<{ action_key?: string; status?: string; draft?: { arguments?: { title?: string } } }>;
+    };
+    const createTaskDrafts = payload.pendingActions?.filter((entry) => entry.action_key === 'chat_tool:create_task') ?? [];
+    assert.equal(createTaskDrafts.length, 1);
+    assert.equal(createTaskDrafts[0]?.status, 'pending');
+    assert.equal(createTaskDrafts[0]?.draft?.arguments?.title, 'Replacement pending title');
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('chat intent routing treats general prompts as conversation and skips tool planning', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
