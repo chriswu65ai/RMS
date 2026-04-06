@@ -1,5 +1,11 @@
 import type { AgentToolCall, AgentToolDefinition } from './agentProviders';
 import { formatNoteTypeSuggestions, resolveCanonicalNoteType } from './noteTypeResolver';
+import {
+  TASK_REQUIRED_FIELDS,
+  formatInvalidTaskNoteTypeMessage,
+  formatMissingRequiredTaskFieldsMessage,
+  validateAndNormalizeTaskContractPayload,
+} from '../shared/taskValidation';
 
 export type TaskStatus = 'ideas' | 'researching' | 'completed';
 export type TaskListStatus = TaskStatus | 'archived';
@@ -113,7 +119,7 @@ type SlotPhase = 'required' | 'optional' | 'confirm';
 
 const CREATE_TASK_SCHEMA: AgentToolDefinition = {
   name: 'create_task',
-  description: 'Create a research task. Required fields: ticker, title, and note_type.',
+  description: 'Create a research task. Required field: ticker.',
   input_schema: {
     type: 'object',
     additionalProperties: false,
@@ -127,7 +133,7 @@ const CREATE_TASK_SCHEMA: AgentToolDefinition = {
       deadline: { type: 'string' },
       status: { type: 'string', enum: ['ideas', 'researching', 'completed'] },
     },
-    required: ['ticker', 'title', 'note_type'],
+    required: ['ticker'],
   },
 };
 
@@ -208,7 +214,7 @@ const isFilledValue = (value: unknown): boolean => {
   return value !== undefined && value !== null;
 };
 
-const CREATE_TASK_REQUIRED_FIELDS: Array<keyof CreateTaskArgs> = ['ticker', 'title', 'note_type'];
+const CREATE_TASK_REQUIRED_FIELDS: Array<keyof CreateTaskArgs> = [...TASK_REQUIRED_FIELDS];
 const CREATE_TASK_OPTIONAL_FIELDS: Array<keyof CreateTaskArgs> = ['details', 'assignee', 'priority', 'deadline', 'status'];
 
 const buildCreateTaskPendingDraft = (argumentsRecord: CreateTaskArgs): Record<string, unknown> => {
@@ -276,7 +282,7 @@ export const runChatToolOrchestration = async (
   const suggestions = formatNoteTypeSuggestions(allowedNoteTypes);
 
   if (toolCall.name === 'create_task') {
-    const normalized: CreateTaskArgs = {
+    const preNormalized: CreateTaskArgs = {
       ticker: toUpperTicker(args.ticker),
       title: trimString(args.title),
       note_type: trimString(args.note_type),
@@ -286,13 +292,22 @@ export const runChatToolOrchestration = async (
       deadline: trimString(args.deadline) || undefined,
       status: args.status === 'ideas' || args.status === 'researching' || args.status === 'completed' ? args.status : undefined,
     };
-    const missing = CREATE_TASK_REQUIRED_FIELDS.filter((field) => !isFilledValue(normalized[field]));
+    const contractValidation = validateAndNormalizeTaskContractPayload(preNormalized, allowedNoteTypes);
+    const normalized: CreateTaskArgs = {
+      ...preNormalized,
+      ...contractValidation.normalized,
+      details: contractValidation.normalized.details || undefined,
+      assignee: contractValidation.normalized.assignee || undefined,
+      priority: contractValidation.normalized.priority || undefined,
+      deadline: contractValidation.normalized.deadline || undefined,
+    };
+    const missing = [...contractValidation.missingRequiredFields];
     if (missing.length > 0) {
       if (!askWhenInfoMissing) {
         return {
           status: 'rejected',
-          narration_before: 'I cannot execute create_task because required fields are missing or invalid.',
-          narration_after: `Missing/invalid fields: ${missing.join(', ')}. Allowed note types: ${suggestions}.`,
+          narration_before: 'I cannot execute create_task because required fields are missing.',
+          narration_after: `${formatMissingRequiredTaskFieldsMessage(missing)} Allowed note types: ${suggestions}.`,
           missing_fields: missing,
         };
       }
@@ -303,6 +318,14 @@ export const runChatToolOrchestration = async (
         narration_before: 'I prepared a create_task draft and entered required-field collection.',
         narration_after: `Please provide ${currentField} first. I will collect required fields one at a time before optional fields and final confirmation.`,
         missing_fields: missing,
+      };
+    }
+    if (contractValidation.invalidFields.includes('note_type')) {
+      return {
+        status: 'rejected',
+        narration_before: 'I cannot execute create_task because one field is invalid.',
+        narration_after: formatInvalidTaskNoteTypeMessage(allowedNoteTypes),
+        missing_fields: ['note_type'],
       };
     }
     if (!explicitConfirm) {
