@@ -10,7 +10,9 @@ import {
   deriveLinkLabelFromUrl,
   EDITOR_SHORTCUT_KEYS,
   getTableSizeError,
+  getThinkingStatusUi,
   isUrlLikeSelection,
+  shouldShowThinkingBubble,
 } from './EditorPane.js';
 
 test('editor stays mounted in edit and split tabs', () => {
@@ -147,5 +149,27 @@ test('table generator creates expected 3x3 markdown output', () => {
       '|   |   |   |',
       '|   |   |   |',
     ].join('\n'),
+  );
+});
+
+
+test('thinking status UI maps failed and cancelled badges distinctly', () => {
+  assert.deepEqual(getThinkingStatusUi('failed'), { label: 'failed', badgeClassName: 'bg-rose-100 text-rose-700' });
+  assert.deepEqual(getThinkingStatusUi('cancelled'), { label: 'cancelled', badgeClassName: 'bg-slate-200 text-slate-700' });
+  assert.deepEqual(getThinkingStatusUi('completed'), { label: 'completed', badgeClassName: 'bg-emerald-100 text-emerald-700' });
+});
+
+test('thinking bubble visibility keeps failures visible but hides cancelled when closed', () => {
+  assert.equal(
+    shouldShowThinkingBubble({ thinkingStatus: 'failed', thinkingEventCount: 0, isThinkingBubbleClosed: false }),
+    true,
+  );
+  assert.equal(
+    shouldShowThinkingBubble({ thinkingStatus: 'cancelled', thinkingEventCount: 2, isThinkingBubbleClosed: true }),
+    false,
+  );
+  assert.equal(
+    shouldShowThinkingBubble({ thinkingStatus: 'idle', thinkingEventCount: 0, isThinkingBubbleClosed: false }),
+    false,
   );
 });
