@@ -3,6 +3,8 @@ import type { ToolTraceEntry } from '../types';
 const STATUS_STYLE: Record<ToolTraceEntry['status'], string> = {
   pending: 'bg-slate-100 text-slate-600',
   running: 'bg-sky-100 text-sky-700',
+  needs_confirmation: 'bg-violet-100 text-violet-700',
+  needs_disambiguation: 'bg-fuchsia-100 text-fuchsia-700',
   completed: 'bg-emerald-100 text-emerald-700',
   failed: 'bg-rose-100 text-rose-700',
   cancelled: 'bg-amber-100 text-amber-700',

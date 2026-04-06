@@ -1,6 +1,13 @@
 export type ChatRole = 'user' | 'assistant';
 
-export type ToolTraceStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ToolTraceStatus =
+  | 'pending'
+  | 'running'
+  | 'needs_confirmation'
+  | 'needs_disambiguation'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export type ToolTraceEntry = {
   id: string;
@@ -9,6 +16,7 @@ export type ToolTraceEntry = {
   detail: string;
   startedAt: number;
   endedAt?: number;
+  metadata?: Record<string, unknown>;
 };
 
 export type ChatMessageStatus = 'idle' | 'streaming' | 'error' | 'cancelled';
