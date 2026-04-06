@@ -32,6 +32,8 @@ type StreamPayload = {
   narration_after?: string;
   status?: string;
   outcome?: string;
+  trace_id?: string;
+  trace_name?: string;
   planned_tool_calls?: Array<{ id?: string; name?: string }>;
 } & Record<string, unknown>;
 
@@ -139,6 +141,14 @@ const pickNarrationDetail = (payload: StreamPayload, fallback: string): string =
     .map((value) => value.trim());
   return parts.length > 0 ? parts.join('\n\n') : fallback;
 };
+
+const pickTraceId = (payload: StreamPayload, fallback: string): string => (
+  typeof payload.trace_id === 'string' && payload.trace_id.trim().length > 0 ? payload.trace_id : fallback
+);
+
+const pickTraceName = (payload: StreamPayload, fallback: string): string => (
+  typeof payload.trace_name === 'string' && payload.trace_name.trim().length > 0 ? payload.trace_name : fallback
+);
 
 const mapTerminalTraceStatus = (
   payload: StreamPayload,
@@ -323,9 +333,23 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return false;
           }
 
-          if (payload.type === 'tool_planning_result' && Array.isArray(payload.planned_tool_calls)) {
+          if (payload.type === 'tool_planning_started') {
             set((state) => ({
-              messages: payload.planned_tool_calls.reduce<ChatMessage[]>((messages, plannedCall) => {
+              messages: upsertTrace(state.messages, assistantMessageId, {
+                id: 'tool-planning',
+                toolName: 'tool_planning',
+                status: 'running',
+                detail: pickNarrationDetail(payload, 'Planning tool calls.'),
+                startedAt: now(),
+              }),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_planning_result' && Array.isArray(payload.planned_tool_calls)) {
+            const plannedCalls = payload.planned_tool_calls;
+            set((state) => ({
+              messages: plannedCalls.reduce<ChatMessage[]>((messages, plannedCall) => {
                 const traceId = typeof plannedCall.id === 'string' && plannedCall.id.trim()
                   ? plannedCall.id
                   : makeId();
@@ -335,10 +359,75 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     ? plannedCall.name
                     : 'tool',
                   status: 'pending',
-                  detail: 'Planned tool action.',
+                  detail: pickNarrationDetail(payload, `Planned ${typeof plannedCall.name === 'string' && plannedCall.name.trim() ? plannedCall.name : 'tool'} call.`),
                   startedAt: now(),
                 });
-              }, state.messages),
+              }, updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                'tool-planning',
+                'completed',
+                pickNarrationDetail(payload, 'Tool planning completed.'),
+                'tool_planning',
+              )),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_planning_failed') {
+            set((state) => ({
+              messages: updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                'tool-planning',
+                'failed',
+                pickNarrationDetail(payload, 'Tool planning failed.'),
+                'tool_planning',
+              ),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'response_generation_started') {
+            const traceId = pickTraceId(payload, 'response-generation');
+            set((state) => ({
+              messages: upsertTrace(state.messages, assistantMessageId, {
+                id: traceId,
+                toolName: pickTraceName(payload, 'response_generation'),
+                status: 'running',
+                detail: pickNarrationDetail(payload, 'Generating response.'),
+                startedAt: now(),
+              }),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'response_generation_completed') {
+            const traceId = pickTraceId(payload, 'response-generation');
+            set((state) => ({
+              messages: updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                traceId,
+                'completed',
+                pickNarrationDetail(payload, 'Response generated.'),
+                pickTraceName(payload, 'response_generation'),
+              ),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'response_generation_failed') {
+            const traceId = pickTraceId(payload, 'response-generation');
+            set((state) => ({
+              messages: updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                traceId,
+                'failed',
+                pickNarrationDetail(payload, 'Response generation failed.'),
+                pickTraceName(payload, 'response_generation'),
+              ),
             }));
             return false;
           }
@@ -381,7 +470,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 text: payload.outputText ?? message.text,
                 status: 'idle',
                 traces: message.traces.map((trace) => trace.status === 'running'
-                  ? { ...trace, status: 'completed', detail: 'Output finalized.', endedAt: now() }
+                  ? { ...trace, status: 'completed', endedAt: now() }
                   : trace),
               })),
             }));
@@ -444,7 +533,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             ...message,
             status: 'idle',
             traces: message.traces.map((trace) => trace.status === 'running'
-              ? { ...trace, status: 'completed', detail: 'Output finalized.', endedAt: now() }
+              ? { ...trace, status: 'completed', endedAt: now() }
               : trace),
           })),
         }));

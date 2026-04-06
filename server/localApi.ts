@@ -1774,6 +1774,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             const planFrame = {
               type: 'tool_planning_result',
               planned_tool_calls: planning.toolCalls.map((call) => ({ id: call.id, name: call.name })),
+              message: planning.toolCalls.length > 0
+                ? `Planned ${planning.toolCalls.length} tool call${planning.toolCalls.length === 1 ? '' : 's'}.`
+                : 'No tool calls planned.',
             };
             streamEvents.push(planFrame);
             writeNdjson(res, planFrame);
@@ -1880,6 +1883,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeNdjson(res, errorFrame);
           }
         }
+        const generationStartedFrame = {
+          type: 'response_generation_started',
+          trace_id: 'response-generation',
+          trace_name: 'response_generation',
+          message: 'Generating final response.',
+        };
+        streamEvents.push(generationStartedFrame);
+        writeNdjson(res, generationStartedFrame);
         const result = await providerRegistry[preferred].generate({
           model: resolvedModel,
           inputText: generationPrompt,
@@ -1896,6 +1907,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeNdjson(res, frame);
           },
         });
+        const generationCompletedFrame = {
+          type: 'response_generation_completed',
+          trace_id: 'response-generation',
+          trace_name: 'response_generation',
+          message: 'Final response generated.',
+        };
+        streamEvents.push(generationCompletedFrame);
+        writeNdjson(res, generationCompletedFrame);
         const doneFrame = { type: 'done', ...result };
         streamEvents.push(doneFrame);
         writeNdjson(res, doneFrame);
@@ -1948,6 +1967,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       } catch (error) {
         const cancelled = clientAborted;
         const message = cancelled ? 'Generation cancelled.' : (error instanceof Error ? error.message : 'Generation failed.');
+        const generationFailedFrame = {
+          type: 'response_generation_failed',
+          trace_id: 'response-generation',
+          trace_name: 'response_generation',
+          message,
+        };
+        streamEvents.push(generationFailedFrame);
         const errorFrame = { type: 'error', message, aborted: cancelled };
         streamEvents.push(errorFrame);
         emitStructuredLog('chat.turn.stream_error', {
@@ -1958,6 +1984,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           message,
         });
         if (res.headersSent) {
+          writeNdjson(res, generationFailedFrame);
           writeNdjson(res, errorFrame);
           res.end();
         } else {
