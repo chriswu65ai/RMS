@@ -95,6 +95,10 @@ type StreamPayload = {
   summary?: string;
   reasoning?: string;
   text?: string;
+  milestone?: string;
+  stage?: string;
+  detail?: string;
+  provider?: string;
 } & Record<string, unknown>;
 
 const pickToolName = (payload: StreamPayload): string | undefined => (
@@ -108,6 +112,31 @@ const pickToolCallId = (payload: StreamPayload): string | undefined => (
     ? payload.toolCallId
     : (typeof payload.tool_call_id === 'string' ? payload.tool_call_id : undefined)
 );
+
+const pickReasoningText = (payload: StreamPayload): string | undefined => {
+  const candidates = [
+    payload.summary,
+    payload.reasoning,
+    payload.message,
+    payload.text,
+    payload.milestone,
+    payload.stage,
+    payload.detail,
+  ];
+  const normalized = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim().length > 0);
+  return typeof normalized === 'string' ? normalized.trim() : undefined;
+};
+
+const isGenerationProgressPayload = (payload: StreamPayload): boolean => {
+  const type = typeof payload.type === 'string' ? payload.type.toLowerCase() : '';
+  if (!type) return false;
+  if (type === 'provider_summary') return true;
+  if (type.includes('reasoning')) return true;
+  if (type.includes('summary')) return true;
+  if (type.includes('progress')) return true;
+  if (type.includes('milestone')) return true;
+  return false;
+};
 
 const buildThinkingEvent = (payload: StreamPayload): ThinkingEvent | null => {
   if (payload.type === 'tool_call_started') {
@@ -137,12 +166,10 @@ const buildThinkingEvent = (payload: StreamPayload): ThinkingEvent | null => {
       raw: payload,
     };
   }
-  if (payload.type === 'reasoning' || payload.type === 'provider_summary') {
+  if (payload.type === 'reasoning' || isGenerationProgressPayload(payload)) {
     return {
       type: 'reasoning',
-      summary: typeof payload.summary === 'string'
-        ? payload.summary
-        : (typeof payload.reasoning === 'string' ? payload.reasoning : (typeof payload.text === 'string' ? payload.text : undefined)),
+      summary: pickReasoningText(payload),
       message: payload.message,
       raw: payload,
     };

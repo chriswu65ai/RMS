@@ -26,6 +26,12 @@ const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊',
 const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
 const STREAM_UI_THROTTLE_MS = 150;
+const SYNTHETIC_PROGRESS_REFINING_THRESHOLD = 280;
+const SYNTHETIC_PROGRESS_MESSAGES = {
+  drafting: 'LLM: Starting draft',
+  refining: 'LLM: Refining structure',
+  finalizing: 'LLM: Finalizing note',
+} as const;
 
 
 type ThinkingStatusUi = {
@@ -153,6 +159,77 @@ export const formatThinkingModelBadge = (provider: string, model: string): strin
   if (!trimmedModel) return null;
   const trimmedProvider = provider.trim();
   return trimmedProvider ? `${trimmedProvider} · ${trimmedModel}` : trimmedModel;
+};
+
+const toFiniteNumber = (value: unknown): number | null => (
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+);
+
+const toStringList = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+};
+
+const extractQueryFromThinkingEvent = (event: ThinkingEvent): string | null => {
+  const raw = event.raw as Record<string, unknown>;
+  const directQuery = typeof raw.query === 'string' ? raw.query.trim() : '';
+  if (directQuery) return directQuery;
+  if (raw.args && typeof raw.args === 'object') {
+    const argsQuery = (raw.args as Record<string, unknown>).query;
+    if (typeof argsQuery === 'string' && argsQuery.trim()) return argsQuery.trim();
+  }
+  return null;
+};
+
+export const normalizeThinkingEvent = (event: ThinkingEvent): string | null => {
+  const raw = event.raw as Record<string, unknown>;
+  const toolName = ('toolName' in event && typeof event.toolName === 'string') ? event.toolName.trim() : undefined;
+  const lowerToolName = toolName?.toLowerCase() ?? '';
+  const isSearchTool = lowerToolName.includes('search') || lowerToolName.includes('web') || lowerToolName.includes('browse');
+  if (event.type === 'reasoning') {
+    const summary = typeof event.summary === 'string' ? event.summary.trim() : '';
+    const message = typeof event.message === 'string' ? event.message.trim() : '';
+    if (summary) return summary;
+    if (message) return message;
+    return 'Reasoning step updated';
+  }
+  if (event.type === 'tool_call_started') {
+    const query = extractQueryFromThinkingEvent(event);
+    if (isSearchTool) {
+      return query ? `Searching: "${query}"` : 'Searching the web';
+    }
+    return toolName ? `Running ${toolName}` : 'Running tool';
+  }
+  if (event.type === 'tool_call_result') {
+    const query = extractQueryFromThinkingEvent(event);
+    const sourceCount = toFiniteNumber(raw.sourceCount) ?? toFiniteNumber(raw.source_count);
+    const attempt = toFiniteNumber(raw.attempt) ?? toFiniteNumber(raw.pass) ?? toFiniteNumber(raw.pass_index);
+    const maxAttempts = toFiniteNumber(raw.maxAttempts) ?? toFiniteNumber(raw.max_attempts) ?? toFiniteNumber(raw.total_passes);
+    const latencyMs = toFiniteNumber(raw.latencyMs) ?? toFiniteNumber(raw.latency_ms);
+    const sourceMeta = raw.sourceMeta && typeof raw.sourceMeta === 'object' ? raw.sourceMeta as Record<string, unknown> : null;
+    const topDomains = sourceMeta ? toStringList(sourceMeta.topDomains) : [];
+    const fallbackDomains = toStringList(raw.domains);
+    const domainList = (topDomains.length > 0 ? topDomains : fallbackDomains).slice(0, 3);
+    if (isSearchTool) {
+      const detailSegments: string[] = [];
+      if (query) detailSegments.push(`"${query}"`);
+      if (typeof attempt === 'number' && typeof maxAttempts === 'number') detailSegments.push(`pass ${attempt}/${maxAttempts}`);
+      if (typeof sourceCount === 'number') detailSegments.push(`${sourceCount} sources`);
+      if (domainList.length > 0) detailSegments.push(`domains: ${domainList.join(', ')}`);
+      if (typeof latencyMs === 'number') detailSegments.push(`${Math.round(latencyMs)}ms`);
+      if (detailSegments.length > 0) return `Search complete — ${detailSegments.join(' · ')}`;
+      return 'Search completed';
+    }
+    if (domainList.length > 0) return `Sources checked: ${domainList.join(', ')}`;
+    return toolName ? `${toolName} completed` : 'Tool completed';
+  }
+  if (event.type === 'tool_call_failed') {
+    const reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
+    if (isSearchTool) return reason ? `Search failed: ${reason}` : 'Search failed';
+    if (reason) return `${toolName ? `${toolName} failed` : 'Tool failed'}: ${reason}`;
+    return toolName ? `${toolName} failed` : 'Tool failed';
+  }
+  return null;
 };
 
 const streamSourceKey = (source: StreamSource) => (
@@ -523,71 +600,6 @@ export function EditorPane() {
   const thinkingModelBadgeLabel = formatThinkingModelBadge(defaultProvider, defaultModel);
   void thinkingClockTick;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
-
-  const toFiniteNumber = (value: unknown): number | null => (
-    typeof value === 'number' && Number.isFinite(value) ? value : null
-  );
-
-  const toStringList = (value: unknown): string[] => {
-    if (!Array.isArray(value)) return [];
-    return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
-  };
-
-  const extractQueryFromThinkingEvent = (event: ThinkingEvent): string | null => {
-    const raw = event.raw as Record<string, unknown>;
-    const directQuery = typeof raw.query === 'string' ? raw.query.trim() : '';
-    if (directQuery) return directQuery;
-    if (raw.args && typeof raw.args === 'object') {
-      const argsQuery = (raw.args as Record<string, unknown>).query;
-      if (typeof argsQuery === 'string' && argsQuery.trim()) return argsQuery.trim();
-    }
-    return null;
-  };
-
-  const normalizeThinkingEvent = (event: ThinkingEvent): string | null => {
-    const raw = event.raw as Record<string, unknown>;
-    const toolName = ('toolName' in event && typeof event.toolName === 'string') ? event.toolName.trim() : undefined;
-    const lowerToolName = toolName?.toLowerCase() ?? '';
-    const isSearchTool = lowerToolName.includes('search') || lowerToolName.includes('web') || lowerToolName.includes('browse');
-    if (event.type === 'reasoning') return 'Reasoning step updated';
-    if (event.type === 'tool_call_started') {
-      const query = extractQueryFromThinkingEvent(event);
-      if (isSearchTool) {
-        return query ? `Searching: "${query}"` : 'Searching the web';
-      }
-      return toolName ? `Running ${toolName}` : 'Running tool';
-    }
-    if (event.type === 'tool_call_result') {
-      const query = extractQueryFromThinkingEvent(event);
-      const sourceCount = toFiniteNumber(raw.sourceCount) ?? toFiniteNumber(raw.source_count);
-      const attempt = toFiniteNumber(raw.attempt) ?? toFiniteNumber(raw.pass) ?? toFiniteNumber(raw.pass_index);
-      const maxAttempts = toFiniteNumber(raw.maxAttempts) ?? toFiniteNumber(raw.max_attempts) ?? toFiniteNumber(raw.total_passes);
-      const latencyMs = toFiniteNumber(raw.latencyMs) ?? toFiniteNumber(raw.latency_ms);
-      const sourceMeta = raw.sourceMeta && typeof raw.sourceMeta === 'object' ? raw.sourceMeta as Record<string, unknown> : null;
-      const topDomains = sourceMeta ? toStringList(sourceMeta.topDomains) : [];
-      const fallbackDomains = toStringList(raw.domains);
-      const domainList = (topDomains.length > 0 ? topDomains : fallbackDomains).slice(0, 3);
-      if (isSearchTool) {
-        const detailSegments: string[] = [];
-        if (query) detailSegments.push(`"${query}"`);
-        if (typeof attempt === 'number' && typeof maxAttempts === 'number') detailSegments.push(`pass ${attempt}/${maxAttempts}`);
-        if (typeof sourceCount === 'number') detailSegments.push(`${sourceCount} sources`);
-        if (domainList.length > 0) detailSegments.push(`domains: ${domainList.join(', ')}`);
-        if (typeof latencyMs === 'number') detailSegments.push(`${Math.round(latencyMs)}ms`);
-        if (detailSegments.length > 0) return `Search complete — ${detailSegments.join(' · ')}`;
-        return 'Search completed';
-      }
-      if (domainList.length > 0) return `Sources checked: ${domainList.join(', ')}`;
-      return toolName ? `${toolName} completed` : 'Tool completed';
-    }
-    if (event.type === 'tool_call_failed') {
-      const reason = typeof raw.reason === 'string' ? raw.reason.trim() : '';
-      if (isSearchTool) return reason ? `Search failed: ${reason}` : 'Search failed';
-      if (reason) return `${toolName ? `${toolName} failed` : 'Tool failed'}: ${reason}`;
-      return toolName ? `${toolName} failed` : 'Tool failed';
-    }
-    return null;
-  };
 
   const formatDuration = (seconds: number) => {
     const mm = Math.floor(seconds / 60);
@@ -1155,6 +1167,14 @@ export function EditorPane() {
       },
     });
     streamPreviewControllerRef.current = streamPreviewController;
+    let sawExplicitProviderThinkingEvent = false;
+    let syntheticDraftingShown = false;
+    let syntheticRefiningShown = false;
+    let syntheticFinalizingShown = false;
+    const appendSyntheticThinking = (message: string) => {
+      setThinkingMetadataForFile(targetFileId, { phase: 'reasoning' });
+      appendThinkingEventsForFile(targetFileId, [{ id: `${Date.now()}-synthetic`, text: message, type: 'reasoning' }]);
+    };
 
     try {
       const outputText = await startGenerate(targetFileId, {
@@ -1162,6 +1182,17 @@ export function EditorPane() {
         provider: defaultProvider,
         model: defaultModel,
         onProgress: (nextOutputText) => {
+          if (!sawExplicitProviderThinkingEvent && !syntheticDraftingShown) {
+            syntheticDraftingShown = true;
+            appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.drafting);
+          } else if (
+            !sawExplicitProviderThinkingEvent
+            && !syntheticRefiningShown
+            && nextOutputText.trim().length >= SYNTHETIC_PROGRESS_REFINING_THRESHOLD
+          ) {
+            syntheticRefiningShown = true;
+            appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.refining);
+          }
           streamPreviewController.onChunk(nextOutputText);
         },
         onSources: (sources) => {
@@ -1172,6 +1203,7 @@ export function EditorPane() {
           setSearchWarningMessage(message);
         },
         onThinkingEvent: (event) => {
+          sawExplicitProviderThinkingEvent = true;
           const normalized = normalizeThinkingEvent(event);
           const { attempt, maxAttempts } = extractAttemptData(event);
           setThinkingMetadataForFile(targetFileId, { phase: deriveThinkingPhase(event.type) });
@@ -1187,6 +1219,10 @@ export function EditorPane() {
       });
       streamPreviewController.complete(outputText);
       clearStreamRuntime();
+      if (!sawExplicitProviderThinkingEvent && !syntheticFinalizingShown) {
+        syntheticFinalizingShown = true;
+        appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.finalizing);
+      }
       await finalizeGeneratedOutput(outputText);
       const generatedDraft = getDraft(targetFileId);
       markThinkingCompletedForFile(targetFileId);

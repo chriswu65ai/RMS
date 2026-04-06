@@ -176,6 +176,43 @@ test('generateText forwards thinking stream events', async () => {
   }
 });
 
+test('generateText maps generation-progress style events into reasoning thinking events', async () => {
+  const originalFetch = globalThis.fetch;
+  const seenSummaries: string[] = [];
+
+  globalThis.fetch = async () => makeNdjsonResponse([
+    JSON.stringify({ type: 'generation_progress', stage: 'Drafting outline' }),
+    JSON.stringify({ type: 'provider_milestone', milestone: 'Reconciling key evidence' }),
+    JSON.stringify({ type: 'reasoning_summary', summary: 'Preparing final synthesis' }),
+    JSON.stringify({ type: 'done', outputText: 'ok' }),
+  ]);
+
+  try {
+    const result = await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-3b',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onThinkingEvent: (event) => {
+        if (event.type === 'reasoning' && typeof event.summary === 'string') {
+          seenSummaries.push(event.summary);
+        }
+      },
+    });
+
+    assert.equal(result.outputText, 'ok');
+    assert.deepEqual(seenSummaries, [
+      'Drafting outline',
+      'Reconciling key evidence',
+      'Preparing final synthesis',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('generateText parses split NDJSON chunks and forwards full thinking stream sequence', async () => {
   const originalFetch = globalThis.fetch;
   const seenEvents: string[] = [];
