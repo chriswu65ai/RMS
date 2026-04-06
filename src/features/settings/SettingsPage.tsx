@@ -21,6 +21,7 @@ export function SettingsPage() {
   const [attachmentUsageBytes, setAttachmentUsageBytes] = useState(0);
   const [attachmentReclaimableBytes, setAttachmentReclaimableBytes] = useState(0);
   const [attachmentStatusError, setAttachmentStatusError] = useState<string | null>(null);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(true);
 
   useEffect(() => setNoteTypesInput(noteTypes.join(', ')), [noteTypes]);
   useEffect(() => setAssigneesInput(assignees.join(', ')), [assignees]);
@@ -38,8 +39,12 @@ export function SettingsPage() {
           setAttachmentUsageBytes(settings.usage_bytes);
           setAttachmentReclaimableBytes(settings.reclaimable_bytes);
           setAttachmentStatusError(null);
+          setAttachmentsLoading(false);
         },
-        onError: (message) => setAttachmentStatusError(message),
+        onError: (message) => {
+          setAttachmentStatusError(message);
+          setAttachmentsLoading(false);
+        },
       },
     );
     return () => guard.cancel();
@@ -182,7 +187,7 @@ export function SettingsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Total storage quota (MB)</span>
-                <input className="input" type="number" min={50} value={attachmentQuotaMb} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={async () => {
+                <input className="input" type="number" min={50} value={attachmentQuotaMb} disabled={attachmentsLoading} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={async () => {
                   await runUiAsync(
                     () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
                     {
@@ -201,7 +206,7 @@ export function SettingsPage() {
               </label>
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Retention days</span>
-                <input className="input" type="number" min={1} value={attachmentRetentionDays} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={async () => {
+                <input className="input" type="number" min={1} value={attachmentRetentionDays} disabled={attachmentsLoading} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={async () => {
                   await runUiAsync(
                     () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
                     {
@@ -219,10 +224,16 @@ export function SettingsPage() {
                 }} />
               </label>
             </div>
-            <p className="mt-3 text-sm text-slate-600">Current usage: {(attachmentUsageBytes / (1024 * 1024)).toFixed(2)} MB</p>
-            <p className="text-sm text-slate-600">Reclaimable (soft-deleted): {(attachmentReclaimableBytes / (1024 * 1024)).toFixed(2)} MB</p>
+            {attachmentsLoading ? (
+              <p className="mt-3 text-sm text-slate-500">Loading attachment settings…</p>
+            ) : (
+              <>
+                <p className="mt-3 text-sm text-slate-600">Current usage: {(attachmentUsageBytes / (1024 * 1024)).toFixed(2)} MB</p>
+                <p className="text-sm text-slate-600">Reclaimable (soft-deleted): {(attachmentReclaimableBytes / (1024 * 1024)).toFixed(2)} MB</p>
+              </>
+            )}
             {attachmentStatusError && <p className="mt-2 text-sm text-rose-600">{attachmentStatusError}</p>}
-            <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50" onClick={async () => {
+            <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" disabled={attachmentsLoading} onClick={async () => {
               await runUiAsync(
                 async () => {
                   const result = await runAttachmentCleanupNow();
