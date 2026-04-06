@@ -234,6 +234,15 @@ test('thinking badge renders mapped phase label instead of raw enum token', () =
   assert.equal(editorPaneSource.includes('{thinkingPhase}'), false);
 });
 
+test('split preview pane uses explicit independent overflow classes and shared pane-scroll hook', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('className="pane-scroll min-h-0 flex-1"'), true);
+  assert.equal(
+    editorPaneSource.includes('markdown-preview pane-scroll max-w-none overflow-x-auto overflow-y-auto'),
+    true,
+  );
+});
+
 type ScheduledTimer = { id: number; runAt: number; callback: () => void };
 
 const createTimerHarness = () => {

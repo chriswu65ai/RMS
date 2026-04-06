@@ -1505,7 +1505,7 @@ export function EditorPane() {
             <CodeMirror
               key={file.id}
               value={editorValue}
-              className="editor-scroll min-h-0 flex-1"
+              className="pane-scroll min-h-0 flex-1"
               height="100%"
               extensions={[
                 ...editorExtensions,
@@ -1576,7 +1576,7 @@ export function EditorPane() {
             />
           </div>
           {(editorTab === 'preview' || editorTab === 'split') && (
-            <div className={`markdown-preview max-w-none overflow-y-auto bg-white px-5 pb-5 pt-2 text-sm ${editorTab === 'split' ? 'border-l border-slate-200' : ''}`}>
+            <div className={`markdown-preview pane-scroll max-w-none overflow-x-auto overflow-y-auto bg-white px-5 pb-5 pt-2 text-sm ${editorTab === 'split' ? 'border-l border-slate-200' : ''}`}>
               {showMetadata && metadataSyntax && (
                 <pre className="mb-3 overflow-x-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-600">
                   {metadataSyntax}
