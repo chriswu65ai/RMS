@@ -1950,6 +1950,69 @@ test('chat session endpoints return session and support settings/update flow', a
   assert.equal(typeof reloadPayload.profile?.reloaded_at, 'string');
 });
 
+test('chat settings normalizes legacy action mode values to canonical values', async () => {
+  const updateResponse = await callRoute('PUT', '/api/chat/settings', {
+    policy: { action_mode: 'act', max_context_messages: 12 },
+  });
+  assert.equal(updateResponse.status, 200);
+
+  const settingsAfter = await callRoute('GET', '/api/chat/settings');
+  assert.equal(settingsAfter.status, 200);
+  const parsedAfter = JSON.parse(settingsAfter.body) as {
+    policy?: { action_mode?: string; max_context_messages?: number };
+  };
+  assert.equal(parsedAfter.policy?.action_mode, 'confirm_required');
+  assert.equal(parsedAfter.policy?.max_context_messages, 12);
+});
+
+test('chat settings unknown action mode falls back to assist and emits structured warning log', async () => {
+  const originalInfo = console.info;
+  const infoCalls: Array<{ message: string; payload?: string }> = [];
+  console.info = ((message: unknown, payload?: unknown) => {
+    infoCalls.push({
+      message: String(message ?? ''),
+      payload: typeof payload === 'string' ? payload : undefined,
+    });
+  }) as typeof console.info;
+  try {
+    const updateResponse = await callRoute('PUT', '/api/chat/settings', {
+      policy: { action_mode: 'totally-unknown-mode' },
+    });
+    assert.equal(updateResponse.status, 200);
+  } finally {
+    console.info = originalInfo;
+  }
+
+  const settingsAfter = await callRoute('GET', '/api/chat/settings');
+  assert.equal(settingsAfter.status, 200);
+  const parsedAfter = JSON.parse(settingsAfter.body) as { policy?: { action_mode?: string } };
+  assert.equal(parsedAfter.policy?.action_mode, 'assist');
+
+  const warningLog = infoCalls
+    .filter((entry) => entry.message.includes('[local-api:chat.action_mode.warning]'))
+    .map((entry) => (entry.payload ? JSON.parse(entry.payload) as { code?: string; raw_value?: string; fallback_mode?: string } : null))
+    .find((entry) => entry?.code === 'unknown_chat_action_mode');
+  assert.equal(warningLog?.raw_value, 'totally-unknown-mode');
+  assert.equal(warningLog?.fallback_mode, 'assist');
+});
+
+test('chat settings mode persistence round-trip stores canonical value', async () => {
+  const firstSave = await callRoute('PUT', '/api/chat/settings', {
+    policy: { action_mode: 'manual' },
+  });
+  assert.equal(firstSave.status, 200);
+
+  const settingsBeforeRestart = await callRoute('GET', '/api/chat/settings');
+  assert.equal(settingsBeforeRestart.status, 200);
+  const beforeRestartPayload = JSON.parse(settingsBeforeRestart.body) as { policy?: { action_mode?: string } };
+  assert.equal(beforeRestartPayload.policy?.action_mode, 'manual_only');
+
+  const settingsAfterRestart = await callRouteAfterRestart('GET', '/api/chat/settings');
+  assert.equal(settingsAfterRestart.status, 200);
+  const afterRestartPayload = JSON.parse(settingsAfterRestart.body) as { policy?: { action_mode?: string } };
+  assert.equal(afterRestartPayload.policy?.action_mode, 'manual_only');
+});
+
 test('chat message streaming persists user+assistant turn and supports exports/history', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

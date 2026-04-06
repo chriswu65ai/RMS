@@ -236,6 +236,7 @@ type ChatSettingsRow = {
 };
 
 type ChatPurgeRange = '24h' | '7d' | 'all';
+type CanonicalChatActionMode = 'assist' | 'confirm_required' | 'manual_only';
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -379,6 +380,48 @@ const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): 
 
 const DEFAULT_CHAT_USER_ID = 'local-user';
 const DEFAULT_CHAT_SETTINGS_POLICY = DEFAULT_CHAT_CONTEXT_POLICY;
+const DEFAULT_CHAT_ACTION_MODE: CanonicalChatActionMode = 'assist';
+const LEGACY_CHAT_ACTION_MODE_MAP: Record<string, CanonicalChatActionMode> = {
+  assist: 'assist',
+  act: 'confirm_required',
+  confirm: 'confirm_required',
+  require_confirm: 'confirm_required',
+  requires_confirm: 'confirm_required',
+  confirm_required: 'confirm_required',
+  manual: 'manual_only',
+  manual_only: 'manual_only',
+};
+
+const resolveChatActionMode = (rawMode: unknown): { mode: CanonicalChatActionMode; normalizedFrom: string | null; warningCode?: 'unknown_chat_action_mode' } => {
+  if (typeof rawMode !== 'string') return { mode: DEFAULT_CHAT_ACTION_MODE, normalizedFrom: null };
+  const normalizedInput = rawMode.trim().toLowerCase();
+  const mapped = LEGACY_CHAT_ACTION_MODE_MAP[normalizedInput];
+  if (mapped) {
+    return {
+      mode: mapped,
+      normalizedFrom: normalizedInput !== mapped ? normalizedInput : null,
+    };
+  }
+  return {
+    mode: DEFAULT_CHAT_ACTION_MODE,
+    normalizedFrom: normalizedInput || null,
+    warningCode: 'unknown_chat_action_mode',
+  };
+};
+
+const normalizeChatSettingsPolicy = (
+  policy: Record<string, unknown> | null | undefined,
+): { policy: Record<string, unknown>; actionMode: CanonicalChatActionMode; normalizedFrom: string | null; warningCode?: 'unknown_chat_action_mode' } => {
+  const nextPolicy = { ...(policy ?? {}) };
+  const resolved = resolveChatActionMode(nextPolicy.action_mode);
+  nextPolicy.action_mode = resolved.mode;
+  return {
+    policy: nextPolicy,
+    actionMode: resolved.mode,
+    normalizedFrom: resolved.normalizedFrom,
+    warningCode: resolved.warningCode,
+  };
+};
 
 const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
   const existing = queryJson<ChatSettingsRow>(`select * from chat_settings where user_id = ${sqlEscape(userId)} limit 1`)[0];
@@ -390,7 +433,7 @@ const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
     values (
       ${sqlEscape(id)},
       ${sqlEscape(userId)},
-      ${sqlEscape(JSON.stringify(DEFAULT_CHAT_SETTINGS_POLICY))},
+      ${sqlEscape(JSON.stringify({ ...DEFAULT_CHAT_SETTINGS_POLICY, action_mode: DEFAULT_CHAT_ACTION_MODE }))},
       null,
       ${sqlEscape(now)},
       ${sqlEscape(now)}
@@ -1584,6 +1627,17 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
       const settingsRow = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
       const policy = coerceChatContextPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
+      const normalizedPolicy = normalizeChatSettingsPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
+      const actionMode = normalizedPolicy.actionMode;
+      if (normalizedPolicy.warningCode) {
+        emitStructuredLog('chat.action_mode.warning', {
+          code: normalizedPolicy.warningCode,
+          raw_value: normalizedPolicy.normalizedFrom,
+          fallback_mode: actionMode,
+          session_id: session.id,
+          path: '/api/chat/session/current/messages',
+        });
+      }
       const profile = parseJsonOrNull<Record<string, unknown>>(settingsRow.profile_json);
       const snapshot = loadMemorySnapshot(session.id);
       const recentMessages = loadPaginatedChatMessages(session.id, policy.max_context_messages);
@@ -1639,7 +1693,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let toolNarrationAfter = '';
         let toolMetadata: Record<string, unknown> | null = null;
         let generationPrompt = contextPayload.prompt;
-        if (pendingToolDraft?.draft && explicitConfirm) {
+        if (pendingToolDraft?.draft && actionMode !== 'manual_only' && explicitConfirm) {
           const draftToolName = typeof pendingToolDraft.draft.tool_name === 'string' ? pendingToolDraft.draft.tool_name : '';
           const draftArguments = pendingToolDraft.draft.arguments && typeof pendingToolDraft.draft.arguments === 'object'
             ? { ...(pendingToolDraft.draft.arguments as Record<string, unknown>) }
@@ -1762,7 +1816,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               `Tool result JSON: ${JSON.stringify(outcome.result ?? {})}`,
             ].filter(Boolean).join('\n');
           }
-        } else if (supportsToolCalling(preferred, resolvedModel)) {
+        } else if (actionMode !== 'manual_only' && supportsToolCalling(preferred, resolvedModel)) {
           try {
             const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
             streamEvents.push(planningStart);
@@ -1787,6 +1841,70 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeNdjson(res, planFrame);
             const supportedCall = planning.toolCalls.find((call) => isSupportedChatTool(call.name));
             if (supportedCall) {
+            if (actionMode === 'confirm_required' && !explicitConfirm) {
+              const actionKey = `chat_tool:${supportedCall.name}`;
+              savePendingActionDraft(session.id, actionKey, {
+                tool_name: supportedCall.name,
+                arguments: supportedCall.arguments,
+                requires_explicit_confirm: true,
+              }, 'pending');
+              const confirmFrame = {
+                type: 'tool_call_result',
+                tool_call_id: supportedCall.id,
+                tool_name: supportedCall.name,
+                outcome: 'needs_confirmation',
+                narration_before: 'I prepared the action request.',
+                narration_after: 'Explicit confirmation is required in current mode. Reply with confirmation to execute.',
+              };
+              streamEvents.push(confirmFrame);
+              writeNdjson(res, confirmFrame);
+              const doneFrame = {
+                type: 'done',
+                outputText: 'I prepared the action request. Explicit confirmation is required in current mode. Reply with confirmation to execute.',
+                latencyMs: Date.now() - turnStartedAt,
+              };
+              streamEvents.push(doneFrame);
+              writeNdjson(res, doneFrame);
+              const persistedIds = persistChatTurnAtomic({
+                sessionId: session.id,
+                userContent: inputText,
+                assistantContent: doneFrame.outputText,
+                provider: preferred,
+                model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: {
+                  usage: null,
+                  costEstimate: null,
+                  completedAt: new Date().toISOString(),
+                  correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                  context: contextPayload.meta,
+                  tool: {
+                    tool_outcome: 'needs_confirmation',
+                    explicit_confirm: explicitConfirm,
+                    action_mode: actionMode,
+                  },
+                  metrics: {
+                    turn_latency_ms: Date.now() - turnStartedAt,
+                    tool_attempts: 0,
+                    tool_successes: 0,
+                    tool_failures: 0,
+                  },
+                },
+              });
+              emitStructuredLog('chat.turn.completed', {
+                correlation_id: turnCorrelationId,
+                session_id: session.id,
+                message_id: persistedIds.assistantMessageId,
+                turn_latency_ms: Date.now() - turnStartedAt,
+                stream_status: 'done',
+                tool_attempts: 0,
+                tool_successes: 0,
+                tool_failures: 0,
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
             toolCallsAttempted = 1;
             const startFrame = {
               type: 'tool_call_started',
@@ -2061,10 +2179,29 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'GET' && url === '/api/chat/settings') {
       const row = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+      const policyRecord = parseJsonOrNull<Record<string, unknown>>(row.policy_json);
+      const normalizedPolicy = normalizeChatSettingsPolicy(policyRecord);
+      if (normalizedPolicy.warningCode) {
+        emitStructuredLog('chat.action_mode.warning', {
+          code: normalizedPolicy.warningCode,
+          raw_value: normalizedPolicy.normalizedFrom,
+          fallback_mode: normalizedPolicy.actionMode,
+          path: '/api/chat/settings',
+        });
+      }
+      const policyJson = JSON.stringify(normalizedPolicy.policy);
+      if (policyJson !== row.policy_json) {
+        execSql(`
+          update chat_settings set
+            policy_json = ${sqlEscape(policyJson)},
+            updated_at = ${sqlEscape(new Date().toISOString())}
+          where id = ${sqlEscape(row.id)}
+        `);
+      }
       writeJson(res, 200, {
         id: row.id,
         user_id: row.user_id,
-        policy: parseJsonOrNull<Record<string, unknown>>(row.policy_json),
+        policy: normalizedPolicy.policy,
         profile: parseJsonOrNull<Record<string, unknown>>(row.profile_json),
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -2075,16 +2212,25 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'PUT' && url === '/api/chat/settings') {
       const payload = await readJsonBody(req);
       const existing = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
-      const policy = payload.policy && typeof payload.policy === 'object'
+      const rawPolicy = payload.policy && typeof payload.policy === 'object'
         ? payload.policy as Record<string, unknown>
         : parseJsonOrNull<Record<string, unknown>>(existing.policy_json) ?? DEFAULT_CHAT_SETTINGS_POLICY;
+      const normalizedPolicy = normalizeChatSettingsPolicy(rawPolicy);
+      if (normalizedPolicy.warningCode) {
+        emitStructuredLog('chat.action_mode.warning', {
+          code: normalizedPolicy.warningCode,
+          raw_value: normalizedPolicy.normalizedFrom,
+          fallback_mode: normalizedPolicy.actionMode,
+          path: '/api/chat/settings',
+        });
+      }
       const profile = payload.profile && typeof payload.profile === 'object'
         ? payload.profile as Record<string, unknown>
         : parseJsonOrNull<Record<string, unknown>>(existing.profile_json);
       const now = new Date().toISOString();
       execSql(`
         update chat_settings set
-          policy_json = ${sqlEscape(JSON.stringify(policy))},
+          policy_json = ${sqlEscape(JSON.stringify(normalizedPolicy.policy))},
           profile_json = ${sqlEscape(profile ? JSON.stringify(profile) : null)},
           updated_at = ${sqlEscape(now)}
         where id = ${sqlEscape(existing.id)}
