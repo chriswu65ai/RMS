@@ -1208,6 +1208,16 @@ const writeNdjson = (res: ServerResponse, payload: Record<string, unknown>) => {
   res.write(`${JSON.stringify(payload)}\n`);
 };
 
+const safeWriteNdjson = (res: ServerResponse, payload: Record<string, unknown>): boolean => {
+  if (res.destroyed || res.writableEnded) return false;
+  try {
+    res.write(`${JSON.stringify(payload)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const readRawBody = async (req: IncomingMessage): Promise<Buffer> => {
   const chunks: Uint8Array[] = [];
   for await (const chunk of req) {
@@ -2120,7 +2130,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         if (runtimeSettings.toolTraceVisibility === 'summary' && isTraceFrame) return;
         writeNdjson(res, frame);
       };
-      writeNdjson(res, {
+      safeWriteNdjson(res, {
         type: 'status',
         stage: 'started',
         correlation: { turn_id: turnCorrelationId, session_id: session.id },
@@ -2150,7 +2160,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           ].join(' ');
           const doneFrame = { type: 'done', outputText: helpText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
-          writeNdjson(res, doneFrame);
+          safeWriteNdjson(res, doneFrame);
           persistChatTurnAtomic({
             sessionId: session.id,
             userContent: inputText,
@@ -2173,7 +2183,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             : 'There are no pending action drafts to cancel.';
           const doneFrame = { type: 'done', outputText: cancelledText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
-          writeNdjson(res, doneFrame);
+          safeWriteNdjson(res, doneFrame);
           persistChatTurnAtomic({
             sessionId: session.id,
             userContent: inputText,
@@ -2191,7 +2201,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           const guidanceText = buildPrefixGuidanceMessage(commandPrefixMap);
           const doneFrame = { type: 'done', outputText: guidanceText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
-          writeNdjson(res, doneFrame);
+          safeWriteNdjson(res, doneFrame);
           persistChatTurnAtomic({
             sessionId: session.id,
             userContent: inputText,
@@ -2210,7 +2220,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           const expiredText = `Your pending draft expired after ${Math.floor(pendingActionTtlMs / 60000)} minutes and was cancelled. Please recreate the action draft, then confirm again.`;
           const doneFrame = { type: 'done', outputText: expiredText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
-          writeNdjson(res, doneFrame);
+          safeWriteNdjson(res, doneFrame);
           persistChatTurnAtomic({
             sessionId: session.id,
             userContent: inputText,
@@ -2257,7 +2267,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               latencyMs: Date.now() - turnStartedAt,
             };
             streamEvents.push(doneFrame);
-            writeNdjson(res, doneFrame);
+            safeWriteNdjson(res, doneFrame);
             persistChatTurnAtomic({
               sessionId: session.id,
               userContent: inputText,
@@ -2361,7 +2371,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
               streamEvents.push(doneFrame);
-              writeNdjson(res, doneFrame);
+              safeWriteNdjson(res, doneFrame);
               const persistedIds = persistChatTurnAtomic({
                 sessionId: session.id,
                 userContent: inputText,
@@ -2423,7 +2433,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeRuntimeFrame(routeFrame);
             const doneFrame = { type: 'done', outputText: clarificationText, latencyMs: Date.now() - turnStartedAt };
             streamEvents.push(doneFrame);
-            writeNdjson(res, doneFrame);
+            safeWriteNdjson(res, doneFrame);
             persistChatTurnAtomic({
               sessionId: session.id,
               userContent: inputText,
@@ -2513,7 +2523,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 latencyMs: Date.now() - turnStartedAt,
               };
               streamEvents.push(doneFrame);
-              writeNdjson(res, doneFrame);
+              safeWriteNdjson(res, doneFrame);
               const persistedIds = persistChatTurnAtomic({
                 sessionId: session.id,
                 userContent: inputText,
@@ -2610,7 +2620,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
               streamEvents.push(doneFrame);
-              writeNdjson(res, doneFrame);
+              safeWriteNdjson(res, doneFrame);
               const persistedIds = persistChatTurnAtomic({
                 sessionId: session.id,
                 userContent: inputText,
@@ -2685,7 +2695,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             assistantText += deltaText;
             const frame = { type: 'delta', deltaText };
             streamEvents.push(frame);
-            writeNdjson(res, frame);
+            safeWriteNdjson(res, frame);
           },
         });
         const generationCompletedFrame = {
@@ -2701,7 +2711,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           : assistantText;
         const doneFrame = { type: 'done', ...result, outputText: finalOutputText };
         streamEvents.push(doneFrame);
-        writeNdjson(res, doneFrame);
+        safeWriteNdjson(res, doneFrame);
         const persistedIds = persistChatTurnAtomic({
           sessionId: session.id,
           userContent: inputText,
@@ -2780,9 +2790,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           message,
         });
         if (res.headersSent) {
-          writeNdjson(res, generationFailedFrame);
-          writeNdjson(res, errorFrame);
-          res.end();
+          if (safeWriteNdjson(res, generationFailedFrame)) {
+            safeWriteNdjson(res, errorFrame);
+          }
+          if (!res.destroyed && !res.writableEnded) res.end();
         } else {
           writeJson(res, cancelled ? 499 : 400, { error: { message } });
         }
@@ -3483,7 +3494,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       let sourceCount = 0;
       let toolFailureReason: string | null = null;
       beginNdjson(res);
-      writeNdjson(res, { type: 'status', stage: 'started' });
+      safeWriteNdjson(res, { type: 'status', stage: 'started' });
       try {
         const preferredSources = await queryJsonAsync<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
         const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
@@ -3620,7 +3631,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           });
         }
         if (normalizedSources.length > 0) {
-          writeNdjson(res, { type: 'sources', sources: normalizedSources });
+          safeWriteNdjson(res, { type: 'sources', sources: normalizedSources });
         }
         const generationParams = buildProviderGenerationParams(provider, payload.generation_params, ollamaRuntime);
         const result = await invokeProviderGenerate(provider, {
@@ -3628,7 +3639,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           inputText: preparedInputText,
           generationParams,
         }, apiKey ?? '', controller.signal, {
-          onTextDelta: (deltaText) => writeNdjson(res, { type: 'delta', deltaText }),
+          onTextDelta: (deltaText) => {
+            safeWriteNdjson(res, { type: 'delta', deltaText });
+          },
         });
         const citationResult = await processResponseCitations({
           outputText: result.outputText,
@@ -3679,7 +3692,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         });
         webSearchMetadata.queryCount = queryCount;
         webSearchMetadata.sourceCount = sourceCount;
-        writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
+        safeWriteNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         emitStructuredLog('agent.generate.completed', {
           correlation_id: actionCorrelationId,
           action: 'generate',
@@ -3725,8 +3738,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           citation_events_json: null,
         });
         if (res.headersSent) {
-          writeNdjson(res, { type: 'error', message: cancelled ? 'Generation cancelled.' : errorMessage, aborted: cancelled });
-          res.end();
+          safeWriteNdjson(res, { type: 'error', message: cancelled ? 'Generation cancelled.' : errorMessage, aborted: cancelled });
+          if (!res.destroyed && !res.writableEnded) res.end();
         } else {
           writeJson(res, cancelled ? 499 : 400, { error: { message: cancelled ? 'Generation cancelled.' : errorMessage } });
         }
