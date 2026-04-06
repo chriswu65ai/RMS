@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useResearchStore } from '../../hooks/useResearchStore';
-import { buildCanonicalStockFileName } from '../../hooks/useResearchStore';
+import { buildCanonicalStockFileName, MARKDOWN_EXTENSION } from '../../hooks/useResearchStore';
 import type { ThinkingPhase, ThinkingStatus } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
@@ -1600,7 +1600,7 @@ export function EditorPane() {
           const nextTicker = ticker.trim().toUpperCase();
           const nextType = type.trim();
           if (!nextDate || !nextTicker || !nextType) return;
-          const nextName = buildCanonicalStockFileName(nextDate, nextTicker, nextType);
+          const nextName = `${buildCanonicalStockFileName(nextDate, nextTicker, nextType)}${MARKDOWN_EXTENSION}`;
           if (nextName === file.name) return;
           const folderPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
           const nextPath = folderPath ? `${folderPath}/${nextName}` : nextName;

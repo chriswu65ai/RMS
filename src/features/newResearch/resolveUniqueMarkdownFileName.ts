@@ -5,6 +5,8 @@ export type FileNameCollisionCandidate = {
 
 const MARKDOWN_EXTENSION = '.md';
 
+const normalizeMarkdownBaseName = (baseName: string) => baseName.replace(/\.md$/i, '');
+
 const buildMarkdownName = (baseName: string, suffix?: number) => (
   suffix === undefined
     ? `${baseName}${MARKDOWN_EXTENSION}`
@@ -12,10 +14,11 @@ const buildMarkdownName = (baseName: string, suffix?: number) => (
 );
 
 export const resolveUniqueMarkdownFileName = (
-  baseName: string,
+  baseNameOrFileName: string,
   files: FileNameCollisionCandidate[],
   folderId: string | null,
 ): string => {
+  const baseName = normalizeMarkdownBaseName(baseNameOrFileName);
   const namesInFolder = new Set(
     files
       .filter((file) => file.folder_id === folderId)

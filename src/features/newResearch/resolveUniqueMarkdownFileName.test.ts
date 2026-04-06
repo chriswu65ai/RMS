@@ -52,3 +52,20 @@ test('checks collisions only within the destination folder', () => {
 
   assert.equal(resolved, '2026-04-05 AAPL Research.md');
 });
+
+
+test('accepts canonical filename input and does not create double extensions', () => {
+  const resolved = resolveUniqueMarkdownFileName('2026-04-05 AAPL Research.md', [], 'folder-1');
+
+  assert.equal(resolved, '2026-04-05 AAPL Research.md');
+});
+
+test('suffixes canonical filename input with a single markdown extension', () => {
+  const resolved = resolveUniqueMarkdownFileName(
+    '2026-04-05 AAPL Research.md',
+    [{ name: '2026-04-05 AAPL Research.md', folder_id: 'folder-1' }],
+    'folder-1',
+  );
+
+  assert.equal(resolved, '2026-04-05 AAPL Research [1].md');
+});

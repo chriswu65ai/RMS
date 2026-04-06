@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Attachment, Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
 import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
-import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
+import { buildCanonicalStockFileName, MARKDOWN_EXTENSION, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -304,7 +304,8 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       if (!targetFolder) return setBoardError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
     }
 
-    const existing = files.find((file) => !file.is_template && file.name === `${baseName}.md` && file.folder_id === (targetFolder?.id ?? null));
+    const canonicalName = `${baseName}${MARKDOWN_EXTENSION}`;
+    const existing = files.find((file) => !file.is_template && file.name === canonicalName && file.folder_id === (targetFolder?.id ?? null));
 
     if (existing) {
       const linkedOwner = taskByLinkedFileId.get(existing.id);
@@ -314,7 +315,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       }
     }
     const name = resolveUniqueMarkdownFileName(
-      baseName,
+      canonicalName,
       files.filter((file) => !file.is_template),
       targetFolder?.id ?? null,
     );
