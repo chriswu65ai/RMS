@@ -1528,7 +1528,7 @@ test('agent generate returns protocol mismatch errors as failed with precise NDJ
   }
 });
 
-test('agent activity log writes persist to the sqlite database across API restarts', async () => {
+test('agent activity log writes are persisted to sqlite and remain readable after API restart', async () => {
   await callRoute('DELETE', '/api/agent/activity-log');
   const clearResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
   assert.equal(clearResponse.status, 200);
@@ -1554,16 +1554,19 @@ test('agent activity log writes persist to the sqlite database across API restar
   }
 
   const beforeRestart = await callRoute('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(beforeRestart.status, 200);
   const beforeRows = JSON.parse(beforeRestart.body) as Array<{ status: string }>;
-  assert.equal(beforeRows.some((entry) => entry.status === 'success'), true);
+  const successfulRowsBeforeRestart = beforeRows.filter((entry) => entry.status === 'success');
+  assert.equal(successfulRowsBeforeRestart.length > 0, true);
 
   const afterRestart = await callRouteAfterRestart('GET', '/api/agent/activity-log?limit=10');
   assert.equal(afterRestart.status, 200);
   const afterRows = JSON.parse(afterRestart.body) as Array<{ status: string }>;
-  assert.equal(afterRows.some((entry) => entry.status === 'success'), true);
+  const successfulRowsAfterRestart = afterRows.filter((entry) => entry.status === 'success');
+  assert.equal(successfulRowsAfterRestart.length > 0, true);
 });
 
-test('agent activity log clear endpoint deletes persisted DB rows and follow-up reads stay empty after restart', async () => {
+test('agent activity log clear endpoint deletes persisted sqlite rows and stays empty after restart', async () => {
   await callRoute('DELETE', '/api/agent/activity-log');
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',

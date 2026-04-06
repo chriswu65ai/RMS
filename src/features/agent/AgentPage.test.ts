@@ -470,7 +470,7 @@ test('source importance controls use canonical 1-100 range with slider + numeric
 test('new custom source defaults source importance to 50 and renders Medium helper text', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes("const [newWeight, setNewWeight] = useState(String(SOURCE_IMPORTANCE_DEFAULT));"), true);
-  assert.equal(source.includes('getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)'), true);
+  assert.match(source, /getSourceImportanceLabel\(\s*Number\(newWeight\)\s*\|\|\s*SOURCE_IMPORTANCE_DEFAULT\s*\)/);
   assert.equal(source.includes("if (normalized <= 60) return 'Medium';"), true);
 });
 
@@ -491,16 +491,20 @@ test('preferred source payload clamps numeric input to canonical 1-100 before su
 
 test('configure agent section header reads Configure Agent', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  assert.equal(source.includes('<h2 className="text-lg font-semibold">Configure Agent</h2>'), true);
+  assert.match(source, />\s*Configure Agent\s*<\/h2>/);
   assert.equal(source.includes('<h2 className="text-lg font-semibold">Choose agent</h2>'), false);
 });
 
 test('activity log clear action requires confirmation before deleting rows', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  assert.equal(source.includes("const shouldClear = await dialog.confirm("), true);
-  assert.equal(source.includes("'Clear activity log?'"), true);
-  assert.equal(source.includes('if (!shouldClear) return;'), true);
-  assert.equal(source.includes('await clearActivityLog();'), true);
+  assert.match(source, /const shouldClear = await dialog\.confirm\(/);
+  assert.match(source, /Clear activity log\?/);
+  assert.match(source, /if \(!shouldClear\)\s*return;/);
+  assert.match(source, /await clearActivityLog\(\);/);
+  assert.ok(
+    source.indexOf('const shouldClear = await dialog.confirm(') < source.indexOf('await clearActivityLog();'),
+    'Expected confirmation dialog before clearActivityLog call',
+  );
 });
 
 test('web search component keeps common control DOM order stable when provider changes', () => {

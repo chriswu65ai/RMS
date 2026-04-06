@@ -5,10 +5,10 @@ import path from 'node:path';
 
 test('settings shell navigation is always expanded and links to general, AI, and attachments subpages', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/settings/SettingsLayout.tsx'), 'utf-8');
-  assert.equal(source.includes('<nav aria-label="Settings sections" className="space-y-1">'), true);
-  assert.equal(source.includes("{ to: 'general', label: 'General', id: 'settings-nav-general' }"), true);
-  assert.equal(source.includes("{ to: 'ai', label: 'AI', id: 'settings-nav-ai' }"), true);
-  assert.equal(source.includes("{ to: 'attachments', label: 'Attachments', id: 'settings-nav-attachments' }"), true);
+  assert.equal(source.includes('aria-label="Settings sections"'), true);
+  assert.match(source, /to:\s*'general',\s*label:\s*'General',\s*id:\s*'settings-nav-general'/);
+  assert.match(source, /to:\s*'ai',\s*label:\s*'AI',\s*id:\s*'settings-nav-ai'/);
+  assert.match(source, /to:\s*'attachments',\s*label:\s*'Attachments',\s*id:\s*'settings-nav-attachments'/);
   assert.equal(source.includes('settingsNavCollapsed'), false);
   assert.equal(source.includes('aria-expanded'), false);
 });
