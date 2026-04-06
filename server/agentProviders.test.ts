@@ -267,3 +267,36 @@ test('minimax tool first turn forces structured web_search and retries once when
   assert.deepEqual(seenBodies[0]?.tool_choice, { type: 'function', function: { name: 'web_search' } });
   assert.match(String((seenBodies[1]?.messages as Array<{ content?: string }>)?.[0]?.content ?? ''), /Protocol repair/i);
 });
+
+test('minimax tool first turn coerces strict text-only json into web_search without retry', async () => {
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount += 1;
+    return jsonResponse(200, {
+      choices: [{
+        message: {
+          content: '{"name":"web_search","arguments":{"query":"amd guidance"}}',
+        },
+      }],
+    });
+  };
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.minimax.generateToolFirstTurn({ model: 'MiniMax-M2.5', inputText: 'Find latest', tools: [tool] }, 'test-key');
+  assert.equal(callCount, 1);
+  assert.equal(first.toolCalls.length, 1);
+  assert.equal(first.toolCalls[0]?.name, 'web_search');
+  assert.deepEqual(first.toolCalls[0]?.arguments, { query: 'amd guidance' });
+});
+
+test('openai tool first turn ignores malformed text-only pseudo tool output', async () => {
+  globalThis.fetch = async () => jsonResponse(200, {
+    choices: [{
+      message: {
+        content: '{"name":"web_search","arguments":{"query":""}}',
+      },
+    }],
+  });
+  const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
+  const first = await providerRegistry.openai.generateToolFirstTurn({ model: 'gpt-4.1', inputText: 'Find latest', tools: [tool] }, 'test-key');
+  assert.equal(first.toolCalls.length, 0);
+});
