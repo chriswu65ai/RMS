@@ -2140,6 +2140,63 @@ test('archiving a research task preserves activity events', async () => {
   assert.equal(eventsAfterArchive.some((event) => event.event_type === 'archive'), true);
 });
 
+test('research task create clears date_completed when status is not completed', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Normalize completion date',
+    ticker: 'ACME',
+    status: 'researching',
+    date_completed: '2026-01-01',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { status: string; date_completed: string };
+  assert.equal(createdTask.status, 'researching');
+  assert.equal(createdTask.date_completed, '');
+});
+
+test('research task create preserves provided date_completed when status is completed', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Keep completion date',
+    ticker: 'ACME',
+    status: 'completed',
+    date_completed: ' 2026-01-01 ',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { status: string; date_completed: string };
+  assert.equal(createdTask.status, 'completed');
+  assert.equal(createdTask.date_completed, '2026-01-01');
+});
+
+test('research task status transitions normalize date_completed correctly', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Status transition normalization',
+    ticker: 'ACME',
+    status: 'ideas',
+    date_completed: '2026-01-01',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string; status: string; date_completed: string };
+  assert.equal(createdTask.status, 'ideas');
+  assert.equal(createdTask.date_completed, '');
+
+  const completeResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'completed',
+    date_completed: ' 2026-02-02 ',
+  });
+  assert.equal(completeResponse.status, 200);
+  const completedTask = JSON.parse(completeResponse.body) as { status: string; date_completed: string };
+  assert.equal(completedTask.status, 'completed');
+  assert.equal(completedTask.date_completed, '2026-02-02');
+
+  const reopenResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'researching',
+    date_completed: '2026-03-03',
+  });
+  assert.equal(reopenResponse.status, 200);
+  const reopenedTask = JSON.parse(reopenResponse.body) as { status: string; date_completed: string };
+  assert.equal(reopenedTask.status, 'researching');
+  assert.equal(reopenedTask.date_completed, '');
+});
+
 test('deleting a research task also removes activity events', async () => {
   const createResponse = await callRoute('POST', '/api/research-tasks', {
     title: 'Delete me',

@@ -1447,11 +1447,29 @@ async function listWorkspaceDataAsync(workspaceId: string) {
 
 
 function normalizeTaskRow(row: NewResearchTaskRow) {
+  const normalizedStatus = row.status === 'ideas' || row.status === 'researching' || row.status === 'completed'
+    ? row.status
+    : 'ideas';
+  const normalizedDateCompleted = normalizedStatus === 'completed'
+    ? String(row.date_completed ?? '').trim()
+    : '';
   return {
     ...row,
+    status: normalizedStatus,
+    date_completed: normalizedDateCompleted,
     archived: Boolean(row.archived),
   };
 }
+
+const normalizeTaskStatus = (status: unknown, fallback: NewResearchTaskRow['status'] = 'ideas'): NewResearchTaskRow['status'] => {
+  if (status === 'ideas' || status === 'researching' || status === 'completed') return status;
+  return fallback;
+};
+
+const normalizeTaskDateCompleted = (dateCompleted: unknown, status: NewResearchTaskRow['status']) => {
+  if (status !== 'completed') return '';
+  return String(dateCompleted ?? '').trim();
+};
 
 const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic', 'ollama'];
 const isAgentProvider = (value: unknown): value is AgentProvider => typeof value === 'string' && VALID_PROVIDERS.includes(value as AgentProvider);
@@ -3908,10 +3926,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const priority = String(payload.priority ?? '').trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
+      const normalizedStatus = normalizeTaskStatus(payload.status);
+      const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed, normalizedStatus);
       const now = new Date().toISOString();
       const id = randomUUID();
       const noteType = String(payload.note_type ?? '').trim();
-      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(normalizedStatus)}, ${sqlEscape(normalizedDateCompleted)}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(id, 'create', 'Task created.');
       const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
       emitStructuredLog('task.create.outcome', {
@@ -3949,6 +3969,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
       const noteType = String(payload.note_type ?? existing.note_type).trim();
+      const normalizedStatus = normalizeTaskStatus(payload.status, normalizeTaskStatus(existing.status));
+      const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed ?? existing.date_completed, normalizedStatus);
       await execSqlAsync(`update new_research_tasks set
         title = ${sqlEscape(payload.title ?? existing.title)},
         details = ${sqlEscape(payload.details ?? existing.details)},
@@ -3957,8 +3979,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
         priority = ${sqlEscape(normalizedPriority)},
         deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
-        status = ${sqlEscape(payload.status ?? existing.status)},
-        date_completed = ${sqlEscape(payload.date_completed ?? existing.date_completed)},
+        status = ${sqlEscape(normalizedStatus)},
+        date_completed = ${sqlEscape(normalizedDateCompleted)},
         archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
         linked_note_file_id = ${sqlEscape(nextLinkedFile)},
         linked_note_path = ${sqlEscape(payload.linked_note_path ?? existing.linked_note_path)},
@@ -3973,9 +3995,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (noteType !== existing.note_type) changedFields.push('note type');
       if (normalizedPriority !== existing.priority) changedFields.push('priority');
       if (String(payload.deadline ?? existing.deadline) !== existing.deadline) changedFields.push('deadline');
-      if (String(payload.date_completed ?? existing.date_completed) !== existing.date_completed) changedFields.push('completion date');
+      if (normalizedDateCompleted !== existing.date_completed) changedFields.push('completion date');
 
-      const nextStatus = String(payload.status ?? existing.status);
+      const nextStatus = normalizedStatus;
       if (nextStatus !== existing.status) recordTaskEvent(taskId, 'status', `Status changed: ${existing.status} → ${nextStatus}.`);
       const nextAssignee = String(payload.assignee ?? existing.assignee);
       if (nextAssignee !== existing.assignee) recordTaskEvent(taskId, 'assignee', `Assignee changed: ${existing.assignee || '—'} → ${nextAssignee || '—'}.`);
