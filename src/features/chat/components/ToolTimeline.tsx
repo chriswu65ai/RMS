@@ -14,9 +14,9 @@ export function ToolTimeline({ traces }: { traces: ToolTraceEntry[] }) {
   if (traces.length === 0) return null;
 
   return (
-    <ol className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-white/70 p-3">
+    <ol className="mt-2 space-y-2 rounded-lg border border-slate-300 bg-slate-50 p-3">
       {traces.map((trace) => (
-        <li key={trace.id} className="rounded-md border border-slate-100 bg-white p-2">
+        <li key={trace.id} className="rounded-md border border-slate-200 bg-white p-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{trace.toolName}</span>
             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLE[trace.status]}`}>{trace.status}</span>
