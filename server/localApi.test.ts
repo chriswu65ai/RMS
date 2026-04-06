@@ -2395,7 +2395,7 @@ test('chat tool orchestration executes approved action and persists tool metadat
   }
 });
 
-test('chat tool orchestration resumes pending disambiguation when user replies with a numbered choice', async () => {
+test('chat tool orchestration keeps Tier C pending after disambiguation until structured confirmation is provided', async () => {
   await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
@@ -2460,10 +2460,27 @@ test('chat tool orchestration resumes pending disambiguation when user replies w
     assert.equal(secondResponse.status, 200);
     const secondFrames = secondResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
       type?: string;
+      outputText?: string;
+    });
+    const secondDone = secondFrames.find((frame) => frame.type === 'done');
+    assert.match(secondDone?.outputText ?? '', /Tier C.*\/confirm archive/i);
+
+    const tasksBeforeConfirm = await callRoute('GET', '/api/research-tasks');
+    assert.equal(tasksBeforeConfirm.status, 200);
+    const tasksBefore = JSON.parse(tasksBeforeConfirm.body) as Array<{ id: string; archived: boolean }>;
+    const pendingTask = tasksBefore.find((task) => !task.archived);
+    assert.equal(typeof pendingTask?.id, 'string');
+
+    const thirdResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: `/confirm archive ${pendingTask?.id}`,
+    });
+    assert.equal(thirdResponse.status, 200);
+    const thirdFrames = thirdResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
       outcome?: string;
       resumed_from_pending?: boolean;
     });
-    const resumedOutcome = secondFrames.find((frame) => frame.type === 'tool_call_result');
+    const resumedOutcome = thirdFrames.find((frame) => frame.type === 'tool_call_result');
     assert.equal(resumedOutcome?.resumed_from_pending, true);
     assert.equal(resumedOutcome?.outcome, 'executed');
 
@@ -2472,6 +2489,155 @@ test('chat tool orchestration resumes pending disambiguation when user replies w
     const tasks = JSON.parse(tasksResponse.body) as Array<{ ticker: string; title: string; archived: boolean }>;
     const archivedAaplCount = tasks.filter((task) => task.ticker === 'AAPL' && task.archived).length;
     assert.equal(archivedAaplCount >= 1, true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('Tier B pending actions accept /confirm and confirm', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const seeded = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'TSLA',
+    title: 'Tesla baseline',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  const seededTask = JSON.parse(seeded.body) as { id: string };
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-b-update',
+        name: 'update_task',
+        arguments: { task_id: seededTask.id, status: 'researching' },
+      }],
+    });
+    const first = await callRoute('POST', '/api/chat/session/current/messages', { content: 'update task status' });
+    const firstFrames = first.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(firstFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'needs_confirmation'), true);
+
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+    const confirmText = await callRoute('POST', '/api/chat/session/current/messages', { content: 'confirm' });
+    const confirmFrames = confirmText.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; resumed_from_pending?: boolean });
+    assert.equal(confirmFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
+
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-b-update-2',
+        name: 'update_task',
+        arguments: { task_id: seededTask.id, details: 'new details' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'update details please' });
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+    const slashConfirm = await callRoute('POST', '/api/chat/session/current/messages', { content: '/confirm' });
+    const slashFrames = slashConfirm.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; resumed_from_pending?: boolean });
+    assert.equal(slashFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('Tier C pending archive requires target-specific structured confirmation and handles malformed forms', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const seeded = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'ORCL',
+    title: 'Oracle archive candidate',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  const seededTask = JSON.parse(seeded.body) as { id: string };
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-c-archive',
+        name: 'archive_task',
+        arguments: { task_id: seededTask.id },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'archive this task' });
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+
+    const plain = await callRoute('POST', '/api/chat/session/current/messages', { content: '/confirm' });
+    assert.match(plain.body, /Tier C.*\/confirm archive/i);
+
+    const malformed = await callRoute('POST', '/api/chat/session/current/messages', { content: '/confirm archive' });
+    assert.match(malformed.body, /couldn't parse.*\/confirm archive/i);
+
+    const wrongTarget = await callRoute('POST', '/api/chat/session/current/messages', { content: '/confirm archive wrong-id' });
+    assert.match(wrongTarget.body, /target mismatch.*\/confirm archive/i);
+
+    const success = await callRoute('POST', '/api/chat/session/current/messages', { content: `/confirm archive ${seededTask.id}` });
+    const successFrames = success.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; resumed_from_pending?: boolean });
+    assert.equal(successFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('Tier C note overwrite requires /confirm overwrite <note_id>', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-c-overwrite',
+        name: 'generate_note',
+        arguments: { instruction: 'Overwrite note body', note_id: noteId },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'overwrite note please' });
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+
+    const plain = await callRoute('POST', '/api/chat/session/current/messages', { content: 'confirm' });
+    assert.match(plain.body, /Tier C.*\/confirm overwrite/i);
+
+    const success = await callRoute('POST', '/api/chat/session/current/messages', { content: `/confirm overwrite ${noteId}` });
+    const successFrames = success.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; resumed_from_pending?: boolean });
+    assert.equal(successFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
   } finally {
     providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
     providerRegistry.openai.generate = originalGenerate;
