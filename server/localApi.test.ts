@@ -560,6 +560,194 @@ test('generate prepends parsed attachment context under token cap', async () => 
   }
 });
 
+test('agent generate keeps attachment context in final provider input on web-search success path', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+  const multipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'ctx-success.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'ctx-success.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Attachment context success path', 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+
+  const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  assert.equal(credentialSave.status, 200);
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 3000,
+        fail_open_on_tool_error: true,
+        source_citation: false,
+      },
+    },
+  });
+
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  let capturedInput = '';
+  searchProviderRegistry.duckduckgo.search = async () => ([
+    { title: 'A', url: 'https://example.com/a', snippet: 'A', provider: 'duckduckgo' },
+  ]);
+  providerRegistry.openai.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    const response = await withOpenAiToolCalls(['latest ai news'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      note_id: noteId,
+      input_text: 'latest ai news',
+    }));
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /\[ATTACHMENT_CONTEXT_BEGIN\]/);
+    assert.match(capturedInput, /Attachment context success path/);
+    assert.match(capturedInput, /<tool_outputs>/);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate keeps attachment context in final provider input on fail-open path', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+  const multipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'ctx-fail-open.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'ctx-fail-open.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Attachment context fail open path', 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+
+  const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  assert.equal(credentialSave.status, 200);
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 3000,
+        fail_open_on_tool_error: true,
+        source_citation: false,
+      },
+    },
+  });
+
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  let capturedInput = '';
+  searchProviderRegistry.duckduckgo.search = async () => {
+    throw new Error('simulated failure');
+  };
+  providerRegistry.openai.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    const response = await withOpenAiToolCalls(['latest ai news'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      note_id: noteId,
+      input_text: 'latest ai news',
+    }));
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /\[ATTACHMENT_CONTEXT_BEGIN\]/);
+    assert.match(capturedInput, /Attachment context fail open path/);
+    assert.doesNotMatch(capturedInput, /<tool_outputs>/);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    assert.equal(frames.some((frame) => frame.type === 'search_warning'), true);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate keeps attachment context in final provider input on non-search path', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+  const multipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'ctx-non-search.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'ctx-non-search.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Attachment context non search path', 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+  const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+  assert.equal(credentialSave.status, 200);
+
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 3000,
+        fail_open_on_tool_error: true,
+        source_citation: false,
+      },
+    },
+  });
+
+  const originalGenerate = providerRegistry.openai.generate;
+  let capturedInput = '';
+  providerRegistry.openai.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      note_id: noteId,
+      input_text: 'Explain this concept briefly.',
+    });
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /\[ATTACHMENT_CONTEXT_BEGIN\]/);
+    assert.match(capturedInput, /Attachment context non search path/);
+    assert.doesNotMatch(capturedInput, /<tool_outputs>/);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    assert.equal(frames.some((frame) => frame.type === 'search_skipped'), true);
+  } finally {
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('non-ollama default model does not overwrite saved local_connection.model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
@@ -1749,7 +1937,7 @@ test('agent generate failed runs retain attempted tool counts after tool phase s
   }
 });
 
-test('agent generate includes citations only when explicitly requested in prompt', async () => {
+test('agent generate honors persisted source_citation setting regardless of prompt wording', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
   const receivedInputs: string[] = [];
@@ -1781,33 +1969,47 @@ test('agent generate includes citations only when explicitly requested in prompt
         },
       },
     });
-    const disabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
+    const enabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello',
     }));
-    assert.equal(disabledResponse.status, 200);
-    assert.doesNotMatch(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
-    const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+    assert.equal(enabledResponse.status, 200);
+    assert.match(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
+    const enabledFrames = enabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
       type?: string;
       outputText?: string;
       web_search?: { sourceCount?: number };
     });
-    const disabledDone = disabledFrames.find((frame) => frame.type === 'done');
-    assert.equal(disabledDone?.outputText, 'Summary body');
-    assert.equal((disabledDone?.web_search?.sourceCount ?? 0) > 0, true);
+    const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
+    assert.equal(enabledDone?.outputText, 'Summary body[lack citation]');
+    assert.equal((enabledDone?.web_search?.sourceCount ?? 0) > 0, true);
 
-    const enabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+          source_citation: false,
+        },
+      },
+    });
+
+    const disabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
       input_text: 'hello with citations',
     }));
-    assert.equal(enabledResponse.status, 200);
-    assert.match(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
-    const enabledFrames = enabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
-    const enabledDone = enabledFrames.find((frame) => frame.type === 'done');
-    assert.equal(enabledDone?.outputText, 'Summary body[lack citation]');
-    assert.doesNotMatch(enabledDone?.outputText ?? '', /snippet/i);
+    assert.equal(disabledResponse.status, 200);
+    assert.doesNotMatch(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
+    const disabledFrames = disabledResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const disabledDone = disabledFrames.find((frame) => frame.type === 'done');
+    assert.equal(disabledDone?.outputText, 'Summary body');
+    assert.doesNotMatch(disabledDone?.outputText ?? '', /snippet/i);
 
     assert.equal(receivedInputs.length >= 3, true);
     const retryInput = receivedInputs.at(-1) ?? '';
@@ -1820,8 +2022,8 @@ test('agent generate includes citations only when explicitly requested in prompt
       citation_events_json?: string | null;
       web_search_enabled: number;
     }>;
-    const latestEnabled = activity[0];
-    const latestDisabled = activity[1];
+    const latestDisabled = activity[0];
+    const latestEnabled = activity[1];
     assert.equal(latestEnabled?.web_search_enabled, 1);
     assert.equal(latestDisabled?.web_search_enabled, 1);
     assert.equal(typeof latestEnabled?.citation_events_json, 'string');

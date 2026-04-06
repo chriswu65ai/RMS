@@ -17,7 +17,7 @@ import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { processResponseCitations } from './response/citation_pipeline';
-import { decideWebSearchRouting, shouldRenderCitationsForChatPrompt } from './chatRoutingHeuristics';
+import { decideWebSearchRouting } from './chatRoutingHeuristics';
 import {
   normalizeChatSettingsPolicy,
   resolveChatRuntimeSettings,
@@ -3373,7 +3373,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           sourceCount,
         };
         let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
-        let preparedInputText = inputText;
+        const userInputBlock = inputText;
+        let attachmentContextBlock = '';
+        let toolOutputsBlock = '';
+        const buildPreparedInputText = () => [attachmentContextBlock, toolOutputsBlock, userInputBlock]
+          .filter((block) => block.trim().length > 0)
+          .join('\n\n');
+        let preparedInputText = buildPreparedInputText();
         const attachmentCandidateIds = new Set<string>(explicitAttachmentIds);
         if (contextTaskId) {
           const task = queryJson<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(`select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`)[0];
@@ -3403,16 +3409,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             contextLines.push(nextChunk);
           });
           contextLines.push('[ATTACHMENT_CONTEXT_END]');
-          if (contextLines.length > 2) {
-            preparedInputText = `${contextLines.join('\n\n')}\n\n${inputText}`;
-          }
+          if (contextLines.length > 2) attachmentContextBlock = contextLines.join('\n\n');
         }
+        preparedInputText = buildPreparedInputText();
         let searchWarningMessage: string | null = null;
         const routingDecision = decideWebSearchRouting(inputText);
-        const citationRequested = shouldRenderCitationsForChatPrompt(inputText);
         const effectiveWebSearchConfig = {
           ...normalizedWebSearchConfig,
-          source_citation: citationRequested,
         };
         if (normalizedWebSearchConfig.enabled && routingDecision.shouldSearch) {
           try {
@@ -3446,14 +3449,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             toolFailureReason = orchestration.toolFailureReason;
             webSearchMetadata.queryCount = queryCount;
             webSearchMetadata.sourceCount = sourceCount;
-            preparedInputText = orchestration.consumedInputText;
+            toolOutputsBlock = orchestration.toolOutputsBlock;
+            preparedInputText = buildPreparedInputText();
           } catch (error) {
             const reason = error instanceof Error ? error.message : 'Web search tool orchestration failed.';
             searchWarningMessage = reason;
             toolFailureReason = reason;
             writeNdjson(res, { type: 'search_warning', message: reason, fail_open: effectiveWebSearchConfig.fail_open_on_tool_error });
             if (effectiveWebSearchConfig.fail_open_on_tool_error) {
-              preparedInputText = inputText;
+              toolOutputsBlock = '';
+              preparedInputText = buildPreparedInputText();
             } else {
               throw error;
             }
@@ -3488,8 +3493,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const citationResult = await processResponseCitations({
           outputText: result.outputText,
           sources: normalizedSources,
-          sourceCitationEnabled: citationRequested && normalizedSources.length > 0,
-          retryCanonicalize: citationRequested && normalizedSources.length > 0
+          sourceCitationEnabled: effectiveWebSearchConfig.source_citation && normalizedSources.length > 0,
+          retryCanonicalize: effectiveWebSearchConfig.source_citation && normalizedSources.length > 0
             ? async () => {
               const retryPass = await invokeProviderGenerate(provider, {
                 model: resolvedModel,
