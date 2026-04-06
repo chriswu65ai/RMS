@@ -16,7 +16,7 @@ import { normalizeFolderPathSegments } from '../../lib/folderPathSegments';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
-import { applyTickerChangeToTask, findTickerFolderForTicker, resolveDestinationPreviewForTask, type DestinationPreview } from './destinationLogic';
+import { applyTickerChangeToTask, resolveDestinationPreviewForTask, type DestinationPreview } from './destinationLogic';
 import { validateAndNormalizeTaskContractPayload, formatInvalidTaskNoteTypeMessage, formatMissingRequiredTaskFieldsMessage } from '../../../shared/taskValidation';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
