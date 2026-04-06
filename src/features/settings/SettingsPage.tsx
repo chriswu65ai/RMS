@@ -60,10 +60,16 @@ export function SettingsPage() {
     }
   }, []);
 
-  const saveAttachmentPreferences = async () => {
+  const saveAttachmentPreferences = async (nextPreferences?: { quota_mb?: number; retention_days?: number }) => {
+    const preferencesToSave = {
+      quota_mb: nextPreferences?.quota_mb ?? attachmentQuotaMb,
+      retention_days: nextPreferences?.retention_days ?? attachmentRetentionDays,
+    };
+    setAttachmentQuotaMb(preferencesToSave.quota_mb);
+    setAttachmentRetentionDays(preferencesToSave.retention_days);
     setAttachmentSaveStatus('saving');
     await runUiAsync(
-      () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
+      () => saveAttachmentSettings(preferencesToSave),
       {
         fallbackMessage: 'Failed to save attachment settings.',
         onSuccess: (updated) => {
@@ -239,11 +245,11 @@ export function SettingsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Total storage quota (MB)</span>
-                <input className="input" type="number" min={50} value={attachmentQuotaMb} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={saveAttachmentPreferences} />
+                <input className="input" type="number" min={50} value={attachmentQuotaMb} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={() => void saveAttachmentPreferences({ quota_mb: attachmentQuotaMb })} />
               </label>
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Retention days</span>
-                <input className="input" type="number" min={1} value={attachmentRetentionDays} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={saveAttachmentPreferences} />
+                <input className="input" type="number" min={1} value={attachmentRetentionDays} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={() => void saveAttachmentPreferences({ retention_days: attachmentRetentionDays })} />
               </label>
             </div>
             {attachmentsLoading ? (
