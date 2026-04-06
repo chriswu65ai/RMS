@@ -512,6 +512,56 @@ test('web search component keeps common control DOM order stable when provider c
   assert.equal(searxngHtml.includes('HTML instead of JSON API'), true);
 });
 
+test('web search component validation feedback is announced as assertive alert', () => {
+  const html = renderToStaticMarkup(createElement(WebSearchControls, {
+    webSearchEnabled: true,
+    setWebSearchEnabled: noop,
+    webSearchProvider: 'searxng',
+    setWebSearchProvider: noop,
+    webSearchMode: 'single',
+    setWebSearchMode: noop,
+    webSearchModeHelperText: 'helper',
+    applyModeRecommendedPreset: noop,
+    webSearchMaxResults: '5',
+    setWebSearchMaxResults: noop,
+    setWebSearchMaxResultsOverridden: noop,
+    webSearchTimeoutSeconds: '8',
+    setWebSearchTimeoutSeconds: noop,
+    setWebSearchTimeoutOverridden: noop,
+    webSearchRecency: 'any',
+    setWebSearchRecency: noop,
+    webSearchDomainPolicy: 'open_web',
+    setWebSearchDomainPolicy: noop,
+    domainPolicyHelperText: 'domain helper',
+    webSearchSafeSearch: true,
+    setWebSearchSafeSearch: noop,
+    webSearchSourceCitation: true,
+    setWebSearchSourceCitation: noop,
+    webSearchProviderCapabilities: WEB_SEARCH_PROVIDER_CAPABILITIES.searxng,
+    webSearchSearxngBaseUrl: 'invalid',
+    setWebSearchSearxngBaseUrl: noop,
+    searxngBaseUrlValidationError: 'SearXNG base URL must be a valid URL.',
+    webSearchSearxngUseHtmlMode: false,
+    setWebSearchSearxngUseHtmlMode: noop,
+    setWebSearchStatusMessage: noop,
+  }));
+
+  assert.equal(html.includes('role="alert"'), true);
+  assert.equal(html.includes('aria-live="assertive"'), true);
+});
+
+test('AgentPage save feedback regions use status for success and alert for validation or errors', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+
+  assert.equal(source.includes('role="status" aria-live="polite" className="mt-2 text-xs text-emerald-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="mt-2 text-xs text-rose-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="text-xs text-rose-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="text-xs text-rose-600"'), true);
+  assert.equal(source.includes("role={chatSettingsMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}"), true);
+  assert.equal(source.includes("role={webSearchStatusMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}"), true);
+  assert.equal(source.includes("role={preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'alert' : 'status'}"), true);
+});
+
 test('AgentPage web search UI includes recommended action, timeout seconds label, helper copy, and provider capability notices', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Use recommended'), true);

@@ -304,7 +304,9 @@ export function WebSearchControls({
                     setWebSearchSearxngBaseUrl(normalized);
                   }}
                 />
-                {searxngBaseUrlValidationError ? <p className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p> : null}
+                {searxngBaseUrlValidationError
+                  ? <p role="alert" aria-live="assertive" className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p>
+                  : null}
               </label>
               <label className={`${CHECKBOX_WITH_LABEL_CLASS} md:mt-7`}>
                 <input
@@ -868,9 +870,17 @@ export function AgentPage() {
               </ul>
             </div>
             <div className="mt-2 min-h-[1.25rem]">
-              {chatSettingsValidationError ? <p className="text-xs text-rose-700">{chatSettingsValidationError}</p> : null}
+              {chatSettingsValidationError ? <p role="alert" aria-live="assertive" className="text-xs text-rose-700">{chatSettingsValidationError}</p> : null}
               {!chatSettingsValidationError && chatSettingsMessage
-                ? <p className={`text-xs ${chatSettingsMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}>{chatSettingsMessage}</p>
+                ? (
+                  <p
+                    role={chatSettingsMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}
+                    aria-live={chatSettingsMessage.toLowerCase().includes('saved') ? 'polite' : 'assertive'}
+                    className={`text-xs ${chatSettingsMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}
+                  >
+                    {chatSettingsMessage}
+                  </p>
+                )
                 : null}
             </div>
             <div className="mt-3">
@@ -951,7 +961,15 @@ export function AgentPage() {
             />
             <div className="mt-2 min-h-[1.25rem]">
               {webSearchStatusMessage
-                ? <p className={`text-xs ${webSearchStatusMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}>{webSearchStatusMessage}</p>
+                ? (
+                  <p
+                    role={webSearchStatusMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}
+                    aria-live={webSearchStatusMessage.toLowerCase().includes('saved') ? 'polite' : 'assertive'}
+                    className={`text-xs ${webSearchStatusMessage.toLowerCase().includes('saved') ? 'text-emerald-700' : 'text-rose-700'}`}
+                  >
+                    {webSearchStatusMessage}
+                  </p>
+                )
                 : null}
             </div>
             <div className="mt-3">
@@ -1044,7 +1062,7 @@ export function AgentPage() {
                     setDomainInputError('');
                   }}
                 />
-                {domainInputError ? <p className="text-xs text-rose-600">{domainInputError}</p> : null}
+                {domainInputError ? <p role="alert" aria-live="assertive" className="text-xs text-rose-600">{domainInputError}</p> : null}
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Source importance</span>
@@ -1200,7 +1218,13 @@ export function AgentPage() {
               </table>
             </div>
             {preferredSourcesMessage ? (
-              <p className={`text-xs ${preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'text-rose-700' : 'text-emerald-700'}`}>{preferredSourcesMessage}</p>
+              <p
+                role={preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'alert' : 'status'}
+                aria-live={preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'assertive' : 'polite'}
+                className={`text-xs ${preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'text-rose-700' : 'text-emerald-700'}`}
+              >
+                {preferredSourcesMessage}
+              </p>
             ) : null}
           </div>
         </section>
@@ -1275,7 +1299,7 @@ export function AgentPage() {
                 {localBaseUrl.trim() === LOCAL_BASE_URL_DEFAULT && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                   ? <p className="text-xs text-amber-700">If Ollama runs on host, use http://host.docker.internal:11434.</p>
                   : null}
-                {localBaseUrlValidationError ? <p className="text-xs text-rose-600">{localBaseUrlValidationError}</p> : null}
+                {localBaseUrlValidationError ? <p role="alert" aria-live="assertive" className="text-xs text-rose-600">{localBaseUrlValidationError}</p> : null}
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Installed model</span>
@@ -1308,8 +1332,8 @@ export function AgentPage() {
             </div>
             <p className="mt-2 text-xs text-slate-600">Active Ollama runtime: <span className="font-medium">{savedLocalRuntime.baseUrl || LOCAL_BASE_URL_DEFAULT}</span> / <span className="font-medium">{savedLocalRuntime.model || 'not configured'}</span></p>
             {hasUnsavedLocalChanges ? <p className="mt-2 text-xs text-amber-700">Unsaved local runtime changes.</p> : null}
-            {!hasUnsavedLocalChanges && localSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{localSaveMessage}</p> : null}
-            {localRuntimeFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{localRuntimeFeedbackMessage}</p> : null}
+            {!hasUnsavedLocalChanges && localSaveMessage ? <p role="status" aria-live="polite" className="mt-2 text-xs text-emerald-700">{localSaveMessage}</p> : null}
+            {localRuntimeFeedbackMessage ? <p role="alert" aria-live="assertive" className="mt-2 text-xs text-rose-700">{localRuntimeFeedbackMessage}</p> : null}
             <div className="mt-3 flex gap-2">
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
