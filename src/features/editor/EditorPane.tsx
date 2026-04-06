@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { MarkdownPreview } from '../../components/MarkdownPreview';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { buildCanonicalStockFileName } from '../../hooks/useResearchStore';
+import type { ThinkingPhase, ThinkingStatus } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel, NewResearchTask } from '../../types/models';
@@ -22,17 +23,9 @@ import { reconcileDraftFrontmatterWithSaved } from '../files/effectiveNoteState'
 import { runUiAsync } from '../../lib/uiAsync';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
-type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
 const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
-const THINKING_EVENT_HISTORY_LIMIT = 50;
 const STREAM_UI_THROTTLE_MS = 150;
-type ThinkingPhase = 'waiting' | 'reasoning' | 'tool_running' | 'tool_completed' | 'tool_failed';
-type ThinkingFeedEvent = {
-  id: string;
-  text: string;
-  type: ThinkingEvent['type'];
-};
 
 
 type ThinkingStatusUi = {
@@ -263,6 +256,24 @@ export function EditorPane() {
     clearGenerateJob,
     startGenerate,
     cancelGenerate: cancelGenerateByFileId,
+    generatedSourcesByFileId,
+    sourcesBubbleClosedByFileId,
+    thinkingEventsByFileId,
+    thinkingBubbleClosedByFileId,
+    thinkingStatusByFileId,
+    thinkingPhaseByFileId,
+    thinkingAttemptByFileId,
+    thinkingMaxAttemptsByFileId,
+    thinkingStartedAtByFileId,
+    resetGenerateTransientStateForFile,
+    mergeIncomingSourcesForFile,
+    appendThinkingEventsForFile,
+    setSourcesBubbleClosedForFile,
+    setThinkingBubbleClosedForFile,
+    setThinkingMetadataForFile,
+    markThinkingCompletedForFile,
+    markThinkingCancelledForFile,
+    markThinkingFailedForFile,
   } = useResearchStore();
   const navigate = useNavigate();
   const dialog = useDialog();
@@ -280,15 +291,6 @@ export function EditorPane() {
   const [defaultProvider, setDefaultProvider] = useState<AgentProvider>('minimax');
   const [defaultModel, setDefaultModel] = useState('');
   const [showGeneratedDraftNotice, setShowGeneratedDraftNotice] = useState(false);
-  const [generatedSourcesByFileId, setGeneratedSourcesByFileId] = useState<Record<string, StreamSource[]>>({});
-  const [sourcesBubbleClosedByFileId, setSourcesBubbleClosedByFileId] = useState<Record<string, boolean>>({});
-  const [thinkingEventsByFileId, setThinkingEventsByFileId] = useState<Record<string, ThinkingFeedEvent[]>>({});
-  const [thinkingBubbleClosedByFileId, setThinkingBubbleClosedByFileId] = useState<Record<string, boolean>>({});
-  const [thinkingStatusByFileId, setThinkingStatusByFileId] = useState<Record<string, ThinkingStatus>>({});
-  const [thinkingPhaseByFileId, setThinkingPhaseByFileId] = useState<Record<string, ThinkingPhase>>({});
-  const [thinkingAttemptByFileId, setThinkingAttemptByFileId] = useState<Record<string, number | undefined>>({});
-  const [thinkingMaxAttemptsByFileId, setThinkingMaxAttemptsByFileId] = useState<Record<string, number | undefined>>({});
-  const [thinkingStartedAtByFileId, setThinkingStartedAtByFileId] = useState<Record<string, number | undefined>>({});
   const [thinkingClockTick, setThinkingClockTick] = useState(0);
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const [canUndoByFileId, setCanUndoByFileId] = useState<Record<string, boolean>>({});
@@ -1021,15 +1023,7 @@ export function EditorPane() {
     preGenerateVisibleTextByFileIdRef.current[targetFileId] = preGenerateVisibleText;
     pendingHistoryBaselineByFileIdRef.current[targetFileId] = null;
     clearThinkingCloseTimer(targetFileId);
-    setGeneratedSourcesByFileId((current) => ({ ...current, [file.id]: [] }));
-    setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
-    setThinkingEventsByFileId((current) => ({ ...current, [file.id]: [] }));
-    setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: false }));
-    setThinkingStatusByFileId((current) => ({ ...current, [file.id]: 'running' }));
-    setThinkingPhaseByFileId((current) => ({ ...current, [file.id]: 'waiting' }));
-    setThinkingAttemptByFileId((current) => ({ ...current, [file.id]: undefined }));
-    setThinkingMaxAttemptsByFileId((current) => ({ ...current, [file.id]: undefined }));
-    setThinkingStartedAtByFileId((current) => ({ ...current, [file.id]: Date.now() }));
+    resetGenerateTransientStateForFile(file.id);
     setSearchWarningMessage(null);
     streamPreviewControllerRef.current?.cancel();
     streamPreviewControllerRef.current = null;
@@ -1163,11 +1157,8 @@ export function EditorPane() {
           streamPreviewController.onChunk(nextOutputText);
         },
         onSources: (sources) => {
-          setGeneratedSourcesByFileId((current) => ({
-            ...current,
-            [targetFileId]: mergeSourcesForBubble(current[targetFileId] ?? [], sources),
-          }));
-          setSourcesBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: false }));
+          mergeIncomingSourcesForFile(targetFileId, sources);
+          setSourcesBubbleClosedForFile(targetFileId, false);
         },
         onSearchWarning: (message) => {
           setSearchWarningMessage(message);
@@ -1175,34 +1166,25 @@ export function EditorPane() {
         onThinkingEvent: (event) => {
           const normalized = normalizeThinkingEvent(event);
           const { attempt, maxAttempts } = extractAttemptData(event);
-          setThinkingPhaseByFileId((current) => ({ ...current, [targetFileId]: deriveThinkingPhase(event.type) }));
+          setThinkingMetadataForFile(targetFileId, { phase: deriveThinkingPhase(event.type) });
           if (typeof attempt === 'number') {
-            setThinkingAttemptByFileId((current) => ({ ...current, [targetFileId]: attempt }));
+            setThinkingMetadataForFile(targetFileId, { attempt });
           }
           if (typeof maxAttempts === 'number') {
-            setThinkingMaxAttemptsByFileId((current) => ({ ...current, [targetFileId]: maxAttempts }));
+            setThinkingMetadataForFile(targetFileId, { maxAttempts });
           }
           if (!normalized) return;
-          setThinkingEventsByFileId((current) => {
-            const existing = current[targetFileId] ?? [];
-            return {
-              ...current,
-              [targetFileId]: [
-                ...existing,
-                { id: `${Date.now()}-${existing.length}-${event.type}`, text: normalized, type: event.type },
-              ].slice(-THINKING_EVENT_HISTORY_LIMIT),
-            };
-          });
+          appendThinkingEventsForFile(targetFileId, [{ id: `${Date.now()}-${event.type}`, text: normalized, type: event.type }]);
         },
       });
       streamPreviewController.complete(outputText);
       clearStreamRuntime();
       await finalizeGeneratedOutput(outputText);
       const generatedDraft = getDraft(targetFileId);
-      setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'completed' }));
+      markThinkingCompletedForFile(targetFileId);
       clearThinkingCloseTimer(targetFileId);
       thinkingCloseTimerByFileIdRef.current[targetFileId] = window.setTimeout(() => {
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
+        setThinkingBubbleClosedForFile(targetFileId, true);
       }, THINKING_SUCCESS_AUTO_CLOSE_MS);
       if (generatedDraft && selectedFileIdRef.current === targetFileId) {
         setFrontmatter(generatedDraft.frontmatter);
@@ -1230,9 +1212,9 @@ export function EditorPane() {
             updatedAt: Date.now(),
           });
         }
-        setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'cancelled' }));
+        markThinkingCancelledForFile(targetFileId);
         clearThinkingCloseTimer(targetFileId);
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: true }));
+        setThinkingBubbleClosedForFile(targetFileId, true);
         await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');
       } else {
         const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
@@ -1250,9 +1232,9 @@ export function EditorPane() {
             updatedAt: Date.now(),
           });
         }
-        setThinkingStatusByFileId((current) => ({ ...current, [targetFileId]: 'failed' }));
+        markThinkingFailedForFile(targetFileId);
         clearThinkingCloseTimer(targetFileId);
-        setThinkingBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: false }));
+        setThinkingBubbleClosedForFile(targetFileId, false);
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
@@ -1356,7 +1338,7 @@ export function EditorPane() {
                   title="Close thinking"
                   onClick={() => {
                     clearThinkingCloseTimer(file.id);
-                    setThinkingBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }));
+                    setThinkingBubbleClosedForFile(file.id, true);
                   }}
                 >
                   <X size={12} />
@@ -1390,7 +1372,7 @@ export function EditorPane() {
                   className="rounded border border-slate-300 p-0.5 text-slate-500 transition-colors hover:text-slate-700"
                   aria-label="Close sources"
                   title="Close sources"
-                  onClick={() => setSourcesBubbleClosedByFileId((current) => ({ ...current, [file.id]: true }))}
+                  onClick={() => setSourcesBubbleClosedForFile(file.id, true)}
                 >
                   <X size={12} />
                 </button>
