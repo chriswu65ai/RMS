@@ -1152,7 +1152,8 @@ const ensureInitialized = () => {
     tool_calls_succeeded integer not null default 0,
     search_query_count integer not null default 0,
     source_count integer not null default 0,
-    tool_failure_reason text
+    tool_failure_reason text,
+    citation_events_json text
   );
   create table if not exists attachments (
     id text primary key,
@@ -1264,6 +1265,9 @@ const ensureInitialized = () => {
   } catch {}
   try {
     execSql(`alter table agent_activity_log add column tool_failure_reason text;`);
+  } catch {}
+  try {
+    execSql(`alter table agent_activity_log add column citation_events_json text;`);
   } catch {}
   try {
     execSql(`alter table new_research_tasks add column note_type text not null default '';`);
@@ -1545,9 +1549,6 @@ const PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_TOOL_FIRST_TURN_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_TOOL_FOLLOWUP_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_MODEL_LIST_MS_DEFAULT = 15_000;
-const AGENT_ACTIVITY_BUFFER_MAX = 1000;
-const agentActivityBuffer: AgentActivityLogRow[] = [];
-
 const isWebSearchProvider = (value: unknown): value is WebSearchProvider => value === 'duckduckgo' || value === 'searxng';
 const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
@@ -2345,14 +2346,117 @@ const getAgentSettingsAsync = async () => {
 };
 
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
-  agentActivityBuffer.push({ id: randomUUID(), ...entry });
-  if (agentActivityBuffer.length > AGENT_ACTIVITY_BUFFER_MAX) {
-    agentActivityBuffer.splice(0, agentActivityBuffer.length - AGENT_ACTIVITY_BUFFER_MAX);
-  }
+  const id = randomUUID();
+  execSql(`
+    insert into agent_activity_log (
+      id,
+      timestamp,
+      note_id,
+      action,
+      trigger_source,
+      initiated_by,
+      provider,
+      model,
+      status,
+      duration_ms,
+      input_chars,
+      output_chars,
+      token_estimate,
+      cost_estimate_usd,
+      error_message_short,
+      search_warning,
+      search_warning_message,
+      web_search_enabled,
+      tool_calls_attempted,
+      tool_calls_succeeded,
+      search_query_count,
+      source_count,
+      tool_failure_reason,
+      citation_events_json
+    ) values (
+      ${sqlEscape(id)},
+      ${sqlEscape(entry.timestamp)},
+      ${sqlEscape(entry.note_id)},
+      ${sqlEscape(entry.action)},
+      ${sqlEscape(entry.trigger_source)},
+      ${sqlEscape(entry.initiated_by)},
+      ${sqlEscape(entry.provider)},
+      ${sqlEscape(entry.model)},
+      ${sqlEscape(entry.status)},
+      ${sqlEscape(entry.duration_ms)},
+      ${sqlEscape(entry.input_chars)},
+      ${sqlEscape(entry.output_chars)},
+      ${sqlEscape(entry.token_estimate)},
+      ${sqlEscape(entry.cost_estimate_usd)},
+      ${sqlEscape(entry.error_message_short)},
+      ${sqlEscape(entry.search_warning)},
+      ${sqlEscape(entry.search_warning_message)},
+      ${sqlEscape(entry.web_search_enabled)},
+      ${sqlEscape(entry.tool_calls_attempted)},
+      ${sqlEscape(entry.tool_calls_succeeded)},
+      ${sqlEscape(entry.search_query_count)},
+      ${sqlEscape(entry.source_count)},
+      ${sqlEscape(entry.tool_failure_reason)},
+      ${sqlEscape(entry.citation_events_json)}
+    )
+  `);
 };
 
 const appendAgentActivityLogAsync = async (entry: Omit<AgentActivityLogRow, 'id'>) => {
-  appendAgentActivityLog(entry);
+  const id = randomUUID();
+  await execSqlAsync(`
+    insert into agent_activity_log (
+      id,
+      timestamp,
+      note_id,
+      action,
+      trigger_source,
+      initiated_by,
+      provider,
+      model,
+      status,
+      duration_ms,
+      input_chars,
+      output_chars,
+      token_estimate,
+      cost_estimate_usd,
+      error_message_short,
+      search_warning,
+      search_warning_message,
+      web_search_enabled,
+      tool_calls_attempted,
+      tool_calls_succeeded,
+      search_query_count,
+      source_count,
+      tool_failure_reason,
+      citation_events_json
+    ) values (
+      ${sqlEscape(id)},
+      ${sqlEscape(entry.timestamp)},
+      ${sqlEscape(entry.note_id)},
+      ${sqlEscape(entry.action)},
+      ${sqlEscape(entry.trigger_source)},
+      ${sqlEscape(entry.initiated_by)},
+      ${sqlEscape(entry.provider)},
+      ${sqlEscape(entry.model)},
+      ${sqlEscape(entry.status)},
+      ${sqlEscape(entry.duration_ms)},
+      ${sqlEscape(entry.input_chars)},
+      ${sqlEscape(entry.output_chars)},
+      ${sqlEscape(entry.token_estimate)},
+      ${sqlEscape(entry.cost_estimate_usd)},
+      ${sqlEscape(entry.error_message_short)},
+      ${sqlEscape(entry.search_warning)},
+      ${sqlEscape(entry.search_warning_message)},
+      ${sqlEscape(entry.web_search_enabled)},
+      ${sqlEscape(entry.tool_calls_attempted)},
+      ${sqlEscape(entry.tool_calls_succeeded)},
+      ${sqlEscape(entry.search_query_count)},
+      ${sqlEscape(entry.source_count)},
+      ${sqlEscape(entry.tool_failure_reason)},
+      ${sqlEscape(entry.citation_events_json)}
+    )
+  `);
 };
 
 const getAttachmentSettings = () => {
@@ -3924,7 +4028,36 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'GET' && url.startsWith('/api/agent/activity-log')) {
       const parsedUrl = new URL(url, 'http://localhost');
       const limit = Math.min(50, Math.max(1, Number.parseInt(parsedUrl.searchParams.get('limit') ?? '10', 10) || 10));
-      const rows = agentActivityBuffer.slice(-limit).reverse();
+      const rows = queryJson<AgentActivityLogRow>(`
+        select
+          id,
+          timestamp,
+          note_id,
+          action,
+          trigger_source,
+          initiated_by,
+          provider,
+          model,
+          status,
+          duration_ms,
+          input_chars,
+          output_chars,
+          token_estimate,
+          cost_estimate_usd,
+          error_message_short,
+          search_warning,
+          search_warning_message,
+          web_search_enabled,
+          tool_calls_attempted,
+          tool_calls_succeeded,
+          search_query_count,
+          source_count,
+          tool_failure_reason,
+          citation_events_json
+        from agent_activity_log
+        order by timestamp desc
+        limit ${sqlEscape(limit)}
+      `);
       writeJson(res, 200, rows);
       return true;
     }
@@ -4015,7 +4148,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     }
 
     if (req.method === 'DELETE' && url === '/api/agent/activity-log') {
-      agentActivityBuffer.length = 0;
+      execSql('delete from agent_activity_log');
       writeJson(res, 200, { error: null });
       return true;
     }
