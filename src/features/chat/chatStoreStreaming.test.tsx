@@ -255,3 +255,37 @@ test('chat store maps tool_call_result clarification outcomes to explicit trace 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('chat store marks assistant message as error when a 200 response has no body', async () => {
+  const originalFetch = globalThis.fetch;
+  let messagesRequestCount = 0;
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/api/chat/session/current/messages?')) {
+      messagesRequestCount += 1;
+      return jsonResponse({ messages: [] });
+    }
+    if (url === '/api/chat/session/current/messages') {
+      return new Response(null, { status: 200 });
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    useChatStore.setState({ messages: [], running: false, lastError: null });
+    await useChatStore.getState().sendMessage('missing stream body');
+
+    const state = useChatStore.getState();
+    const assistant = state.messages.find((message) => message.role === 'assistant');
+
+    assert.equal(state.running, false);
+    assert.equal(state.lastError?.length ? state.lastError.length > 0 : false, true);
+    assert.equal(assistant?.status, 'error');
+    assert.equal(assistant?.errorMessage?.length ? assistant.errorMessage.length > 0 : false, true);
+    assert.equal(assistant?.retryablePrompt, 'missing stream body');
+    assert.equal(messagesRequestCount >= 1, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

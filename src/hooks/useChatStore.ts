@@ -302,11 +302,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
           throw new Error(await asErrorMessage(response));
         }
         if (!response.body) {
+          const streamUnavailableMessage = 'The response stream was unavailable. You can retry.';
+          try {
+            await refreshLatestMessages();
+          } catch {
+            // Ignore refresh errors and preserve the local fallback error message.
+          }
           set((state) => ({
             running: false,
+            lastError: streamUnavailableMessage,
             messages: updateMessage(state.messages, assistantMessageId, (message) => ({
               ...message,
-              status: 'idle',
+              status: 'error',
+              errorMessage: streamUnavailableMessage,
             })),
           }));
           activeStream = null;
