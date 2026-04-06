@@ -15,6 +15,7 @@ import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { listNewResearchTasks, updateFile } from '../../lib/dataApi';
 import type { FrontmatterModel, NewResearchTask } from '../../types/models';
 import { MetadataPanel } from '../metadata/MetadataPanel';
+import { getAttachmentDiagnosticReasonMap } from '../metadata/attachmentUx';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
@@ -405,6 +406,9 @@ export function EditorPane() {
   const [searchWarningMessage, setSearchWarningMessage] = useState<string | null>(null);
   const [ingestionDiagnosticsWarning, setIngestionDiagnosticsWarning] = useState<IngestionDiagnostics | null>(null);
   const [pendingPreflightDiagnostics, setPendingPreflightDiagnostics] = useState<IngestionDiagnostics | null>(null);
+  const latestAttachmentIngestionReasons = getAttachmentDiagnosticReasonMap(
+    pendingPreflightDiagnostics ?? ingestionDiagnosticsWarning,
+  );
   const [showWarningDetails, setShowWarningDetails] = useState(false);
   const [canUndoByFileId, setCanUndoByFileId] = useState<Record<string, boolean>>({});
   const [canRedoByFileId, setCanRedoByFileId] = useState<Record<string, boolean>>({});
@@ -1704,6 +1708,7 @@ export function EditorPane() {
         workspaceId={workspace?.id ?? ''}
         noteId={file.id}
         linkedTaskId={linkedTask?.id}
+        latestIngestionReasonsByAttachmentId={latestAttachmentIngestionReasons}
       />
 
       {tableDialogOpen && (

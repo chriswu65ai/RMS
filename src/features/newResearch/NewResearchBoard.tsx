@@ -2,9 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { AttachmentDeleteDialog } from '../../components/attachments/AttachmentDeleteDialog';
 import type { Attachment, Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
+import { createFile, createFolder, createNewResearchTask, deleteAttachmentFromWorkspace, deleteNewResearchTask, getAttachmentDownloadUrl, getAttachmentOpenUrl, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, MARKDOWN_EXTENSION, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
@@ -13,6 +14,7 @@ import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType,
 import { formatLocalDateTime } from '../../lib/time';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
+import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -76,6 +78,8 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<Array<{ id: string; description: string; created_at: string }>>([]);
   const [modalAttachments, setModalAttachments] = useState<Attachment[]>([]);
+  const [attachmentDeleteTarget, setAttachmentDeleteTarget] = useState<Attachment | null>(null);
+  const [attachmentDeleteBusy, setAttachmentDeleteBusy] = useState(false);
   const modalRef = useRef<HTMLDivElement | null>(null);
   const initialFocusRef = useRef<HTMLInputElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
@@ -624,28 +628,24 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     {modalAttachments.length === 0 && <li className="text-slate-500">No attachments yet.</li>}
                     {modalAttachments.map((attachment) => (
                       <li key={attachment.id} className="flex items-center justify-between gap-2">
-                        <span className="truncate">{attachment.original_name} · {Math.round(attachment.size_bytes / 1024)}KB · {attachment.estimated_tokens} tok</span>
-                        <button
-                          className="rounded border border-slate-300 px-2 py-0.5"
-                          onClick={async () => {
-                            await runUiAsync(
-                              async () => {
-                                await unlinkAttachment(attachment.id, 'task', modalState.id!);
-                                return listAttachments('task', modalState.id!);
-                              },
-                              {
-                                fallbackMessage: 'Failed to remove attachment.',
-                                onSuccess: (attachments) => {
-                                  setModalAttachments(attachments);
-                                  setModalAttachmentError(null);
-                                },
-                                onError: (message) => setModalAttachmentError(message),
-                              },
-                            );
-                          }}
-                        >
-                          Remove
-                        </button>
+                        <div className="min-w-0">
+                          <span className="truncate">{attachment.original_name} · {Math.round(attachment.size_bytes / 1024)}KB · {attachment.estimated_tokens} tok</span>
+                          {getAttachmentStatusBadgeLabel(attachment) && (
+                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                              {getAttachmentStatusBadgeLabel(attachment)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentOpenUrl(attachment.id)} target="_blank" rel="noreferrer">Open</a>
+                          <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentDownloadUrl(attachment.id)} download>Download</a>
+                          <button
+                            className="rounded border border-slate-300 px-2 py-0.5"
+                            onClick={() => setAttachmentDeleteTarget(attachment)}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -698,6 +698,34 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         </div>,
         document.body,
       )}
+      <AttachmentDeleteDialog
+        open={Boolean(attachmentDeleteTarget && modalState?.id)}
+        attachment={attachmentDeleteTarget}
+        contextLabel="task"
+        isBusy={attachmentDeleteBusy}
+        onClose={() => setAttachmentDeleteTarget(null)}
+        onConfirm={(scope) => {
+          if (!attachmentDeleteTarget || !modalState?.id) return;
+          const targetAttachment = attachmentDeleteTarget;
+          setAttachmentDeleteBusy(true);
+          void runUiAsync(
+            async () => {
+              if (scope === 'workspace') await deleteAttachmentFromWorkspace(targetAttachment.id);
+              else await unlinkAttachment(targetAttachment.id, 'task', modalState.id!);
+              return listAttachments('task', modalState.id!);
+            },
+            {
+              fallbackMessage: scope === 'workspace' ? 'Failed to delete attachment from workspace.' : 'Failed to remove attachment.',
+              onSuccess: (attachments) => {
+                setModalAttachments(attachments);
+                setModalAttachmentError(null);
+                setAttachmentDeleteTarget(null);
+              },
+              onError: (message) => setModalAttachmentError(message),
+            },
+          ).finally(() => setAttachmentDeleteBusy(false));
+        }}
+      />
     </div>
   );
 }

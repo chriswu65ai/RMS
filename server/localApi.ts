@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
@@ -3716,6 +3716,37 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'GET' && /^\/api\/attachments\/[^/]+\/file(\?.*)?$/.test(url)) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const attachmentId = parsedUrl.pathname.replace('/api/attachments/', '').replace('/file', '').trim();
+      if (!attachmentId) {
+        writeJson(res, 400, { error: { message: 'attachment id is required.' } });
+        return true;
+      }
+      const attachment = queryJson<AttachmentRow>(`
+        select * from attachments
+        where id = ${sqlEscape(attachmentId)}
+          and deleted_at is null
+        limit 1
+      `)[0];
+      if (!attachment) {
+        writeJson(res, 404, { error: { message: 'Attachment not found.' } });
+        return true;
+      }
+      const filePath = path.resolve(attachmentsRootPath, attachment.storage_relpath);
+      if (!filePath.startsWith(path.resolve(attachmentsRootPath)) || !existsSync(filePath)) {
+        writeJson(res, 404, { error: { message: 'Attachment file not found.' } });
+        return true;
+      }
+      const shouldDownload = parsedUrl.searchParams.get('download') === '1';
+      const safeName = attachment.original_name.replace(/["\r\n]/g, '');
+      res.statusCode = 200;
+      res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `${shouldDownload ? 'attachment' : 'inline'}; filename="${safeName}"`);
+      res.end(readFileSync(filePath));
+      return true;
+    }
+
     if (req.method === 'POST' && /^\/api\/attachments\/[^/]+\/link$/.test(url)) {
       const attachmentId = url.replace('/api/attachments/', '').replace('/link', '').trim();
       const payload = await readJsonBody(req);
@@ -3764,6 +3795,27 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const remaining = queryJson<{ total: number }>(`select count(*) as total from attachment_links where attachment_id = ${sqlEscape(attachmentId)}`)[0];
       if (Number(remaining?.total ?? 0) === 0) {
         execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())}, updated_at = ${sqlEscape(new Date().toISOString())} where id = ${sqlEscape(attachmentId)}`);
+      }
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
+    if (req.method === 'DELETE' && /^\/api\/attachments\/[^/]+\/hard$/.test(url)) {
+      const attachmentId = url.replace('/api/attachments/', '').replace('/hard', '').trim();
+      if (!attachmentId) {
+        writeJson(res, 400, { error: { message: 'attachment id is required.' } });
+        return true;
+      }
+      const existing = queryJson<AttachmentRow>(`select * from attachments where id = ${sqlEscape(attachmentId)} limit 1`)[0];
+      if (!existing || existing.deleted_at) {
+        writeJson(res, 404, { error: { message: 'Attachment not found.' } });
+        return true;
+      }
+      execSql(`delete from attachment_links where attachment_id = ${sqlEscape(attachmentId)}`);
+      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())}, updated_at = ${sqlEscape(new Date().toISOString())} where id = ${sqlEscape(attachmentId)}`);
+      const filePath = path.resolve(attachmentsRootPath, existing.storage_relpath);
+      if (filePath.startsWith(path.resolve(attachmentsRootPath)) && existsSync(filePath)) {
+        unlinkSync(filePath);
       }
       writeJson(res, 200, { error: null });
       return true;
