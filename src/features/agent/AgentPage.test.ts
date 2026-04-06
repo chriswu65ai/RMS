@@ -342,6 +342,15 @@ test('AgentPage chat settings expose command prefix mode, editable command map, 
   assert.equal(source.includes('setChatCommandPrefixMap((current) => ({ ...current, [commandName]: nextPrefix }));'), true);
 });
 
+test('AgentPage chat action mode normalization maps legacy act to confirm_required via raw string parsing', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const rawActionMode = chatPolicy.action_mode as string | undefined;'), true);
+  assert.equal(source.includes("const normalizedActionMode: ChatActionMode = rawActionMode === 'confirm_required' || rawActionMode === 'manual_only'"), true);
+  assert.equal(source.includes(": (rawActionMode === 'act' ? 'confirm_required' : 'assist');"), true);
+  assert.equal(source.includes('setChatActionMode('), true);
+  assert.equal(source.includes('normalizedActionMode,'), true);
+});
+
 test('AgentPage save chat settings payload includes command prefix mode and command prefix map', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes("command_prefix_mode: chatCommandPrefixMode ? 'on' : 'off'"), true);

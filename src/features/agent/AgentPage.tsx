@@ -295,10 +295,12 @@ export function AgentPage() {
         setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
         setPreferredSources(sources);
         const chatPolicy = chatSettings.policy ?? {};
+        const rawActionMode = chatPolicy.action_mode as string | undefined;
+        const normalizedActionMode: ChatActionMode = rawActionMode === 'confirm_required' || rawActionMode === 'manual_only'
+          ? rawActionMode
+          : (rawActionMode === 'act' ? 'confirm_required' : 'assist');
         setChatActionMode(
-          chatPolicy.action_mode === 'confirm_required' || chatPolicy.action_mode === 'manual_only'
-            ? chatPolicy.action_mode
-            : (chatPolicy.action_mode === 'act' ? 'confirm_required' : 'assist'),
+          normalizedActionMode,
         );
         setChatAskWhenMissing(chatPolicy.ask_when_missing ?? true);
         setChatAnnounceActions(chatPolicy.announce_actions ?? true);
