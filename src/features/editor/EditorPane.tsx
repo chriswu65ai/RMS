@@ -136,6 +136,23 @@ export const getThinkingStatusUi = (status: ThinkingStatus): ThinkingStatusUi =>
   }
 };
 
+export const getThinkingPhaseLabel = (phase: ThinkingPhase): string => {
+  switch (phase) {
+    case 'waiting':
+      return 'Waiting';
+    case 'reasoning':
+      return 'Reasoning';
+    case 'tool_running':
+      return 'Running tools';
+    case 'tool_completed':
+      return 'Tool step complete';
+    case 'tool_failed':
+      return 'Tool step failed';
+    default:
+      return 'Waiting';
+  }
+};
+
 
 
 export const shouldShowThinkingBubble = ({
@@ -520,6 +537,7 @@ export function EditorPane() {
   const thinkingStartedAt = thinkingStartedAtByFileId[file.id];
   const elapsedSeconds = thinkingStartedAt && thinkingStatus === 'running' ? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000)) : 0;
   const thinkingStatusUi = getThinkingStatusUi(thinkingStatus);
+  const thinkingPhaseLabel = getThinkingPhaseLabel(thinkingPhase);
   const thinkingModelBadgeLabel = formatThinkingModelBadge(defaultProvider, defaultModel);
   void thinkingClockTick;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
@@ -1333,7 +1351,7 @@ export function EditorPane() {
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${thinkingStatusUi.badgeClassName}`}>{thinkingStatusUi.label}</span>
-                    <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingPhase}</span>
+                    <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingPhaseLabel}</span>
                     {typeof thinkingAttempt === 'number' && typeof thinkingMaxAttempts === 'number' && (
                       <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
                         pass {thinkingAttempt}/{thinkingMaxAttempts}
