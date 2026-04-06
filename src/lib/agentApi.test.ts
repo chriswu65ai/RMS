@@ -176,9 +176,10 @@ test('generateText forwards ingestion diagnostics frames', async () => {
 
 test('preflightGenerateIngestion posts generate preflight contract', async () => {
   const originalFetch = globalThis.fetch;
-  let seenBody: Record<string, unknown> | null = null;
+  type PreflightBody = { preflight_only?: boolean } & Record<string, unknown>;
+  let seenBody: PreflightBody | null = null;
   globalThis.fetch = async (_input, init) => {
-    seenBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+    seenBody = init?.body ? JSON.parse(String(init.body)) as PreflightBody : null;
     return new Response(JSON.stringify({
       predicted_truncation: true,
       diagnostics: {
