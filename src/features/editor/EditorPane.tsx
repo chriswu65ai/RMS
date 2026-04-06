@@ -19,6 +19,7 @@ import { getAgentSettings } from '../../lib/agentApi';
 import type { AgentProvider } from '../agent/types';
 import type { StreamSource, ThinkingEvent } from '../../lib/agentApi';
 import { reconcileDraftFrontmatterWithSaved } from '../files/effectiveNoteState';
+import { runUiAsync } from '../../lib/uiAsync';
 
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
@@ -969,19 +970,23 @@ export function EditorPane() {
   };
 
   const onSave = async () => {
-    const { error } = await updateFile(file.id, {
-      content: merged,
-      frontmatter_json: frontmatter,
-      is_template: !!frontmatter.template,
+    await runUiAsync(async () => {
+      const { error } = await updateFile(file.id, {
+        content: merged,
+        frontmatter_json: frontmatter,
+        is_template: !!frontmatter.template,
+      });
+      if (error) throw error;
+      clearDraft(file.id);
+      clearGenerateJob(file.id);
+      setShowGeneratedDraftNotice(false);
+      await refresh();
+    }, {
+      fallbackMessage: 'Failed to save note.',
+      onError: async (message) => {
+        await dialog.alert('Save failed', message);
+      },
     });
-    if (error) {
-      await dialog.alert('Save failed', error.message);
-      return;
-    }
-    clearDraft(file.id);
-    clearGenerateJob(file.id);
-    setShowGeneratedDraftNotice(false);
-    await refresh();
   };
 
   const switchToTab = (tab: 'edit' | 'split' | 'preview') => {
@@ -1551,10 +1556,16 @@ export function EditorPane() {
           if (nextName === file.name) return;
           const folderPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
           const nextPath = folderPath ? `${folderPath}/${nextName}` : nextName;
-          const { error } = await updateFile(file.id, { name: nextName, path: nextPath });
-          if (!error) {
+          await runUiAsync(async () => {
+            const { error } = await updateFile(file.id, { name: nextName, path: nextPath });
+            if (error) throw error;
             await refresh();
-          }
+          }, {
+            fallbackMessage: 'Failed to rename note from metadata.',
+            onError: async (message) => {
+              await dialog.alert('Rename failed', message);
+            },
+          });
         }}
         collapsed={metadataPanelCollapsed}
         onToggleCollapsed={() => setMetadataPanelCollapsed(!metadataPanelCollapsed)}

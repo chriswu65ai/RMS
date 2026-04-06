@@ -5,6 +5,7 @@ import { useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { splitFrontmatter } from '../../lib/frontmatter';
 import { deriveFoldersWithUnsavedFiles } from './unsavedFolders';
+import { runUiAsync } from '../../lib/uiAsync';
 
 const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
@@ -105,6 +106,15 @@ export function FolderTree({
     return fromPath || folder.name || folder.path;
   };
 
+  const runFolderMutation = async (action: () => Promise<void>, fallbackMessage: string, title = 'Action failed') => {
+    await runUiAsync(action, {
+      fallbackMessage,
+      onError: async (message) => {
+        await dialog.alert(title, message);
+      },
+    });
+  };
+
 
   if (collapsed) {
     return (
@@ -166,17 +176,21 @@ export function FolderTree({
               const name = await dialog.prompt('Rename folder', getFolderLabel(folder), 'New folder name');
               if (!name) return;
               const newPath = folder.parent_id ? `${folders.find((f) => f.id === folder.parent_id)?.path}/${name}` : name;
-              const { error } = await renameFolder(folder.id, name, newPath);
-              if (error) return dialog.alert('Rename failed', error.message);
-              await refresh();
+              await runFolderMutation(async () => {
+                const { error } = await renameFolder(folder.id, name, newPath);
+                if (error) throw error;
+                await refresh();
+              }, 'Failed to rename folder.', 'Rename failed');
             }}><Pencil size={14} /></button>
             <button
               className="rounded p-1 text-slate-500 hover:bg-slate-100"
               onClick={async () => {
                 if (files.some((f) => f.folder_id === folder.id)) return dialog.alert('Folder not empty', 'Delete files in this folder first.');
                 if (!(await dialog.confirm('Delete folder', `Delete folder ${getFolderLabel(folder)}?`))) return;
-                await deleteFolder(folder.id);
-                await refresh();
+                await runFolderMutation(async () => {
+                  await deleteFolder(folder.id);
+                  await refresh();
+                }, 'Failed to delete folder.');
               }}
             >
               <Trash2 size={14} />
@@ -219,8 +233,10 @@ export function FolderTree({
               if (!name) return;
               const duplicate = folders.some((f) => f.path === `${parent?.path ? `${parent.path}/` : ''}${name}`);
               if (duplicate) return dialog.alert('Duplicate folder', 'Folder already exists.');
-              await createFolder(workspace.id, name, parent);
-              await refresh();
+              await runFolderMutation(async () => {
+                await createFolder(workspace.id, name, parent);
+                await refresh();
+              }, 'Failed to create folder.');
             }}
           >
             <FolderPlus size={16} />

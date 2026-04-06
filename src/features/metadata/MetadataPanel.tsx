@@ -1,8 +1,9 @@
 import { BadgeInfo, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { listAttachments, unlinkAttachment, uploadAttachment } from '../../lib/dataApi';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import type { Attachment, FrontmatterModel } from '../../types/models';
+import { createAttachmentMutationCoordinator } from './attachmentMutationCoordinator';
 
 type Props = {
   frontmatter: FrontmatterModel;
@@ -55,6 +56,50 @@ export function MetadataPanel({
   const [linkedTaskAttachments, setLinkedTaskAttachments] = useState<Attachment[]>([]);
   const [attachmentsError, setAttachmentsError] = useState<string | null>(null);
   const [linkedTaskAttachmentsError, setLinkedTaskAttachmentsError] = useState<string | null>(null);
+  const mutationCoordinatorRef = useRef(createAttachmentMutationCoordinator());
+  const mountedRef = useRef(true);
+  const activeMutationCountByNoteRef = useRef<Record<string, number>>({});
+  const [activeMutationNoteId, setActiveMutationNoteId] = useState<string | null>(null);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  const isMutationActiveForNote = !!noteId && activeMutationNoteId === noteId;
+
+  const setMutationCountForNote = (targetNoteId: string, delta: 1 | -1) => {
+    const nextCounts = { ...activeMutationCountByNoteRef.current };
+    const nextCount = Math.max(0, (nextCounts[targetNoteId] ?? 0) + delta);
+    if (nextCount === 0) delete nextCounts[targetNoteId];
+    else nextCounts[targetNoteId] = nextCount;
+    activeMutationCountByNoteRef.current = nextCounts;
+    if (!mountedRef.current) return;
+    setActiveMutationNoteId(nextCount > 0 ? targetNoteId : null);
+  };
+
+  const runAttachmentMutation = async (
+    action: () => Promise<Attachment[]>,
+    fallbackMessage: string,
+  ) => {
+    if (!noteId) return;
+    const token = mutationCoordinatorRef.current.nextToken();
+    setMutationCountForNote(noteId, 1);
+    await runUiAsync(action, {
+      fallbackMessage,
+      onSuccess: (nextAttachments) => {
+        if (!mountedRef.current) return;
+        if (!mutationCoordinatorRef.current.isLatest(token)) return;
+        setAttachments(nextAttachments);
+        setAttachmentsError(null);
+      },
+      onError: (message) => {
+        if (!mountedRef.current) return;
+        if (!mutationCoordinatorRef.current.isLatest(token)) return;
+        setAttachmentsError(message);
+      },
+    });
+    setMutationCountForNote(noteId, -1);
+  };
 
   useEffect(() => {
     const guard = createUiAsyncGuard();
@@ -173,23 +218,17 @@ export function MetadataPanel({
         <input
           className="mt-2 block w-full text-xs"
           type="file"
+          disabled={isMutationActiveForNote}
           onChange={async (event) => {
             const file = event.target.files?.[0];
             event.target.value = '';
             if (!file || !noteId || !workspaceId) return;
-            await runUiAsync(
+            await runAttachmentMutation(
               async () => {
                 await uploadAttachment({ workspaceId, linkType: 'note', linkId: noteId, file });
                 return listAttachments('note', noteId);
               },
-              {
-                fallbackMessage: 'Failed to upload attachment.',
-                onSuccess: (next) => {
-                  setAttachments(next);
-                  setAttachmentsError(null);
-                },
-                onError: (message) => setAttachmentsError(message),
-              },
+              'Failed to upload attachment.',
             );
           }}
         />
@@ -200,20 +239,14 @@ export function MetadataPanel({
               <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
               <button
                 className="rounded border border-slate-300 px-2 py-0.5"
+                disabled={isMutationActiveForNote}
                 onClick={async () => {
-                  await runUiAsync(
+                  await runAttachmentMutation(
                     async () => {
                       await unlinkAttachment(attachment.id, 'note', noteId);
                       return listAttachments('note', noteId);
                     },
-                    {
-                      fallbackMessage: 'Failed to remove attachment.',
-                      onSuccess: (next) => {
-                        setAttachments(next);
-                        setAttachmentsError(null);
-                      },
-                      onError: (message) => setAttachmentsError(message),
-                    },
+                    'Failed to remove attachment.',
                   );
                 }}
               >
