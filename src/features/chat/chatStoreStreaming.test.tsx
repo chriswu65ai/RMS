@@ -44,11 +44,16 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
       callCount += 1;
       if (callCount === 1) {
         return ndjsonResponse([
+          { type: 'tool_planning_started' },
+          { type: 'tool_planning_result', planned_tool_calls: [{ id: 'tool-1', name: 'create_task' }], message: 'Planned 1 tool call.' },
           { type: 'tool_call_started', tool_call_id: 'tool-1', tool_name: 'create_task', narration_before: 'planning' },
+          { type: 'response_generation_started', trace_id: 'response-generation', trace_name: 'response_generation', message: 'Generating final response.' },
           { type: 'error', message: 'The stream failed before completion. You can retry.' },
         ]);
       }
       return ndjsonResponse([
+        { type: 'response_generation_started', trace_id: 'response-generation', trace_name: 'response_generation', message: 'Generating final response.' },
+        { type: 'response_generation_completed', trace_id: 'response-generation', trace_name: 'response_generation', message: 'Final response generated.' },
         { type: 'done', outputText: 'retry completed', latencyMs: 1 },
       ]);
     }
@@ -69,6 +74,7 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
     assert.equal(typeof assistant?.retryablePrompt, 'string');
     assert.equal((assistant?.traces.length ?? 0) > 0, true);
     assert.equal(assistant?.traces.some((trace) => trace.status === 'failed'), true);
+    assert.equal(assistant?.traces.some((trace) => trace.toolName === 'tool_planning'), true);
 
     useChatStore.getState().retryMessage(assistant?.id ?? 'missing');
     await flushMicrotasks();
@@ -77,6 +83,8 @@ test('chat store streaming resilience keeps retry flow when a stream fails', asy
     assert.equal(retried.messages.at(-1)?.role, 'assistant');
     assert.equal(retried.messages.at(-1)?.status, 'idle');
     assert.equal(retried.messages.at(-1)?.text, 'retry completed');
+    assert.equal(retried.messages.at(-1)?.traces.some((trace) => trace.toolName === 'response_generation' && trace.detail === 'Final response generated.'), true);
+    assert.equal(retried.messages.at(-1)?.traces.some((trace) => trace.detail === 'Output finalized.'), false);
   } finally {
     if (originalWindow === undefined) {
       delete (globalThis as { window?: unknown }).window;

@@ -1964,6 +1964,7 @@ test('chat tool orchestration saves pending draft for missing fields and streams
     assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
     assert.equal(frames.some((frame) => frame.type === 'tool_call_started'), true);
     assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'needs_confirmation'), true);
+    assert.equal(frames.some((frame) => frame.type === 'response_generation_started'), false);
     assert.equal(frames.some((frame) => frame.type === 'done'), true);
 
     const exported = await callRoute('GET', '/api/chat/session/current/export?format=json');
@@ -2008,6 +2009,8 @@ test('chat tool orchestration executes approved action and persists tool metadat
     assert.equal(response.status, 200);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
     assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+    assert.equal(frames.some((frame) => frame.type === 'response_generation_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'response_generation_completed'), true);
     assert.equal(frames.some((frame) => frame.type === 'delta' || frame.type === 'done'), true);
 
     const tasksResponse = await callRoute('GET', '/api/research-tasks');
