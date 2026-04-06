@@ -2533,7 +2533,7 @@ test('custom command prefix map is reflected in command parsing', async () => {
   }
 });
 
-test('chat tool orchestration executes approved action and persists tool metadata', async () => {
+test('chat tool orchestration executes approved action and persists structured tool metadata', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
     default_model: 'llama3.2:latest',
@@ -2576,9 +2576,133 @@ test('chat tool orchestration executes approved action and persists tool metadat
 
     const messagesResponse = await callRoute('GET', '/api/chat/session/current/messages');
     assert.equal(messagesResponse.status, 200);
-    const messagesPayload = JSON.parse(messagesResponse.body) as { messages: Array<{ role: string; metadata?: { tool?: { tool_outcome?: string } } }> };
+    const messagesPayload = JSON.parse(messagesResponse.body) as {
+      messages: Array<{
+        role: string;
+        metadata?: {
+          tool?: {
+            note_id?: string | null;
+            note_path?: string | null;
+            task_id?: string | null;
+            action?: string | null;
+            tool_outcome?: string;
+          };
+        };
+      }>;
+    };
     const latestAssistant = [...messagesPayload.messages].reverse().find((message) => message.role === 'assistant');
     assert.equal(latestAssistant?.metadata?.tool?.tool_outcome, 'executed');
+    assert.equal(latestAssistant?.metadata?.tool?.action, 'create_task');
+    assert.equal(latestAssistant?.metadata?.tool?.note_id ?? null, null);
+    assert.equal(latestAssistant?.metadata?.tool?.note_path ?? null, null);
+    assert.equal(latestAssistant?.metadata?.tool?.task_id ?? null, null);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{ trigger_source: string; action: string; status: string }>;
+    assert.equal(activity.some((entry) => entry.trigger_source === 'chat_tool' && entry.action === 'create_task' && entry.status === 'success'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('chat generate_note execution persists note metadata for future deep links', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'chat-tool-note-metadata',
+      name: 'generate_note',
+      arguments: { instruction: 'Draft note for metadata coverage', title: 'Metadata Coverage Note' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Created note and summarized.', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'create a metadata note',
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+
+    const messagesResponse = await callRoute('GET', '/api/chat/session/current/messages');
+    assert.equal(messagesResponse.status, 200);
+    const messagesPayload = JSON.parse(messagesResponse.body) as {
+      messages: Array<{
+        role: string;
+        metadata?: {
+          tool?: {
+            note_id?: string | null;
+            note_path?: string | null;
+            task_id?: string | null;
+            action?: string | null;
+            tool_outcome?: string;
+          };
+        };
+      }>;
+    };
+    const latestAssistant = [...messagesPayload.messages].reverse().find((message) => message.role === 'assistant');
+    assert.equal(latestAssistant?.metadata?.tool?.tool_outcome, 'executed');
+    assert.equal(latestAssistant?.metadata?.tool?.action, 'created');
+    assert.equal(typeof latestAssistant?.metadata?.tool?.note_id, 'string');
+    assert.equal(typeof latestAssistant?.metadata?.tool?.note_path, 'string');
+    assert.equal(latestAssistant?.metadata?.tool?.task_id ?? null, null);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('normal chat turns remain in chat history only and do not emit agent activity events', async () => {
+  await callRoute('DELETE', '/api/agent/activity-log');
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: 'No tools needed.',
+    latencyMs: 1,
+    toolCalls: [],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Pure conversational response.', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'explain what happened today without running tools',
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+
+    const messagesResponse = await callRoute('GET', '/api/chat/session/current/messages');
+    assert.equal(messagesResponse.status, 200);
+    const messagesPayload = JSON.parse(messagesResponse.body) as { messages: Array<{ role: string }> };
+    assert.equal(messagesPayload.messages.some((message) => message.role === 'assistant'), true);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{ trigger_source: string }>;
+    assert.equal(activity.some((entry) => entry.trigger_source === 'chat_tool'), false);
   } finally {
     providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
     providerRegistry.ollama.generate = originalGenerate;

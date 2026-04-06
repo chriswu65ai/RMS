@@ -22,4 +22,5 @@ export type ChatMessage = {
   errorMessage?: string;
   traces: ToolTraceEntry[];
   retryablePrompt?: string;
+  metadata?: Record<string, unknown>;
 };

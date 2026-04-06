@@ -34,7 +34,7 @@ export type ChatToolAdapter = {
     taskId?: string;
     noteId?: string;
     title?: string;
-  }) => Promise<{ note_id: string; action: 'created' | 'updated' }>;
+  }) => Promise<{ note_id: string; note_path?: string; task_id?: string; action: 'created' | 'updated' }>;
   savePendingActionDraft: (
     sessionId: string,
     actionKey: string,
