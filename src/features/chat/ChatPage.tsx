@@ -5,6 +5,7 @@ import { useChatStore } from '../../hooks/useChatStore';
 import { ChatComposer } from './components/ChatComposer';
 import { ChatMessageItem } from './components/ChatMessageItem';
 import { CHAT_OVERLAY_CONTAINER_TEST_ID, JUMP_TO_LATEST_OVERLAY_CLASS, shouldShowJumpToLatest } from './chatLayout';
+import { createChatPageActionBindings } from './chatPageActionBindings';
 
 const BOTTOM_LOCK_THRESHOLD = 80;
 
@@ -40,8 +41,24 @@ export function ChatPage() {
   const sendMessage = useChatStore((state) => state.sendMessage);
   const retryMessage = useChatStore((state) => state.retryMessage);
   const cancelActive = useChatStore((state) => state.cancelActive);
+  const clearHistory = useChatStore((state) => state.clearHistory);
+  const resetContext = useChatStore((state) => state.resetContext);
+  const exportSession = useChatStore((state) => state.exportSession);
   const [autoScrollLocked, setAutoScrollLocked] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+
+  const actions = useMemo(() => createChatPageActionBindings({
+    sendMessage,
+    retryMessage,
+    cancelActive,
+    clearError,
+    loadOlderMessages,
+    clearHistory,
+    resetContext,
+    exportSession,
+  }), [sendMessage, retryMessage, cancelActive, clearError, loadOlderMessages, clearHistory, resetContext, exportSession]);
 
   const showJumpToLatest = useMemo(() => shouldShowJumpToLatest(autoScrollLocked, messages.length), [autoScrollLocked, messages.length]);
 
@@ -74,13 +91,86 @@ export function ChatPage() {
               <PageState kind="error" message={lastError} />
               <button
                 className="text-xs font-medium text-slate-600 underline hover:text-slate-800"
-                onClick={clearError}
+                onClick={actions.dismissError}
                 type="button"
               >
                 Dismiss
               </button>
             </div>
           ) : null}
+
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2">
+            <span className="text-xs font-medium text-slate-500">Session tools (TODO: replace with dedicated toolbar)</span>
+            <button
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={sessionBusy}
+              onClick={async () => {
+                setSessionBusy(true);
+                setSessionNotice(null);
+                try {
+                  await actions.clearHistory();
+                  setSessionNotice('History cleared.');
+                } finally {
+                  setSessionBusy(false);
+                }
+              }}
+              type="button"
+            >
+              Clear history
+            </button>
+            <button
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={sessionBusy}
+              onClick={async () => {
+                setSessionBusy(true);
+                setSessionNotice(null);
+                try {
+                  await actions.resetContext();
+                  setSessionNotice('Context reset.');
+                } finally {
+                  setSessionBusy(false);
+                }
+              }}
+              type="button"
+            >
+              Reset context
+            </button>
+            <button
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={sessionBusy}
+              onClick={async () => {
+                setSessionBusy(true);
+                setSessionNotice(null);
+                try {
+                  await actions.exportJson();
+                  setSessionNotice('Exported JSON session.');
+                } finally {
+                  setSessionBusy(false);
+                }
+              }}
+              type="button"
+            >
+              Export JSON
+            </button>
+            <button
+              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={sessionBusy}
+              onClick={async () => {
+                setSessionBusy(true);
+                setSessionNotice(null);
+                try {
+                  await actions.exportMarkdown();
+                  setSessionNotice('Exported Markdown session.');
+                } finally {
+                  setSessionBusy(false);
+                }
+              }}
+              type="button"
+            >
+              Export Markdown
+            </button>
+            {sessionNotice ? <span className="text-xs text-slate-500">{sessionNotice}</span> : null}
+          </div>
 
           {hasOlderMessages ? (
             <div className="flex justify-center">
@@ -90,7 +180,7 @@ export function ChatPage() {
                 onClick={async () => {
                   setLoadingOlder(true);
                   try {
-                    await loadOlderMessages();
+                    await actions.loadOlderMessages();
                   } finally {
                     setLoadingOlder(false);
                   }
@@ -107,7 +197,7 @@ export function ChatPage() {
           {!initializing && messages.length === 0 ? (
             <PageState kind="empty" message="Ask anything to start a chat. Tool traces and streamed deltas will appear inline." />
           ) : messages.map((message) => (
-            <ChatMessageItem key={message.id} message={message} onRetry={retryMessage} />
+            <ChatMessageItem key={message.id} message={message} onRetry={actions.retryMessage} />
           ))}
         </div>
       </div>
@@ -121,7 +211,7 @@ export function ChatPage() {
       />
 
       <div className="sticky bottom-0">
-        <ChatComposer running={running} onSend={sendMessage} onCancel={cancelActive} />
+        <ChatComposer running={running} onSend={actions.sendMessage} onCancel={actions.cancelActive} />
       </div>
     </section>
   );
