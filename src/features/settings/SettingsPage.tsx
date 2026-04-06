@@ -188,6 +188,8 @@ export function SettingsPage() {
                     {
                       fallbackMessage: 'Failed to save attachment settings.',
                       onSuccess: (updated) => {
+                        setAttachmentQuotaMb(updated.quota_mb);
+                        setAttachmentRetentionDays(updated.retention_days);
                         setAttachmentUsageBytes(updated.usage_bytes);
                         setAttachmentReclaimableBytes(updated.reclaimable_bytes);
                         setAttachmentStatusError(null);
@@ -205,6 +207,8 @@ export function SettingsPage() {
                     {
                       fallbackMessage: 'Failed to save attachment settings.',
                       onSuccess: (updated) => {
+                        setAttachmentQuotaMb(updated.quota_mb);
+                        setAttachmentRetentionDays(updated.retention_days);
                         setAttachmentUsageBytes(updated.usage_bytes);
                         setAttachmentReclaimableBytes(updated.reclaimable_bytes);
                         setAttachmentStatusError(null);

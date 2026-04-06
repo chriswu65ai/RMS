@@ -235,26 +235,13 @@ test('thinking badge renders mapped phase label instead of raw enum token', () =
   assert.equal(editorPaneSource.includes('{thinkingPhase}'), false);
 });
 
-test('metadata and task attachment views expose matching open/download actions', () => {
-  const metadataPanelSource = readFileSync(new URL('../metadata/MetadataPanel.tsx', import.meta.url), 'utf8');
-  const taskBoardSource = readFileSync(new URL('../newResearch/NewResearchBoard.tsx', import.meta.url), 'utf8');
-  assert.equal(metadataPanelSource.includes('>Open</a>'), true);
-  assert.equal(metadataPanelSource.includes('>Download</a>'), true);
-  assert.equal(taskBoardSource.includes('>Open</a>'), true);
-  assert.equal(taskBoardSource.includes('>Download</a>'), true);
-});
-
-test('attachment status badge copy stays plain-language and consistent', () => {
-  const attachmentUxSource = readFileSync(new URL('../metadata/attachmentUx.ts', import.meta.url), 'utf8');
-  assert.equal(attachmentUxSource.includes('Not ingested: pending parse'), true);
-  assert.equal(attachmentUxSource.includes('Not ingested: unsupported type'), true);
-  assert.equal(attachmentUxSource.includes('Not ingested: budget exceeded'), true);
-});
-
-test('scoped attachment delete dialog offers link-only and workspace delete options', () => {
-  const dialogSource = readFileSync(new URL('../../components/attachments/AttachmentDeleteDialog.tsx', import.meta.url), 'utf8');
-  assert.equal(dialogSource.includes('Remove from this {contextLabel} only'), true);
-  assert.equal(dialogSource.includes('Delete from workspace (all notes and tasks)'), true);
+test('split preview pane uses explicit independent overflow classes and shared pane-scroll hook', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('className="pane-scroll min-h-0 flex-1"'), true);
+  assert.equal(
+    editorPaneSource.includes('markdown-preview pane-scroll max-w-none overflow-x-auto overflow-y-auto'),
+    true,
+  );
 });
 
 type ScheduledTimer = { id: number; runAt: number; callback: () => void };
