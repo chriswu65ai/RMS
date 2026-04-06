@@ -408,9 +408,9 @@ test('chat settings feedback stores explicit success/error kind and maps style f
 test('web search feedback stores explicit success/error kind and maps style from kind', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes("const [webSearchStatusFeedback, setWebSearchStatusFeedback] = useState<FeedbackState | null>(null);"), true);
-  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'success', text: 'Success: Web search settings saved.' });"), true);
   assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: message });"), true);
-  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: searxngBaseUrlValidationError });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: `Error: ${searxngBaseUrlValidationError}` });"), true);
   assert.equal(source.includes("webSearchStatusFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
 });
 
@@ -598,10 +598,33 @@ test('AgentPage web search UI includes recommended action, timeout seconds label
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Use recommended'), true);
   assert.equal(source.includes('Timeout (seconds)'), true);
-  assert.equal(source.includes('Maximum results requested per search pass before deduplication.'), true);
-  assert.equal(source.includes('Maximum wait time per provider request; timed-out passes may return no web evidence.'), true);
-  assert.equal(source.includes('Not supported by DuckDuckGo adapter.'), true);
-  assert.equal(source.includes('Safe search is not supported by DuckDuckGo adapter.'), true);
+  assert.equal(source.includes('How many results to fetch per search attempt.'), true);
+  assert.equal(source.includes('How long to wait for each web request before stopping.'), true);
+  assert.equal(source.includes('Recency filters are not available with DuckDuckGo. Switch Provider to SearXNG to enable this.'), true);
+  assert.equal(source.includes('Safe search is not available with DuckDuckGo. Switch Provider to SearXNG to enable this.'), true);
+});
+
+test('AgentPage web search and local provider URL helper text gives concrete examples and path handling guidance', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Example: http://localhost:8080. If you paste a URL ending in /search, the app removes /search automatically.'), true);
+  assert.equal(source.includes('Example: http://localhost:11434. If this app runs in Docker and Ollama runs on your host, try http://host.docker.internal:11434.'), true);
+});
+
+test('AgentPage local provider status and save messages use standardized success/warning/error prefixes and next steps', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Loading: Refreshing model list...'), true);
+  assert.equal(source.includes('Success: Model list loaded.'), true);
+  assert.equal(source.includes('Warning: No Ollama models were found. Install a model, then click Refresh models.'), true);
+  assert.equal(source.includes('Error: Could not reach Ollama. Check the URL, make sure Ollama is running, then click Refresh models.'), true);
+  assert.equal(source.includes('Warning: You have unsaved local runtime changes. Click Save local settings.'), true);
+  assert.equal(source.includes("setLocalSaveMessage('Success: Local settings saved.');"), true);
+  assert.equal(source.includes("setLocalRuntimeFeedbackMessage(error instanceof Error ? `Error: ${error.message}` : 'Error: We could not save local settings. Please try again.');"), true);
+});
+
+test('AgentPage web search save precondition and failures guide users with explicit next steps', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("text: 'Error: Save your default agent and model first, then save web search settings.'"), true);
+  assert.equal(source.includes("const message = error instanceof Error ? `Error: ${error.message}` : 'Error: We could not save web search settings. Please try again.';"), true);
 });
 
 test('AgentPage web search save is independent from provider/model draft mismatch and relies on API validation errors', () => {

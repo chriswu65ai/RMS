@@ -227,7 +227,7 @@ export function WebSearchControls({
             {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
           </select>
           <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
-          <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
+          <p className="text-xs text-slate-500">This controls how many times the app searches the web.</p>
           <button
             type="button"
             className="text-xs font-medium text-slate-700 underline underline-offset-2"
@@ -248,7 +248,7 @@ export function WebSearchControls({
               setWebSearchMaxResultsOverridden(true);
             }}
           />
-          <p className="text-xs text-slate-500">Maximum results requested per search pass before deduplication.</p>
+          <p className="text-xs text-slate-500">How many results to fetch per search attempt.</p>
         </label>
         <label className="space-y-1 text-sm">
           <span className="text-slate-600">Timeout (seconds)</span>
@@ -262,7 +262,7 @@ export function WebSearchControls({
               setWebSearchTimeoutOverridden(true);
             }}
           />
-          <p className="text-xs text-slate-500">Maximum wait time per provider request; timed-out passes may return no web evidence.</p>
+          <p className="text-xs text-slate-500">How long to wait for each web request before stopping.</p>
         </label>
         <label className="space-y-1 text-sm">
           <span className="text-slate-600">Recency</span>
@@ -274,7 +274,7 @@ export function WebSearchControls({
           >
             {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
           </select>
-          {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Not supported by DuckDuckGo adapter.</p> : null}
+          {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Recency filters are not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
         </label>
         <label className="space-y-1 text-sm">
           <span className="text-slate-600">Domain policy</span>
@@ -308,6 +308,7 @@ export function WebSearchControls({
                 {searxngBaseUrlValidationError
                   ? <p role="alert" aria-live="assertive" className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p>
                   : null}
+                <p className="text-xs text-slate-500">Example: http://localhost:8080. If you paste a URL ending in /search, the app removes /search automatically.</p>
               </label>
               <label className={`${CHECKBOX_WITH_LABEL_CLASS} md:mt-7`}>
                 <input
@@ -338,7 +339,7 @@ export function WebSearchControls({
           />
           <span>Safe search</span>
         </label>
-        {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not supported by DuckDuckGo adapter.</p> : null}
+        {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
         <label className={CHECKBOX_WITH_LABEL_CLASS}>
           <input
             className={CHECKBOX_INPUT_CLASS}
@@ -977,6 +978,7 @@ export function AgentPage() {
                       }}
                     />
                     {searxngBaseUrlValidationError ? <p className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p> : null}
+                    <p className="text-xs text-slate-500">Example: http://localhost:8080. If you paste a URL ending in /search, the app removes /search automatically.</p>
                   </label>
                 ) : null}
                 <label className="space-y-1 text-sm">
@@ -993,7 +995,7 @@ export function AgentPage() {
                     {WEB_SEARCH_MODE_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                   </select>
                   <p className="text-xs text-slate-500">{webSearchModeHelperText}</p>
-                  <p className="text-xs text-slate-500">This setting controls the number of web-search passes, not model reasoning depth.</p>
+                  <p className="text-xs text-slate-500">This controls how many times the app searches the web.</p>
                   <button
                     type="button"
                     className="text-xs font-medium text-slate-700 underline underline-offset-2"
@@ -1014,7 +1016,7 @@ export function AgentPage() {
                       setWebSearchMaxResultsOverridden(true);
                     }}
                   />
-                  <p className="text-xs text-slate-500">Maximum results requested per search pass before deduplication.</p>
+                  <p className="text-xs text-slate-500">How many results to fetch per search attempt.</p>
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Timeout (seconds)</span>
@@ -1028,7 +1030,7 @@ export function AgentPage() {
                       setWebSearchTimeoutOverridden(true);
                     }}
                   />
-                  <p className="text-xs text-slate-500">Maximum wait time per provider request; timed-out passes may return no web evidence.</p>
+                  <p className="text-xs text-slate-500">How long to wait for each web request before stopping.</p>
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Recency</span>
@@ -1040,7 +1042,7 @@ export function AgentPage() {
                   >
                     {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                   </select>
-                  {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Not supported by DuckDuckGo adapter.</p> : null}
+                  {!webSearchProviderCapabilities.recency ? <p className="text-xs text-slate-500">Recency filters are not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
                 </label>
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Domain policy</span>
@@ -1075,7 +1077,7 @@ export function AgentPage() {
                   />
                   <span>Safe search</span>
                 </label>
-                {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not supported by DuckDuckGo adapter.</p> : null}
+                {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
                 <label className={CHECKBOX_WITH_LABEL_CLASS}>
                   <input
                     className={CHECKBOX_INPUT_CLASS}
@@ -1108,10 +1110,20 @@ export function AgentPage() {
                   try {
                     setWebSearchStatusFeedback(null);
                     if (searxngBaseUrlValidationError) {
-                      setWebSearchStatusFeedback({ kind: 'error', text: searxngBaseUrlValidationError });
+                      setWebSearchStatusFeedback({ kind: 'error', text: `Error: ${searxngBaseUrlValidationError}` });
                       return;
                     }
                     const settings = await getAgentSettings();
+                    const draftModelForProvider = selectedModelByProvider[provider]?.trim() ?? '';
+                    const defaultModelMatchesDraft = settings.default_model.trim() === draftModelForProvider;
+                    const defaultProviderMatchesDraft = settings.default_provider === provider;
+                    if (!defaultProviderMatchesDraft || !defaultModelMatchesDraft) {
+                      setWebSearchStatusFeedback({
+                        kind: 'error',
+                        text: 'Error: Save your default agent and model first, then save web search settings.',
+                      });
+                      return;
+                    }
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
                       enabled: webSearchEnabled,
                       provider: webSearchProvider,
@@ -1125,12 +1137,10 @@ export function AgentPage() {
                       searxngBaseUrl: webSearchSearxngBaseUrl,
                       searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
                     }));
-                    setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });
+                    setWebSearchStatusFeedback({ kind: 'success', text: 'Success: Web search settings saved.' });
                   } catch (error) {
-                    const message = error instanceof Error
-                      ? error.message
-                      : 'Unable to save web search settings. Review the form values and your saved default agent model, then try again.';
-                    setWebSearchStatusMessage(message);
+                    const message = error instanceof Error ? `Error: ${error.message}` : 'Error: We could not save web search settings. Please try again.';
+                    setWebSearchStatusFeedback({ kind: 'error', text: message });
                   }
                 }}
               >
@@ -1443,6 +1453,7 @@ export function AgentPage() {
                   ? <p className="text-xs text-amber-700">If Ollama runs on host, use http://host.docker.internal:11434.</p>
                   : null}
                 {localBaseUrlValidationError ? <p role="alert" aria-live="assertive" className="text-xs text-rose-600">{localBaseUrlValidationError}</p> : null}
+                <p className="text-xs text-slate-500">Example: http://localhost:11434. If this app runs in Docker and Ollama runs on your host, try http://host.docker.internal:11434.</p>
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Installed model</span>
@@ -1464,17 +1475,17 @@ export function AgentPage() {
               </label>
             </div>
             <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-              {modelState.loading ? <span>Refreshing models…</span> : null}
-              {!modelState.loading && provider === 'ollama' && modelState.catalogStatus === 'live' ? <span>Model catalog loaded.</span> : null}
+              {modelState.loading ? <span>Loading: Refreshing model list...</span> : null}
+              {!modelState.loading && provider === 'ollama' && modelState.catalogStatus === 'live' ? <span>Success: Model list loaded.</span> : null}
               {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'empty_response'
-                ? <span>No installed Ollama models found.</span>
+                ? <span>Warning: No Ollama models were found. Install a model, then click Refresh models.</span>
                 : null}
               {!modelState.loading && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
-                ? <span>Could not connect to local model service.</span>
+                ? <span>Error: Could not reach Ollama. Check the URL, make sure Ollama is running, then click Refresh models.</span>
                 : null}
             </div>
             <p className="mt-2 text-xs text-slate-600">Active Ollama runtime: <span className="font-medium">{savedLocalRuntime.baseUrl || LOCAL_BASE_URL_DEFAULT}</span> / <span className="font-medium">{savedLocalRuntime.model || 'not configured'}</span></p>
-            {hasUnsavedLocalChanges ? <p className="mt-2 text-xs text-amber-700">Unsaved local runtime changes.</p> : null}
+            {hasUnsavedLocalChanges ? <p className="mt-2 text-xs text-amber-700">Warning: You have unsaved local runtime changes. Click Save local settings.</p> : null}
             {!hasUnsavedLocalChanges && localSaveMessage ? <p role="status" aria-live="polite" className="mt-2 text-xs text-emerald-700">{localSaveMessage}</p> : null}
             {localRuntimeFeedbackMessage ? <p role="alert" aria-live="assertive" className="mt-2 text-xs text-rose-700">{localRuntimeFeedbackMessage}</p> : null}
             <div className="mt-3 flex gap-2">
@@ -1507,10 +1518,10 @@ export function AgentPage() {
                     setAgentOllamaRuntimeModelDraft(canonicalModel);
                     setAgentSelectedModel('ollama', canonicalModel);
                     if (provider === 'ollama') setAgentSelectedModel(provider, canonicalModel);
-                    setLocalSaveMessage('Local settings saved.');
+                    setLocalSaveMessage('Success: Local settings saved.');
                     setLocalRuntimeFeedbackMessage('');
                   } catch (error) {
-                    setLocalRuntimeFeedbackMessage(error instanceof Error ? error.message : 'Failed saving local model settings.');
+                    setLocalRuntimeFeedbackMessage(error instanceof Error ? `Error: ${error.message}` : 'Error: We could not save local settings. Please try again.');
                   }
                 }}
               >
