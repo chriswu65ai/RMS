@@ -249,7 +249,33 @@ export function App() {
         setMobileSidebarOpen={setMobileSidebarOpen}
         topNav={<TopNavigation />}
         headerRight={<div className="relative ml-auto flex w-full max-w-xl items-center gap-2 md:w-1/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No matches found" />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/research.html'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
-        main={<Routes><Route path="/" element={<Navigate to={`/${lastView}.html`} replace />} /><Route path="/home" element={<OverviewPage />} /><Route path="/tasks.html" element={<NewResearchPage />} /><Route path="/research.html" element={<ResearchRouteErrorBoundary resetKey={`${location.pathname}:${location.key}`}><StockResearchPage openTemplatePicker={() => setFileModal(true)} folderPanelCollapsed={stockFoldersCollapsed} setFolderPanelCollapsed={setStockFoldersCollapsed} /></ResearchRouteErrorBoundary>} /><Route path="/agent" element={<AgentPage />} /><Route path="/chat" element={<ChatPage />} /><Route path="/settings" element={<SettingsLayout />}><Route index element={<Navigate to="general" replace />} /><Route path="general" element={<SettingsGeneralPage />} /><Route path="ai" element={<SettingsAIPage />} /><Route path="attachments" element={<SettingsAttachmentsPage />} /></Route></Routes>}
+        main={(
+          <Routes>
+            <Route path="/" element={<Navigate to={`/${lastView}.html`} replace />} />
+            <Route path="/home" element={<OverviewPage />} />
+            <Route path="/tasks.html" element={<NewResearchPage />} />
+            <Route
+              path="/research.html"
+              element={(
+                <ResearchRouteErrorBoundary resetKey={`${location.pathname}:${location.key}`}>
+                  <StockResearchPage
+                    openTemplatePicker={() => setFileModal(true)}
+                    folderPanelCollapsed={stockFoldersCollapsed}
+                    setFolderPanelCollapsed={setStockFoldersCollapsed}
+                  />
+                </ResearchRouteErrorBoundary>
+              )}
+            />
+            <Route path="/agent" element={<AgentPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/settings" element={<SettingsLayout />}>
+              <Route index element={<Navigate to="ai" replace />} />
+              <Route path="general" element={<SettingsGeneralPage />} />
+              <Route path="ai" element={<SettingsAIPage />} />
+              <Route path="attachments" element={<SettingsAttachmentsPage />} />
+            </Route>
+          </Routes>
+        )}
       />
       <TemplateModal open={fileModal} onClose={() => setFileModal(false)} />
     </>
