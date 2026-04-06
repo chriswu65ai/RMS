@@ -85,6 +85,7 @@ type AgentGenerationParams = {
   };
   web_search?: {
     enabled: boolean;
+    fail_open_on_tool_error: boolean;
     provider: WebSearchProvider;
     mode: WebSearchMode;
     max_results: number;
@@ -1176,6 +1177,7 @@ const WEB_SEARCH_DOMAIN_POLICY_DEFAULT: WebSearchDomainPolicy = 'open_web';
 const WEB_SEARCH_MAX_RESULTS_DEFAULT = 6;
 const WEB_SEARCH_TIMEOUT_MS_DEFAULT = 10000;
 const WEB_SEARCH_SAFE_SEARCH_DEFAULT = false;
+const WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT = true;
 const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
 const AGENT_ACTIVITY_BUFFER_MAX = 1000;
@@ -1404,6 +1406,9 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
     },
     web_search: {
       enabled: typeof webSearch?.enabled === 'boolean' ? webSearch.enabled : false,
+      fail_open_on_tool_error: typeof webSearch?.fail_open_on_tool_error === 'boolean'
+        ? webSearch.fail_open_on_tool_error
+        : WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT,
       provider: isWebSearchProvider(webSearch?.provider) ? webSearch.provider : WEB_SEARCH_PROVIDER_DEFAULT,
       mode: isWebSearchMode(webSearch?.mode) ? webSearch.mode : WEB_SEARCH_MODE_DEFAULT,
       max_results: typeof webSearch?.max_results === 'number' && Number.isFinite(webSearch.max_results)
@@ -2659,6 +2664,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const preferredSources = queryJson<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
         const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
           enabled: false,
+          fail_open_on_tool_error: WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT,
           provider: WEB_SEARCH_PROVIDER_DEFAULT,
           mode: WEB_SEARCH_MODE_DEFAULT,
           max_results: WEB_SEARCH_MAX_RESULTS_DEFAULT,
@@ -2719,25 +2725,38 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
         let toolFailureReason: string | null = null;
+        let searchWarningMessage: string | null = null;
         if (normalizedWebSearchConfig.enabled) {
-          const orchestration = await runAgentToolOrchestration({
-            provider,
-            model: resolvedModel,
-            inputText,
-            apiKey: apiKey ?? '',
-            baseUrl: provider === 'ollama' ? ollamaRuntime.baseUrl : undefined,
-            settings: normalizedWebSearchConfig,
-            preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
-            signal: controller.signal,
-            onEvent: (event) => writeNdjson(res, { type: event.type, ...event }),
-          });
-          normalizedSources = normalizeStreamingSources(orchestration.allSources);
-          webSearchMetadata.queryCount = orchestration.queryCount;
-          webSearchMetadata.sourceCount = orchestration.sourceCount;
-          toolCallsAttempted = orchestration.toolCallsAttempted;
-          toolCallsSucceeded = orchestration.toolCallsSucceeded;
-          toolFailureReason = orchestration.toolFailureReason;
-          preparedInputText = orchestration.consumedInputText;
+          try {
+            const orchestration = await runAgentToolOrchestration({
+              provider,
+              model: resolvedModel,
+              inputText,
+              apiKey: apiKey ?? '',
+              baseUrl: provider === 'ollama' ? ollamaRuntime.baseUrl : undefined,
+              settings: normalizedWebSearchConfig,
+              preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
+              signal: controller.signal,
+              onEvent: (event) => writeNdjson(res, { type: event.type, ...event }),
+            });
+            normalizedSources = normalizeStreamingSources(orchestration.allSources);
+            webSearchMetadata.queryCount = orchestration.queryCount;
+            webSearchMetadata.sourceCount = orchestration.sourceCount;
+            toolCallsAttempted = orchestration.toolCallsAttempted;
+            toolCallsSucceeded = orchestration.toolCallsSucceeded;
+            toolFailureReason = orchestration.toolFailureReason;
+            preparedInputText = orchestration.consumedInputText;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : 'Web search tool orchestration failed.';
+            searchWarningMessage = reason;
+            toolFailureReason = reason;
+            writeNdjson(res, { type: 'search_warning', message: reason, fail_open: normalizedWebSearchConfig.fail_open_on_tool_error });
+            if (normalizedWebSearchConfig.fail_open_on_tool_error) {
+              preparedInputText = inputText;
+            } else {
+              throw error;
+            }
+          }
           emitStructuredLog('agent.tools.outcome', {
             correlation_id: actionCorrelationId,
             action: 'generate',
@@ -2745,6 +2764,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             tool_successes: toolCallsSucceeded,
             tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
             tool_failure_reason: toolFailureReason,
+            search_warning: searchWarningMessage,
           });
         }
         if (normalizedSources.length > 0) {
@@ -2795,8 +2815,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           token_estimate: result.usage?.totalTokens ?? null,
           cost_estimate_usd: result.costEstimate ?? null,
           error_message_short: null,
-          search_warning: 0,
-          search_warning_message: null,
+          search_warning: searchWarningMessage ? 1 : 0,
+          search_warning_message: searchWarningMessage,
           web_search_enabled: normalizedWebSearchConfig.enabled ? 1 : 0,
           tool_calls_attempted: toolCallsAttempted,
           tool_calls_succeeded: toolCallsSucceeded,
