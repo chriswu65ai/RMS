@@ -1,9 +1,12 @@
 import { ArrowDown } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PageState } from '../../components/shared/PageState';
+import { useDialog } from '../../components/ui/DialogProvider';
 import { useChatStore } from '../../hooks/useChatStore';
+import { runUiAsync } from '../../lib/uiAsync';
 import { ChatComposer } from './components/ChatComposer';
 import { ChatMessageItem } from './components/ChatMessageItem';
+import { ChatSessionToolbar } from './components/ChatSessionToolbar';
 import { CHAT_OVERLAY_CONTAINER_TEST_ID, JUMP_TO_LATEST_OVERLAY_CLASS, shouldShowJumpToLatest } from './chatLayout';
 import { createChatPageActionBindings } from './chatPageActionBindings';
 
@@ -31,6 +34,7 @@ export function JumpToLatestOverlay({ showJumpToLatest, onJumpToLatest }: JumpTo
 
 export function ChatPage() {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const dialog = useDialog();
   const messages = useChatStore((state) => state.messages);
   const running = useChatStore((state) => state.running);
   const initializing = useChatStore((state) => state.initializing);
@@ -47,7 +51,6 @@ export function ChatPage() {
   const [autoScrollLocked, setAutoScrollLocked] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sessionBusy, setSessionBusy] = useState(false);
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
   const actions = useMemo(() => createChatPageActionBindings({
     sendMessage,
@@ -72,7 +75,31 @@ export function ChatPage() {
     if (autoScrollLocked) scrollToBottom(messages.length <= 1 ? 'auto' : 'smooth');
   }, [autoScrollLocked, messages]);
 
+  const runSessionAction = async (
+    action: () => Promise<unknown>,
+    successTitle: string,
+    successMessage: string,
+    errorTitle: string,
+    errorFallbackMessage: string,
+  ) => {
+    setSessionBusy(true);
+    try {
+      const result = await runUiAsync(action, {
+        fallbackMessage: errorFallbackMessage,
+        onError: async (message) => {
+          await dialog.alert(errorTitle, message);
+        },
+      });
+      if (result !== undefined) {
+        await dialog.alert(successTitle, successMessage);
+      }
+    } finally {
+      setSessionBusy(false);
+    }
+  };
+
   const loadOlderDisabled = loadingOlder || initializing;
+  const sessionActionsDisabled = sessionBusy || running;
 
   return (
     <section className="relative flex h-full min-h-0 flex-col bg-slate-50">
@@ -99,78 +126,13 @@ export function ChatPage() {
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-3 py-2">
-            <span className="text-xs font-medium text-slate-500">Session tools (TODO: replace with dedicated toolbar)</span>
-            <button
-              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={sessionBusy}
-              onClick={async () => {
-                setSessionBusy(true);
-                setSessionNotice(null);
-                try {
-                  await actions.clearHistory();
-                  setSessionNotice('History cleared.');
-                } finally {
-                  setSessionBusy(false);
-                }
-              }}
-              type="button"
-            >
-              Clear history
-            </button>
-            <button
-              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={sessionBusy}
-              onClick={async () => {
-                setSessionBusy(true);
-                setSessionNotice(null);
-                try {
-                  await actions.resetContext();
-                  setSessionNotice('Context reset.');
-                } finally {
-                  setSessionBusy(false);
-                }
-              }}
-              type="button"
-            >
-              Reset context
-            </button>
-            <button
-              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={sessionBusy}
-              onClick={async () => {
-                setSessionBusy(true);
-                setSessionNotice(null);
-                try {
-                  await actions.exportJson();
-                  setSessionNotice('Exported JSON session.');
-                } finally {
-                  setSessionBusy(false);
-                }
-              }}
-              type="button"
-            >
-              Export JSON
-            </button>
-            <button
-              className="rounded-full border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={sessionBusy}
-              onClick={async () => {
-                setSessionBusy(true);
-                setSessionNotice(null);
-                try {
-                  await actions.exportMarkdown();
-                  setSessionNotice('Exported Markdown session.');
-                } finally {
-                  setSessionBusy(false);
-                }
-              }}
-              type="button"
-            >
-              Export Markdown
-            </button>
-            {sessionNotice ? <span className="text-xs text-slate-500">{sessionNotice}</span> : null}
-          </div>
+          <ChatSessionToolbar
+            disabled={sessionActionsDisabled}
+            onClearHistory={async () => runSessionAction(actions.clearHistory, 'History cleared', 'Chat history was cleared.', 'Clear history failed', 'Unable to clear chat history.')}
+            onResetContext={async () => runSessionAction(actions.resetContext, 'Context reset', 'Chat context summary was reset.', 'Reset context failed', 'Unable to reset chat context.')}
+            onExportJson={async () => runSessionAction(actions.exportJson, 'JSON exported', 'Session exported as JSON.', 'JSON export failed', 'Unable to export session JSON.')}
+            onExportMarkdown={async () => runSessionAction(actions.exportMarkdown, 'Markdown exported', 'Session exported as Markdown.', 'Markdown export failed', 'Unable to export session Markdown.')}
+          />
 
           {hasOlderMessages ? (
             <div className="flex justify-center">
