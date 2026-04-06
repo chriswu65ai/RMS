@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Attachment, Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
+import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
 import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
@@ -337,6 +337,27 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
     const updatedTask = await updateNewResearchTask(task.id, { ...task, linked_note_file_id: created.id, linked_note_path: created.path });
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updatedTask : item)));
+    let attachmentLinkWarning: string | null = null;
+    try {
+      const taskAttachments = await listAttachments('task', task.id);
+      if (taskAttachments.length > 0) {
+        const results = await Promise.allSettled(
+          taskAttachments.map((attachment) => linkAttachment(attachment.id, 'note', created.id)),
+        );
+        const failedCount = results.filter((result) => result.status === 'rejected').length;
+        if (failedCount > 0) {
+          const totalCount = taskAttachments.length;
+          attachmentLinkWarning = `Note created successfully, but ${failedCount} of ${totalCount} task attachment${totalCount === 1 ? '' : 's'} could not be linked to the note.`;
+          setError(attachmentLinkWarning);
+        }
+      }
+    } catch (err) {
+      attachmentLinkWarning = 'Note created successfully, but task attachments could not be fetched for linking.';
+      setError(err instanceof Error ? `${attachmentLinkWarning} ${err.message}` : attachmentLinkWarning);
+    }
+    if (attachmentLinkWarning) {
+      await dialog.alert('Attachment linking warning', attachmentLinkWarning);
+    }
     const transition = transitionTaskToNote(updatedTask, created.id);
     if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
     navigate('/research.html');
