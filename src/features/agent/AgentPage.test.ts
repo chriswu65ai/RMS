@@ -14,6 +14,7 @@ import {
   WEB_SEARCH_PROVIDER_CAPABILITIES,
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
+import { validateEndpointUrl } from './urlNormalization.js';
 
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
@@ -182,6 +183,40 @@ test('web search save payload normalizes searxng base URL by removing trailing s
   });
 
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:8080');
+});
+
+test('web search save payload strips accidental /search from searxng base URL', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'searxng',
+    mode: 'single',
+    maxResults: '5',
+    timeoutSeconds: '5',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://127.0.0.1:8080/search/',
+    searxngUseHtmlMode: false,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:8080');
+});
+
+test('agent page validation rejects invalid SearXNG and local interface URLs and blocks save actions', () => {
+  const invalidSearxngError = validateEndpointUrl('/xxx', 'SearXNG base URL', { stripSearxngSearchPath: true });
+  const invalidInterfaceError = validateEndpointUrl('/xxx', 'Interface URL');
+  const canSaveWebSearch = Number('6') > 0 && Number('10') > 0 && !invalidSearxngError;
+  const canSaveLocalSettings = '/xxx'.trim().length > 0 && !invalidInterfaceError;
+
+  assert.equal(invalidSearxngError, 'SearXNG base URL must be a valid URL.');
+  assert.equal(invalidInterfaceError, 'Interface URL must be a valid URL.');
+  assert.equal(canSaveWebSearch, false);
+  assert.equal(canSaveLocalSettings, false);
 });
 
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {

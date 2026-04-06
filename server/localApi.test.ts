@@ -178,6 +178,48 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
 });
 
+test('put agent settings rejects invalid URL fields with a 400 response', async () => {
+  const invalidInterfaceResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: '/xxx',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  assert.equal(invalidInterfaceResponse.status, 400);
+  assert.match(invalidInterfaceResponse.body, /Interface URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+
+  const invalidSearxngResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        provider: 'searxng',
+        mode: 'single',
+        max_results: 6,
+        timeout_ms: 10000,
+        safe_search: false,
+        recency: 'any',
+        domain_policy: 'open_web',
+        source_citation: false,
+        provider_config: {
+          searxng: {
+            base_url: '/xxx',
+            use_json_api: true,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(invalidSearxngResponse.status, 400);
+  assert.match(invalidSearxngResponse.body, /SearXNG base URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+});
+
 test('saving ollama defaults persists switched model as a single source of truth', async () => {
   const firstSave = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

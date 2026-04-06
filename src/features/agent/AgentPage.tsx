@@ -51,7 +51,7 @@ import {
   WEB_SEARCH_TIMEOUT_MS_DEFAULT,
   shouldShowSearxngConfigFields,
 } from './webSearchSettings';
-import { normalizeEndpointUrl } from './urlNormalization';
+import { normalizeEndpointUrl, validateEndpointUrl } from './urlNormalization';
 
 const modelCatalogService = new ModelCatalogService();
 const LOCAL_BASE_URL_DEFAULT = 'http://localhost:11434';
@@ -102,7 +102,7 @@ const SOURCE_IMPORTANCE_COLORS: Record<number, string> = {
   5: '#365314',
 };
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
-const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
+const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT, { stripSearxngSearchPath: true });
 const clampSourceImportance = (value: number) => Math.min(5, Math.max(1, value));
 const getSourceImportanceLabel = (value: number) => SOURCE_IMPORTANCE_LABELS[clampSourceImportance(value)];
 const getSourceImportanceColor = (value: number) => SOURCE_IMPORTANCE_COLORS[clampSourceImportance(value)];
@@ -337,8 +337,12 @@ export function AgentPage() {
   }, []);
 
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
-  const canSaveLocalDefaults = localBaseUrl.trim().length > 0;
-  const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0;
+  const localBaseUrlValidationError = validateEndpointUrl(localBaseUrl, 'Interface URL');
+  const searxngBaseUrlValidationError = shouldShowSearxngConfigFields(webSearchProvider)
+    ? validateEndpointUrl(webSearchSearxngBaseUrl, 'SearXNG base URL', { stripSearxngSearchPath: true })
+    : null;
+  const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && !localBaseUrlValidationError;
+  const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0 && !searxngBaseUrlValidationError;
   const chatProfilePathRequired = chatProfileSource === 'file' || chatProfileSource === 'merged';
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
@@ -726,6 +730,7 @@ export function AgentPage() {
                         setWebSearchSearxngBaseUrl(normalized);
                       }}
                     />
+                    {searxngBaseUrlValidationError ? <p className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p> : null}
                   </label>
                 ) : null}
                 <label className="space-y-1 text-sm">
@@ -848,6 +853,10 @@ export function AgentPage() {
                 onClick={async () => {
                   try {
                     setWebSearchStatusMessage('');
+                    if (searxngBaseUrlValidationError) {
+                      setWebSearchStatusMessage(searxngBaseUrlValidationError);
+                      return;
+                    }
                     const settings = await getAgentSettings();
                     const draftModelForProvider = selectedModelByProvider[provider]?.trim() ?? '';
                     const defaultModelMatchesDraft = settings.default_model.trim() === draftModelForProvider;
@@ -1158,6 +1167,7 @@ export function AgentPage() {
                 {localBaseUrl.trim() === LOCAL_BASE_URL_DEFAULT && provider === 'ollama' && modelState.reasonCode === 'ollama_unreachable'
                   ? <p className="text-xs text-amber-700">If Ollama runs on host, use http://host.docker.internal:11434.</p>
                   : null}
+                {localBaseUrlValidationError ? <p className="text-xs text-rose-600">{localBaseUrlValidationError}</p> : null}
               </label>
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Installed model</span>
@@ -1198,6 +1208,10 @@ export function AgentPage() {
                 disabled={!canSaveLocalDefaults}
                 onClick={async () => {
                   try {
+                    if (localBaseUrlValidationError) {
+                      setLocalRuntimeFeedbackMessage(localBaseUrlValidationError);
+                      return;
+                    }
                     const settings = await getAgentSettings();
                     const canonicalBaseUrl = normalizeLocalBaseUrl(localBaseUrl);
                     const persistedModel = settings.generation_params?.local_connection?.model?.trim() ?? '';
