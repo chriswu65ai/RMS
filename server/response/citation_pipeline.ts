@@ -146,6 +146,7 @@ const mapAttachmentCitationTokensByAppearance = (text: string) => {
 
 const remapAttachmentLetterTokensByAppearance = (text: string) => {
   const appearanceMap = new Map<string, number>();
+  const originalByMappedToken = new Map<string, string>();
   let next = 1;
   const mappedText = text.replace(/\[([a-z]+)\]/g, (_match, tokenLike: string) => {
     const normalizedToken = tokenLike.toLowerCase();
@@ -154,9 +155,13 @@ const remapAttachmentLetterTokensByAppearance = (text: string) => {
       next += 1;
     }
     const mappedIndex = appearanceMap.get(normalizedToken) ?? 1;
-    return `[${indexToAttachmentToken(mappedIndex)}]`;
+    const mappedToken = indexToAttachmentToken(mappedIndex);
+    if (!originalByMappedToken.has(mappedToken)) {
+      originalByMappedToken.set(mappedToken, normalizedToken);
+    }
+    return `[${mappedToken}]`;
   });
-  return { mappedText };
+  return { mappedText, originalByMappedToken };
 };
 
 const validateCitationIndices = (text: string, originalByMappedIndex: Map<number, number>, sourceCount: number) => {
@@ -221,28 +226,22 @@ const appendLackCitationForUnsupportedSpans = (text: string, invalidMappedIndice
 };
 
 const buildSourceAppendix = (
-  webSources: Array<Extract<GenerationSource, { kind: 'web' }>>,
-  attachmentSources: Array<Extract<GenerationSource, { kind: 'attachment' }>>,
-  referencedOriginalIndices: Set<number>,
-  referencedAttachmentTokens: Set<string>,
+  canonicalWebMap: Map<number, Extract<GenerationSource, { kind: 'web' }>>,
+  canonicalAttachmentMap: Map<string, Extract<GenerationSource, { kind: 'attachment' }>>,
 ): string => {
-  if (referencedOriginalIndices.size === 0 && referencedAttachmentTokens.size === 0) return '';
+  if (canonicalWebMap.size === 0 && canonicalAttachmentMap.size === 0) return '';
 
-  const webLines = Array.from(referencedOriginalIndices)
-    .sort((a, b) => a - b)
-    .map((originalIndex) => {
-      const source = webSources[originalIndex - 1];
-      if (!source) return null;
+  const webLines = Array.from(canonicalWebMap.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([finalIndex, source]) => {
       const label = source.title.trim() || source.url;
-      return `[${originalIndex}] [${label}](${source.url})`;
+      return `[${finalIndex}] [${label}](${source.url})`;
     })
     .filter((line): line is string => Boolean(line));
 
-  const attachmentLines = Array.from(referencedAttachmentTokens)
-    .sort((a, b) => (attachmentTokenToIndex(a) ?? 0) - (attachmentTokenToIndex(b) ?? 0))
-    .map((token) => {
-      const source = attachmentSources[(attachmentTokenToIndex(token) ?? 0) - 1];
-      if (!source) return null;
+  const attachmentLines = Array.from(canonicalAttachmentMap.entries())
+    .sort((a, b) => (attachmentTokenToIndex(a[0]) ?? 0) - (attachmentTokenToIndex(b[0]) ?? 0))
+    .map(([token, source]) => {
       return `[${token}] ${source.label}`;
     })
     .filter((line): line is string => Boolean(line));
@@ -446,24 +445,40 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
     });
   }
   const withMissingCitationMarker = pass.hasAnyCitation ? withUnsupported : `${withUnsupported}[lack citation]`;
-  const referencedOriginalIndices = new Set<number>();
+  const canonicalWebMap = new Map<number, Extract<GenerationSource, { kind: 'web' }>>();
   for (const mappedIndex of Array.from(pass.validationWeb.referencedMappedIndices.values())) {
-    const original = pass.mappedWeb.originalByMappedIndex.get(mappedIndex);
-    if (typeof original === 'number' && original >= 1 && original <= webSources.length) {
-      referencedOriginalIndices.add(original);
+    const originalIndex = pass.mappedWeb.originalByMappedIndex.get(mappedIndex);
+    if (typeof originalIndex === 'number' && originalIndex >= 1 && originalIndex <= webSources.length) {
+      const source = webSources[originalIndex - 1];
+      if (source) {
+        canonicalWebMap.set(mappedIndex, source);
+      }
     }
   }
 
-  const referencedAttachmentTokens = new Set<string>(
-    Array.from(pass.referencedAttachmentTokens).filter((token) => !pass.validationAttachments.invalidTokens.has(token)),
-  );
+  const canonicalAttachmentMap = new Map<string, Extract<GenerationSource, { kind: 'attachment' }>>();
+  for (const token of Array.from(pass.referencedAttachmentTokens)) {
+    if (pass.validationAttachments.invalidTokens.has(token)) continue;
+    const tokenBeforeRemap = pass.mappedAttachmentLetters.originalByMappedToken.get(token) ?? token;
+    const attachmentId = pass.mappedAttachments.originalByMappedToken.get(tokenBeforeRemap);
+    const source = attachmentId
+      ? attachmentSources.find((candidate) => candidate.attachment_id.toLowerCase() === attachmentId)
+      : (() => {
+        const originalIndex = attachmentTokenToIndex(token);
+        if (!originalIndex || originalIndex < 1 || originalIndex > attachmentSources.length) return null;
+        return attachmentSources[originalIndex - 1] ?? null;
+      })();
+    if (source) {
+      canonicalAttachmentMap.set(token, source);
+    }
+  }
 
-  const outputText = `${withMissingCitationMarker}${buildSourceAppendix(webSources, attachmentSources, referencedOriginalIndices, referencedAttachmentTokens)}`;
+  const outputText = `${withMissingCitationMarker}${buildSourceAppendix(canonicalWebMap, canonicalAttachmentMap)}`;
 
   return {
     outputText,
     normalizedText: withMissingCitationMarker,
-    citationIndices: Array.from(referencedOriginalIndices).sort((a, b) => a - b),
+    citationIndices: Array.from(canonicalWebMap.keys()).sort((a, b) => a - b),
     retryUsed,
     citationEvents,
   };
