@@ -588,7 +588,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         running: false,
         messages: updateMessage(state.messages, activeStream!.assistantMessageId, (message) => ({
           ...message,
-          status: message.text.trim() ? 'cancelled' : 'error',
+          status: 'cancelled',
           errorMessage: message.text.trim() ? 'Cancelled by user.' : 'Cancelled before any output.',
           traces: message.traces.map((trace) => trace.status === 'running'
             ? { ...trace, status: 'cancelled', detail: 'Cancelled by user.', endedAt: now() }
