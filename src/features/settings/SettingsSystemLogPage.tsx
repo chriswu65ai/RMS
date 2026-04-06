@@ -8,7 +8,7 @@ type SystemLogEntry = {
   area?: string;
 };
 
-const DEFAULT_LOG_LIMIT = 200;
+const PAGE_SIZE = 50;
 
 const formatLogLine = (entry: SystemLogEntry): string => {
   const normalizedTimestamp = entry.timestamp?.trim() || 'unknown-time';
@@ -24,23 +24,38 @@ export function SettingsSystemLogPage() {
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [clearing, setClearing] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [level, setLevel] = useState('');
+  const [query, setQuery] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
 
-  const loadLogs = useCallback(async () => {
+  const loadLogs = useCallback(async (mode: 'replace' | 'append' = 'replace') => {
     setLoading(true);
     setError(null);
     try {
-      const nextEntries = await listSystemLog(DEFAULT_LOG_LIMIT);
-      setEntries(nextEntries);
+      const payload = await listSystemLog({
+        level: level || undefined,
+        q: query || undefined,
+        from: from || undefined,
+        to: to || undefined,
+        limit: PAGE_SIZE,
+        cursor: mode === 'append' ? cursor : undefined,
+      });
+      setEntries((prev) => (mode === 'append' ? [...prev, ...payload.entries] : payload.entries));
+      setCursor(payload.page?.next_cursor ?? null);
+      setHasMore(Boolean(payload.page?.has_more));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load system log.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cursor, from, level, query, to]);
 
   useEffect(() => {
     void loadLogs();
-  }, [loadLogs]);
+  }, [loadLogs, level, query, from, to]);
 
   const renderedLogLines = useMemo(() => entries.map(formatLogLine), [entries]);
 
@@ -56,12 +71,23 @@ export function SettingsSystemLogPage() {
     }
   }, [renderedLogLines]);
 
+  const downloadVisibleLogs = useCallback(() => {
+    const text = renderedLogLines.join('\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = `system-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+    anchor.click();
+    URL.revokeObjectURL(href);
+  }, [renderedLogLines]);
+
   const clearLogs = useCallback(async () => {
     setClearing(true);
     setError(null);
     try {
       await clearSystemLog();
-      await loadLogs();
+      await loadLogs('replace');
     } catch (clearError) {
       setError(clearError instanceof Error ? clearError.message : 'Failed to clear system log.');
     } finally {
@@ -75,6 +101,42 @@ export function SettingsSystemLogPage() {
       <p className="text-sm text-slate-600">Backend errors and diagnostics for debugging.</p>
       <div className="w-full rounded-xl border border-slate-200 bg-white p-5">
         <div className="mb-4 flex flex-wrap items-center gap-2">
+          <select
+            className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+            value={level}
+            onChange={(event) => setLevel(event.target.value)}
+            aria-label="Filter by level"
+          >
+            <option value="">All levels</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+            <option value="fatal">Fatal</option>
+          </select>
+          <input
+            className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+            type="text"
+            value={query}
+            placeholder="Search logs"
+            onChange={(event) => setQuery(event.target.value)}
+            aria-label="Filter by text"
+          />
+          <input
+            className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+            type="text"
+            value={from}
+            placeholder="From ISO time"
+            onChange={(event) => setFrom(event.target.value)}
+            aria-label="From date"
+          />
+          <input
+            className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
+            type="text"
+            value={to}
+            placeholder="To ISO time"
+            onChange={(event) => setTo(event.target.value)}
+            aria-label="To date"
+          />
           <button
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
@@ -94,6 +156,14 @@ export function SettingsSystemLogPage() {
           <button
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
+            onClick={downloadVisibleLogs}
+            disabled={loading || renderedLogLines.length === 0}
+          >
+            Download
+          </button>
+          <button
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            type="button"
             onClick={() => void clearLogs()}
             disabled={loading || clearing}
           >
@@ -107,10 +177,22 @@ export function SettingsSystemLogPage() {
         {!loading && error ? <p className="text-sm text-rose-600">{error}</p> : null}
         {!loading && !error && entries.length === 0 ? <p className="text-sm text-slate-500">No system log entries yet.</p> : null}
         {!loading && !error && entries.length > 0 ? (
-          <div className="max-h-[460px] overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-3">
-            <pre className="font-mono text-xs leading-5 text-slate-100">
-              {renderedLogLines.join('\n')}
-            </pre>
+          <div className="space-y-3">
+            <div className="max-h-[460px] overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-3">
+              <pre className="font-mono text-xs leading-5 text-slate-100">
+                {renderedLogLines.join('\n')}
+              </pre>
+            </div>
+            {hasMore ? (
+              <button
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                type="button"
+                onClick={() => void loadLogs('append')}
+                disabled={loading}
+              >
+                {loading ? 'Loading…' : 'Load older'}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

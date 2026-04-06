@@ -17,7 +17,7 @@ import {
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
-import { appendSystemLog, clearSystemLogs, getRecentSystemLogs } from './systemLog';
+import { appendSystemLog, clearSystemLogs, querySystemLogs, registerProcessFatalHandlers } from './systemLog';
 import { resolveAllowedNoteTypes, resolveCanonicalNoteType, resolveTemplateForNoteType, stripSimpleFrontmatter } from './noteTypeResolver';
 import {
   formatInvalidTaskNoteTypeMessage,
@@ -316,6 +316,7 @@ const pendingActionTtlMs = (() => {
 let initialized = false;
 let dbCommandQueue: Promise<unknown> = Promise.resolve();
 let hotWriteQueue: Promise<unknown> = Promise.resolve();
+registerProcessFatalHandlers();
 const DB_OP_TIMEOUT_MS = (() => {
   const value = Number(process.env.LOCAL_API_DB_TIMEOUT_MS ?? '2000');
   if (!Number.isFinite(value) || value <= 0) return 2000;
@@ -2698,9 +2699,21 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   try {
     if (req.method === 'GET' && url.startsWith('/api/system-log')) {
       const parsedUrl = new URL(url, 'http://localhost');
-      const requestedLimit = Number.parseInt(parsedUrl.searchParams.get('limit') ?? '200', 10);
-      const limit = Number.isFinite(requestedLimit) ? requestedLimit : 200;
-      writeJson(res, 200, { entries: getRecentSystemLogs(limit) });
+      const requestedLimit = Number.parseInt(parsedUrl.searchParams.get('limit') ?? '50', 10);
+      const level = parsedUrl.searchParams.get('level') ?? undefined;
+      const from = parsedUrl.searchParams.get('from') ?? undefined;
+      const to = parsedUrl.searchParams.get('to') ?? undefined;
+      const q = parsedUrl.searchParams.get('q') ?? undefined;
+      const cursor = parsedUrl.searchParams.get('cursor') ?? undefined;
+      const result = querySystemLogs({
+        level: level === 'info' || level === 'warn' || level === 'error' || level === 'fatal' ? level : undefined,
+        from,
+        to,
+        q,
+        cursor,
+        limit: Number.isFinite(requestedLimit) ? requestedLimit : 50,
+      });
+      writeJson(res, 200, result);
       return true;
     }
 
