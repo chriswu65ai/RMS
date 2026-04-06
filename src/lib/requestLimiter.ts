@@ -1,7 +1,5 @@
-type QueuedTask<T> = {
-  run: () => Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
+type QueuedJob = {
+  execute: () => void;
 };
 
 export type RequestLimiter = {
@@ -12,28 +10,32 @@ export type RequestLimiter = {
 
 export function createRequestLimiter(maxConcurrent: number): RequestLimiter {
   const normalizedMaxConcurrent = Number.isFinite(maxConcurrent) ? Math.max(1, Math.floor(maxConcurrent)) : 1;
-  const queue: Array<QueuedTask<unknown>> = [];
+  const queue: Array<QueuedJob> = [];
   let activeCount = 0;
 
   const drain = () => {
     while (activeCount < normalizedMaxConcurrent && queue.length > 0) {
-      const next = queue.shift();
-      if (!next) break;
-      activeCount += 1;
-      next.run()
-        .then(next.resolve)
-        .catch(next.reject)
-        .finally(() => {
-          activeCount = Math.max(0, activeCount - 1);
-          drain();
-        });
+      const job = queue.shift();
+      if (!job) break;
+      job.execute();
     }
   };
 
   return {
     schedule<T>(task: () => Promise<T>) {
       return new Promise<T>((resolve, reject) => {
-        queue.push({ run: task, resolve, reject });
+        queue.push({
+          execute: () => {
+            activeCount += 1;
+            task()
+              .then(resolve)
+              .catch(reject)
+              .finally(() => {
+                activeCount = Math.max(0, activeCount - 1);
+                drain();
+              });
+          },
+        });
         drain();
       });
     },
