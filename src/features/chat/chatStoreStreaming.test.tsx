@@ -169,7 +169,6 @@ test('chat store history/export/reset-context helpers call expected endpoints', 
       messages: [{ id: 'temp', role: 'assistant', text: 'stale', createdAt: Date.now(), status: 'idle', traces: [] }],
       running: false,
       lastError: null,
-      initialized: true,
       initializing: false,
       hasOlderMessages: true,
     });

@@ -38,18 +38,16 @@ type StreamPayload = {
   planned_tool_calls?: Array<{ id?: string; name?: string }>;
 } & Record<string, unknown>;
 
-type ChatStore = {
+export type ChatStore = {
   messages: ChatMessage[];
   running: boolean;
   lastError: string | null;
-  initialized: boolean;
   initializing: boolean;
   hasOlderMessages: boolean;
   sendMessage: (prompt: string) => Promise<void>;
   retryMessage: (messageId: string) => Promise<void>;
   cancelActive: () => void;
   clearError: () => void;
-  loadInitialMessages: () => Promise<void>;
   loadOlderMessages: () => Promise<void>;
   clearHistory: (range?: ChatHistoryRange) => Promise<void>;
   resetContext: () => Promise<void>;
@@ -223,32 +221,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
     }));
   };
 
+  const loadInitialMessages = async () => {
+    set({ initializing: true, lastError: null });
+    try {
+      const payload = await loadMessagesPage();
+      const mapped = (payload.messages ?? []).map(mapApiMessage).filter((entry): entry is ChatMessage => Boolean(entry));
+      set({
+        messages: mapped,
+        initializing: false,
+        hasOlderMessages: mapped.length >= PAGE_SIZE,
+      });
+    } catch (error) {
+      set({
+        initializing: false,
+        lastError: error instanceof Error ? error.message : 'Failed loading chat history.',
+      });
+    }
+  };
+
   const store: ChatStore = {
     messages: [],
     running: false,
     lastError: null,
-    initialized: false,
     initializing: false,
     hasOlderMessages: false,
-    loadInitialMessages: async () => {
-      set({ initializing: true, lastError: null });
-      try {
-        const payload = await loadMessagesPage();
-        const mapped = (payload.messages ?? []).map(mapApiMessage).filter((entry): entry is ChatMessage => Boolean(entry));
-        set({
-          messages: mapped,
-          initialized: true,
-          initializing: false,
-          hasOlderMessages: mapped.length >= PAGE_SIZE,
-        });
-      } catch (error) {
-        set({
-          initializing: false,
-          initialized: true,
-          lastError: error instanceof Error ? error.message : 'Failed loading chat history.',
-        });
-      }
-    },
     loadOlderMessages: async () => {
       const oldest = get().messages[0];
       if (!oldest) return;
@@ -606,7 +602,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     resetContext: async () => {
       const response = await fetch('/api/chat/session/current/reset-context', { method: 'POST' });
       if (!response.ok) throw new Error(await asErrorMessage(response));
-      await get().loadInitialMessages();
+      await loadInitialMessages();
     },
     exportSession: async (format = 'json') => {
       const response = await fetch(`/api/chat/session/current/export?format=${format}`);
@@ -619,7 +615,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
   };
 
   queueMicrotask(() => {
-    void store.loadInitialMessages();
+    void loadInitialMessages();
   });
 
   return store;
