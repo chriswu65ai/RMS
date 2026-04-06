@@ -12,3 +12,14 @@ test('settings shell navigation is always expanded and links to general, AI, and
   assert.equal(source.includes('settingsNavCollapsed'), false);
   assert.equal(source.includes('aria-expanded'), false);
 });
+
+test('settings app routes include nested subpages with /settings redirecting to default section', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  assert.equal(source.includes("const DEFAULT_SETTINGS_SUBPAGE = 'ai';"), true);
+  assert.equal(source.includes('<Route path="/settings" element={<SettingsLayout />}>'), true);
+  assert.equal(source.includes('<Route index element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />'), true);
+  assert.equal(source.includes('<Route path="general" element={<SettingsGeneralPage />} />'), true);
+  assert.equal(source.includes('<Route path="ai" element={<SettingsAIPage />} />'), true);
+  assert.equal(source.includes('<Route path="attachments" element={<SettingsAttachmentsPage />} />'), true);
+  assert.equal(source.includes('<Route path="*" element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />'), true);
+});
