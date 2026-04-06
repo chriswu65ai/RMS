@@ -240,6 +240,8 @@ type CanonicalChatActionMode = 'assist' | 'confirm_required' | 'manual_only';
 type ChatCommandName = 'task' | 'note' | 'confirm' | 'cancel' | 'help';
 type ChatCommandPrefixMode = 'on' | 'off';
 type ChatCommandPrefixMap = Record<ChatCommandName, string>;
+type ChatIntentRoute = 'conversation' | 'action' | 'ambiguous';
+type ChatIntentConfidence = 'low' | 'medium' | 'high';
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -1356,6 +1358,37 @@ const looksLikeNaturalLanguageToolRequest = (inputText: string): boolean => (
   && /\b(task|tasks|note|notes)\b/i.test(inputText)
 );
 
+const classifyChatIntent = (
+  inputText: string,
+  parsedCommand: { command: ChatCommandName; remainder: string } | null,
+): { route: ChatIntentRoute; confidence: ChatIntentConfidence } => {
+  if (parsedCommand?.command === 'task' || parsedCommand?.command === 'note') {
+    return { route: 'action', confidence: 'high' };
+  }
+  const normalized = inputText.trim().toLowerCase();
+  const hasActionVerb = /\b(create|update|archive|list|show|generate|draft|delete|remove|add)\b/.test(normalized);
+  const hasActionEntity = /\b(task|tasks|note|notes)\b/.test(normalized);
+  const hasQuestionSignal = /\?|\b(can you|could you|should i|what|which|how)\b/.test(normalized);
+  if (hasActionVerb && hasActionEntity) {
+    const specificIntent = /\b(for|about|with|named|called)\b/.test(normalized) || normalized.split(/\s+/).length >= 5;
+    return { route: 'action', confidence: specificIntent ? 'high' : 'medium' };
+  }
+  if ((hasActionEntity && hasQuestionSignal) || (hasActionEntity && !hasActionVerb) || (hasActionVerb && !hasActionEntity)) {
+    return { route: 'ambiguous', confidence: 'low' };
+  }
+  return { route: 'conversation', confidence: 'low' };
+};
+
+const buildActionClarificationQuestion = (prefixMap: ChatCommandPrefixMap, isPrefixModeOn: boolean): string => {
+  if (isPrefixModeOn) {
+    return [
+      'I can help with that—do you want me to run an action or just answer conversationally?',
+      `If action, use ${prefixMap.task} or ${prefixMap.note} and include what to do.`,
+    ].join(' ');
+  }
+  return 'I can help with that—do you want me to run an action (task/note change) or just answer conversationally?';
+};
+
 const buildPrefixGuidanceMessage = (prefixMap: ChatCommandPrefixMap): string => [
   'Command prefix mode is enabled, so I can only execute tools through explicit commands.',
   `Try ${prefixMap.task} create task for NVDA, ${prefixMap.note} summarize task AAPL, ${prefixMap.confirm} to approve, or ${prefixMap.help} for the full list.`,
@@ -1753,6 +1786,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         if (!explicitConfirm && parsedPrefixedCommand?.command === 'confirm') explicitConfirm = true;
         const normalizedInputText = parsedPrefixedCommand?.remainder || inputText;
         const isPrefixModeOn = commandPrefixMode === 'on';
+        const intentRouting = classifyChatIntent(normalizedInputText, parsedPrefixedCommand);
         const shouldBlockNlToolExecution = isPrefixModeOn && !parsedPrefixedCommand && looksLikeNaturalLanguageToolRequest(inputText);
         if (isPrefixModeOn && parsedPrefixedCommand?.command === 'help') {
           const helpText = [
@@ -1953,7 +1987,58 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           && supportsToolCalling(preferred, resolvedModel)
           && (!isPrefixModeOn || Boolean(parsedPrefixedCommand))
         ) {
+          if (intentRouting.route === 'ambiguous') {
+            const clarificationText = buildActionClarificationQuestion(commandPrefixMap, isPrefixModeOn);
+            const routeFrame = {
+              type: 'intent_routing',
+              route: intentRouting.route,
+              confidence: intentRouting.confidence,
+            };
+            streamEvents.push(routeFrame);
+            writeNdjson(res, routeFrame);
+            const doneFrame = { type: 'done', outputText: clarificationText, latencyMs: Date.now() - turnStartedAt };
+            streamEvents.push(doneFrame);
+            writeNdjson(res, doneFrame);
+            persistChatTurnAtomic({
+              sessionId: session.id,
+              userContent: inputText,
+              assistantContent: clarificationText,
+              provider: preferred,
+              model: resolvedModel,
+              stream: { events: streamEvents, status: 'done' },
+              metadata: {
+                usage: null,
+                costEstimate: null,
+                completedAt: new Date().toISOString(),
+                correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                context: contextPayload.meta,
+                intent_routing: routeFrame,
+              },
+            });
+            persisted = true;
+            res.end();
+            return true;
+          }
+          const shouldRunToolPlanning = intentRouting.route === 'action'
+            && (intentRouting.confidence === 'medium' || intentRouting.confidence === 'high');
+          if (!shouldRunToolPlanning) {
+            const routeFrame = {
+              type: 'intent_routing',
+              route: intentRouting.route,
+              confidence: intentRouting.confidence,
+            };
+            streamEvents.push(routeFrame);
+            writeNdjson(res, routeFrame);
+          }
+          if (shouldRunToolPlanning) {
           try {
+            const routeFrame = {
+              type: 'intent_routing',
+              route: intentRouting.route,
+              confidence: intentRouting.confidence,
+            };
+            streamEvents.push(routeFrame);
+            writeNdjson(res, routeFrame);
             const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
             streamEvents.push(planningStart);
             writeNdjson(res, planningStart);
@@ -2143,6 +2228,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             const errorFrame = { type: 'tool_planning_failed', message: planningErrorMessage };
             streamEvents.push(errorFrame);
             writeNdjson(res, errorFrame);
+          }
           }
         }
         const generationStartedFrame = {

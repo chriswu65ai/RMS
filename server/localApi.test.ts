@@ -2113,6 +2113,111 @@ test('chat tool orchestration saves pending draft for missing fields and streams
   }
 });
 
+test('chat intent routing treats general prompts as conversation and skips tool planning', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => {
+    throw new Error('tool planner should not run for conversational prompts');
+  };
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Conversational answer', latencyMs: 1 });
+  try {
+    for (const content of ['What is the weather in Seattle?', 'Which model are you using right now?']) {
+      const response = await callRoute('POST', '/api/chat/session/current/messages', { content });
+      assert.equal(response.status, 200);
+      const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string; outputText?: string });
+      assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), false);
+      assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.route === 'conversation'), true);
+      const done = frames.find((frame) => frame.type === 'done');
+      assert.equal(done?.outputText, 'Conversational answer');
+    }
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('chat intent routing sends clear actions to tool planning', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'action-route-tool-1',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Listed.', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'list my idea tasks', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.route === 'action'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('chat intent routing asks clarification for ambiguous action-like prompts', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => {
+    throw new Error('tool planner should not run for ambiguous prompts');
+  };
+  providerRegistry.ollama.generate = async () => {
+    throw new Error('normal generation should not run for ambiguous prompts');
+  };
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'can you help with tasks?' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string; outputText?: string });
+    assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.route === 'ambiguous'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), false);
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /run an action|conversationally/i);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('command prefix mode ON blocks natural-language tool execution and returns guidance', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
