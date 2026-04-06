@@ -69,8 +69,13 @@ const updateTraceStatus = (
   status: ToolTraceStatus,
   detail: string,
   toolName = 'tool',
+  metadata?: Record<string, unknown>,
 ) => updateMessage(messages, messageId, (message) => {
   const existing = message.traces.find((trace) => trace.id === traceId);
+  const isInProgressStatus = status === 'running'
+    || status === 'pending'
+    || status === 'needs_confirmation'
+    || status === 'needs_disambiguation';
   if (!existing) {
     return {
       ...message,
@@ -80,13 +85,16 @@ const updateTraceStatus = (
         status,
         detail,
         startedAt: now(),
-        endedAt: status === 'running' || status === 'pending' ? undefined : now(),
+        endedAt: isInProgressStatus ? undefined : now(),
+        metadata,
       }],
     };
   }
   return {
     ...message,
-    traces: message.traces.map((trace) => trace.id === traceId ? { ...trace, status, detail, endedAt: status === 'running' || status === 'pending' ? undefined : now() } : trace),
+    traces: message.traces.map((trace) => trace.id === traceId
+      ? { ...trace, status, detail, endedAt: isInProgressStatus ? undefined : now(), metadata: metadata ?? trace.metadata }
+      : trace),
   };
 });
 
@@ -154,12 +162,14 @@ const pickTraceName = (payload: StreamPayload, fallback: string): string => (
 
 const mapTerminalTraceStatus = (
   payload: StreamPayload,
-  fallback: Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled'>,
-): Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled'> => {
+  fallback: Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled' | 'pending'>,
+): Extract<ToolTraceStatus, 'completed' | 'failed' | 'cancelled' | 'pending' | 'needs_confirmation' | 'needs_disambiguation'> => {
   const normalized = (typeof payload.status === 'string' ? payload.status : payload.outcome)?.toLowerCase();
   if (!normalized) return fallback;
   if (normalized === 'cancelled' || normalized === 'canceled') return 'cancelled';
   if (normalized === 'failed' || normalized === 'error' || normalized === 'rejected') return 'failed';
+  if (normalized === 'needs_confirmation') return 'needs_confirmation';
+  if (normalized === 'needs_disambiguation') return 'needs_disambiguation';
   return 'completed';
 };
 
@@ -436,6 +446,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
           if (payload.type === 'tool_call_result') {
             const traceId = pickToolCallId(payload);
+            const rawOutcome = typeof payload.outcome === 'string' ? payload.outcome : undefined;
+            const rawStatus = typeof payload.status === 'string' ? payload.status : undefined;
             set((state) => ({
               messages: updateTraceStatus(
                 state.messages,
@@ -444,6 +456,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 mapTerminalTraceStatus(payload, 'completed'),
                 pickNarrationDetail(payload, 'Tool call completed.'),
                 pickToolName(payload),
+                rawOutcome || rawStatus
+                  ? { rawOutcome, rawStatus }
+                  : undefined,
               ),
             }));
             return false;

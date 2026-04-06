@@ -209,3 +209,38 @@ test('chat store handles clarification-only turns without creating tool traces',
     globalThis.fetch = originalFetch;
   }
 });
+
+test('chat store maps tool_call_result clarification outcomes to explicit trace statuses', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/api/chat/session/current/messages?')) return jsonResponse({ messages: [] });
+    if (url === '/api/chat/session/current/messages') {
+      return ndjsonResponse([
+        { type: 'tool_call_started', tool_call_id: 'tool-confirm', tool_name: 'confirm_action', narration_before: 'Need your confirmation.' },
+        { type: 'tool_call_result', tool_call_id: 'tool-confirm', tool_name: 'confirm_action', outcome: 'needs_confirmation', message: 'Please confirm this step.' },
+        { type: 'tool_call_started', tool_call_id: 'tool-disambiguate', tool_name: 'resolve_target', narration_before: 'Need disambiguation.' },
+        { type: 'tool_call_result', tool_call_id: 'tool-disambiguate', tool_name: 'resolve_target', status: 'needs_disambiguation', message: 'Which account should I use?' },
+        { type: 'done', outputText: 'Waiting for your clarification.' },
+      ]);
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    useChatStore.setState({ messages: [], running: false, lastError: null });
+    await useChatStore.getState().sendMessage('run the tool');
+    const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
+    const confirmationTrace = assistant?.traces.find((trace) => trace.id === 'tool-confirm');
+    const disambiguationTrace = assistant?.traces.find((trace) => trace.id === 'tool-disambiguate');
+
+    assert.equal(assistant?.status, 'idle');
+    assert.equal(confirmationTrace?.status, 'needs_confirmation');
+    assert.equal(disambiguationTrace?.status, 'needs_disambiguation');
+    assert.equal(confirmationTrace?.metadata?.rawOutcome, 'needs_confirmation');
+    assert.equal(disambiguationTrace?.metadata?.rawStatus, 'needs_disambiguation');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
