@@ -19,6 +19,7 @@ import {
   type ChatProfileSource,
 } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
+import { useDialog } from '../../components/ui/DialogProvider';
 import { ModelCatalogService } from '../../lib/agent/ModelCatalogService';
 import {
   AGENT_PROVIDERS,
@@ -371,6 +372,7 @@ const catalogStatusBannerMessage = ({
 };
 
 export function AgentPage() {
+  const dialog = useDialog();
   const files = useResearchStore((state) => state.files);
   const modelsByProvider = useResearchStore((state) => state.agentModelsByProvider);
   const catalogStatusByProvider = useResearchStore((state) => state.agentCatalogStatusByProvider);
@@ -1546,6 +1548,11 @@ export function AgentPage() {
             <button
               className="rounded-md border border-slate-300 px-3 py-1.5 text-xs"
               onClick={async () => {
+                const shouldClear = await dialog.confirm(
+                  'Clear activity log?',
+                  'This will permanently remove all agent activity records from the database.',
+                );
+                if (!shouldClear) return;
                 try {
                   await clearActivityLog();
                   setActivity([]);
