@@ -10,7 +10,7 @@ export function ChatMessageItem({ message, onRetry }: { message: ChatMessage; on
     ? 'bg-slate-900 text-white'
     : isSystem
       ? 'border border-emerald-200 bg-emerald-50 text-emerald-900'
-      : 'border border-slate-200 bg-slate-50 text-slate-800';
+      : 'border border-slate-300 bg-white text-slate-900';
   const canRetry = Boolean(
     message.retryablePrompt
       && (message.status === 'error' || message.status === 'cancelled'),
