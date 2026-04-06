@@ -1,11 +1,12 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { FALLBACK_MODELS, providerRegistry, selectBestModel, supportsToolCalling, type ModelListEntry } from './agentProviders.js';
+import { FALLBACK_MODELS, providerRegistry, selectBestModel, setProviderTimeoutSettings, supportsToolCalling, type ModelListEntry } from './agentProviders.js';
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setProviderTimeoutSettings(null);
 });
 
 const jsonResponse = (status: number, payload: unknown) => new Response(JSON.stringify(payload), {
@@ -299,4 +300,19 @@ test('openai tool first turn ignores malformed text-only pseudo tool output', as
   const tool = { name: 'web_search', description: 'Search', input_schema: { type: 'object' } };
   const first = await providerRegistry.openai.generateToolFirstTurn({ model: 'gpt-4.1', inputText: 'Find latest', tools: [tool] }, 'test-key');
   assert.equal(first.toolCalls.length, 0);
+});
+
+test('provider generate timeout errors are normalized with actionable guidance', async () => {
+  setProviderTimeoutSettings({ generateMs: 5 });
+  globalThis.fetch = async (_input, init) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      const timeoutError = new Error('aborted');
+      timeoutError.name = 'AbortError';
+      reject(timeoutError);
+    }, { once: true });
+  });
+  await assert.rejects(
+    providerRegistry.openai.generate({ model: 'gpt-4.1-mini', inputText: 'hello' }, 'test-key'),
+    /timed out after 5ms/i,
+  );
 });

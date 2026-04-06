@@ -7,6 +7,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import {
   FALLBACK_MODELS,
   providerRegistry,
+  setProviderTimeoutSettings,
   selectBestModel,
   supportsToolCalling,
   type AgentProvider,
@@ -92,6 +93,12 @@ type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
 type AgentGenerationParams = {
   temperature?: number;
   maxTokens?: number;
+  provider_timeouts?: {
+    generate_ms: number;
+    tool_first_turn_ms: number;
+    tool_followup_ms: number;
+    model_list_ms: number;
+  };
   local_connection?: {
     base_url?: string;
     model?: string;
@@ -1368,6 +1375,10 @@ const WEB_SEARCH_SAFE_SEARCH_DEFAULT = false;
 const WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT = true;
 const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
+const PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT = 45_000;
+const PROVIDER_TIMEOUT_TOOL_FIRST_TURN_MS_DEFAULT = 45_000;
+const PROVIDER_TIMEOUT_TOOL_FOLLOWUP_MS_DEFAULT = 45_000;
+const PROVIDER_TIMEOUT_MODEL_LIST_MS_DEFAULT = 15_000;
 const AGENT_ACTIVITY_BUFFER_MAX = 1000;
 const agentActivityBuffer: AgentActivityLogRow[] = [];
 
@@ -1840,6 +1851,9 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
   const webSearch = next.web_search && typeof next.web_search === 'object'
     ? (next.web_search as Record<string, unknown>)
     : null;
+  const providerTimeouts = next.provider_timeouts && typeof next.provider_timeouts === 'object'
+    ? (next.provider_timeouts as Record<string, unknown>)
+    : null;
   const webSearchProviderConfig = webSearch?.provider_config && typeof webSearch.provider_config === 'object'
     ? (webSearch.provider_config as Record<string, unknown>)
     : null;
@@ -1849,6 +1863,20 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
   return {
     temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
     maxTokens: typeof next.maxTokens === 'number' ? next.maxTokens : undefined,
+    provider_timeouts: {
+      generate_ms: typeof providerTimeouts?.generate_ms === 'number' && Number.isFinite(providerTimeouts.generate_ms)
+        ? Math.max(1, Math.floor(providerTimeouts.generate_ms))
+        : PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT,
+      tool_first_turn_ms: typeof providerTimeouts?.tool_first_turn_ms === 'number' && Number.isFinite(providerTimeouts.tool_first_turn_ms)
+        ? Math.max(1, Math.floor(providerTimeouts.tool_first_turn_ms))
+        : PROVIDER_TIMEOUT_TOOL_FIRST_TURN_MS_DEFAULT,
+      tool_followup_ms: typeof providerTimeouts?.tool_followup_ms === 'number' && Number.isFinite(providerTimeouts.tool_followup_ms)
+        ? Math.max(1, Math.floor(providerTimeouts.tool_followup_ms))
+        : PROVIDER_TIMEOUT_TOOL_FOLLOWUP_MS_DEFAULT,
+      model_list_ms: typeof providerTimeouts?.model_list_ms === 'number' && Number.isFinite(providerTimeouts.model_list_ms)
+        ? Math.max(1, Math.floor(providerTimeouts.model_list_ms))
+        : PROVIDER_TIMEOUT_MODEL_LIST_MS_DEFAULT,
+    },
     local_connection: localConnection ? {
       base_url: normalizeEndpointUrl(localConnection.base_url, OLLAMA_BASE_URL_DEFAULT),
       model: typeof localConnection.model === 'string' ? localConnection.model.trim() : '',
@@ -1897,6 +1925,15 @@ const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider;
   };
 };
 
+const applyProviderTimeoutSettings = (generationParams: AgentGenerationParams | undefined) => {
+  setProviderTimeoutSettings({
+    generateMs: generationParams?.provider_timeouts?.generate_ms,
+    toolFirstTurnMs: generationParams?.provider_timeouts?.tool_first_turn_ms,
+    toolFollowupMs: generationParams?.provider_timeouts?.tool_followup_ms,
+    listModelsMs: generationParams?.provider_timeouts?.model_list_ms,
+  });
+};
+
 const getAgentSettings = () => {
   const settings = queryJson<AgentSettingsRow>('select default_provider, default_model, generation_params_json from agent_settings where id = 1 limit 1')[0];
   const provider = isAgentProvider(settings?.default_provider) ? settings.default_provider : 'minimax';
@@ -1914,6 +1951,7 @@ const getAgentSettings = () => {
   if (nextSettings.default_provider === 'ollama') {
     nextSettings.default_model = ollamaRuntime.model;
   }
+  applyProviderTimeoutSettings(nextSettings.generation_params);
   return nextSettings;
 };
 
@@ -1934,6 +1972,7 @@ const getAgentSettingsAsync = async () => {
   if (nextSettings.default_provider === 'ollama') {
     nextSettings.default_model = ollamaRuntime.model;
   }
+  applyProviderTimeoutSettings(nextSettings.generation_params);
   return nextSettings;
 };
 
