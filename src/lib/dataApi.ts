@@ -1,3 +1,4 @@
+import { validateAndNormalizeTaskContractPayload } from '../../shared/taskValidation';
 import { normalizeFrontmatter } from './frontmatter';
 import { trackAttachmentEndpoint } from './attachmentTelemetry';
 import { createRequestLimiter } from './requestLimiter';
@@ -46,26 +47,17 @@ export function normalizeFrontmatterForApi(frontmatter: Record<string, unknown> 
 
 export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTaskInput {
   // Client-side pre-normalization only; the API remains authoritative and re-normalizes.
-  const status = VALID_STATUS.has(values.status) ? values.status : TaskStatus.Ideas;
-  const priority = values.priority && VALID_PRIORITY.has(values.priority) ? values.priority : '';
-  const completedAt = status === TaskStatus.Completed ? values.date_completed.trim() : '';
+  const normalized = validateAndNormalizeTaskContractPayload(values, values.note_type ? [values.note_type] : []).normalized;
+  const status = VALID_STATUS.has(normalized.status as TaskStatus) ? (normalized.status as TaskStatus) : TaskStatus.Ideas;
+  const priority = normalized.priority && VALID_PRIORITY.has(normalized.priority as Priority)
+    ? (normalized.priority as Priority)
+    : '';
 
   return {
     ...values,
-    title: values.title.trim(),
-    details: values.details.trim(),
-    ticker: values.ticker.trim().toUpperCase(),
-    note_type: values.note_type.trim(),
-    assignee: values.assignee.trim(),
-    priority,
-    deadline: values.deadline.trim(),
+    ...normalized,
     status,
-    date_completed: completedAt,
-    archived: Boolean(values.archived),
-    linked_note_file_id: values.linked_note_file_id?.trim() ?? '',
-    linked_note_path: values.linked_note_path?.trim() ?? '',
-    research_location_folder_id: values.research_location_folder_id?.trim() ?? '',
-    research_location_path: values.research_location_path?.trim() ?? '',
+    priority,
   };
 }
 

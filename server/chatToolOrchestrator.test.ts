@@ -260,16 +260,16 @@ test('chat tool orchestration saves missing fields for create_task and allows ex
     toolCall: {
       id: 'tool-missing',
       name: 'create_task',
-      arguments: { ticker: 'amzn', title: 'Amazon refresh' },
+      arguments: { title: 'Amazon refresh' },
     },
     explicitConfirm: true,
   });
 
   assert.equal(missingCreateFields.status, 'needs_confirmation');
-  assert.deepEqual(missingCreateFields.missing_fields, ['note_type']);
+  assert.deepEqual(missingCreateFields.missing_fields, ['ticker']);
   assert.equal(calls.createTask.length, 0);
   assert.equal(calls.drafts.at(-1)?.status, 'pending');
-  assert.deepEqual(calls.drafts.at(-1)?.draft.missing_fields, ['note_type']);
+  assert.deepEqual(calls.drafts.at(-1)?.draft.missing_fields, ['ticker']);
 
   const ambiguousArchive = await runChatToolOrchestration(adapter, {
     sessionId: 'session-disambiguation',
@@ -304,28 +304,20 @@ test('chat tool orchestration rejects missing required fields when askWhenInfoMi
     toolCall: {
       id: 'tool-missing-reject',
       name: 'create_task',
-      arguments: { ticker: 'amzn' },
+      arguments: { title: 'No ticker' },
     },
     explicitConfirm: true,
     askWhenInfoMissing: false,
   });
 
   assert.equal(missingCreateFields.status, 'rejected');
-  assert.deepEqual(missingCreateFields.missing_fields, ['title', 'note_type']);
+  assert.deepEqual(missingCreateFields.missing_fields, ['ticker']);
   assert.equal(calls.drafts.length, 0);
 });
 
 
-test('create_task missing note_type asks with suggestions and invalid note_type is rejected with allowed options', async () => {
+test('create_task with invalid note_type is rejected with allowed options', async () => {
   const { adapter } = makeAdapter();
-
-  const missing = await runChatToolOrchestration(adapter, {
-    sessionId: 'session-note-missing',
-    toolCall: { id: 'tool-missing-note-type', name: 'create_task', arguments: { ticker: 'AAPL', title: 'Missing type' } },
-    explicitConfirm: true,
-  });
-  assert.equal(missing.status, 'needs_confirmation');
-  assert.match(missing.narration_after, /Allowed note types: Research, Event, Earnings/);
 
   const invalid = await runChatToolOrchestration(adapter, {
     sessionId: 'session-note-invalid',
@@ -334,7 +326,7 @@ test('create_task missing note_type asks with suggestions and invalid note_type 
     askWhenInfoMissing: false,
   });
   assert.equal(invalid.status, 'rejected');
-  assert.match(invalid.narration_after, /Allowed note types: Research, Event, Earnings/);
+  assert.match(invalid.narration_after, /Invalid note_type\. Allowed values: Research, Event, Earnings\./);
 });
 
 test('generate_note create flow is blocked until valid note_type is provided', async () => {
@@ -356,4 +348,45 @@ test('generate_note create flow is blocked until valid note_type is provided', a
   assert.equal(corrected.status, 'executed');
   assert.equal(calls.generateNote.at(-1)?.note_type, 'Event');
   assert.match(corrected.narration_after, /note_type: Event/);
+});
+
+
+test('chat create_task acceptance and rejection mirror API contract wording for equivalent payloads', async () => {
+  const { adapter } = makeAdapter();
+
+  const accepted = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-contract-accept',
+    toolCall: {
+      id: 'tool-contract-accept',
+      name: 'create_task',
+      arguments: { ticker: 'nvda', note_type: 'research', title: 'Contract check' },
+    },
+    explicitConfirm: true,
+  });
+  assert.equal(accepted.status, 'executed');
+
+  const missingTicker = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-contract-missing',
+    toolCall: {
+      id: 'tool-contract-missing',
+      name: 'create_task',
+      arguments: { note_type: 'Research' },
+    },
+    explicitConfirm: true,
+    askWhenInfoMissing: false,
+  });
+  assert.equal(missingTicker.status, 'rejected');
+  assert.equal(missingTicker.narration_after.includes('Missing required fields: ticker.'), true);
+
+  const invalidNoteType = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-contract-invalid',
+    toolCall: {
+      id: 'tool-contract-invalid',
+      name: 'create_task',
+      arguments: { ticker: 'NVDA', note_type: 'NotAType' },
+    },
+    explicitConfirm: true,
+  });
+  assert.equal(invalidNoteType.status, 'rejected');
+  assert.equal(invalidNoteType.narration_after.includes('Invalid note_type. Allowed values:'), true);
 });

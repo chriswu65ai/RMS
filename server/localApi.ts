@@ -18,6 +18,11 @@ import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { resolveAllowedNoteTypes, resolveCanonicalNoteType, resolveTemplateForNoteType, stripSimpleFrontmatter } from './noteTypeResolver';
+import {
+  formatInvalidTaskNoteTypeMessage,
+  formatMissingRequiredTaskFieldsMessage,
+  validateAndNormalizeTaskContractPayload,
+} from '../shared/taskValidation';
 import { processResponseCitations } from './response/citation_pipeline';
 import {
   toAttachmentGenerationSource,
@@ -2087,13 +2092,12 @@ const buildChatToolAdapter = (sessionId: string) => ({
   }) => {
     const now = new Date().toISOString();
     const id = randomUUID();
-    const ticker = input.ticker.trim().toUpperCase();
     const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
-    const noteType = normalizeTaskNoteType(input.note_type, allowedNoteTypes);
-    if (!noteType) throw new Error(`Invalid note_type. Allowed values: ${allowedNoteTypes.join(', ')}.`);
-    const priority = VALID_TASK_PRIORITIES.has(input.priority ?? '') ? (input.priority ?? '') : '';
-    await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
-    recordTaskEvent(id, 'create', `Task created via chat orchestration (${ticker} — ${input.title}).`);
+    const validation = validateAndNormalizeTaskContractPayload(input, allowedNoteTypes);
+    if (validation.missingRequiredFields.length > 0) throw new Error(formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields));
+    if (validation.invalidFields.includes('note_type')) throw new Error(formatInvalidTaskNoteTypeMessage(allowedNoteTypes));
+    await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(validation.normalized.title)}, ${sqlEscape(validation.normalized.details)}, ${sqlEscape(validation.normalized.ticker)}, ${sqlEscape(validation.normalized.note_type)}, ${sqlEscape(validation.normalized.assignee)}, ${sqlEscape(validation.normalized.priority)}, ${sqlEscape(validation.normalized.deadline)}, ${sqlEscape(validation.normalized.status)}, ${sqlEscape(validation.normalized.date_completed)}, 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+    recordTaskEvent(id, 'create', `Task created via chat orchestration (${validation.normalized.ticker} — ${validation.normalized.title}).`);
     const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
     const normalized = normalizeTaskRow(created);
     return {
@@ -2111,28 +2115,24 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const existing = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
     if (!existing) throw new Error('Task not found.');
     const now = new Date().toISOString();
-    const nextTicker = typeof patch.ticker === 'string' ? patch.ticker.trim().toUpperCase() : existing.ticker;
     const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
-    const nextNoteType = typeof patch.note_type === 'string'
-      ? normalizeTaskNoteType(patch.note_type, allowedNoteTypes)
-      : existing.note_type;
-    if (typeof patch.note_type === 'string' && !nextNoteType) throw new Error(`Invalid note_type. Allowed values: ${allowedNoteTypes.join(', ')}.`);
-    const nextPriorityCandidate = typeof patch.priority === 'string' ? patch.priority.trim().toLowerCase() : existing.priority;
-    const nextPriority = VALID_TASK_PRIORITIES.has(nextPriorityCandidate) ? nextPriorityCandidate : existing.priority;
-    const nextStatus = patch.status === 'ideas' || patch.status === 'researching' || patch.status === 'completed'
-      ? patch.status
-      : existing.status;
-    const nextArchived = typeof patch.archived === 'boolean' ? patch.archived : Boolean(existing.archived);
+    const validation = validateAndNormalizeTaskContractPayload({
+      ...existing,
+      ...patch,
+      archived: patch.archived === undefined ? Boolean(existing.archived) : patch.archived,
+    }, allowedNoteTypes);
+    if (validation.missingRequiredFields.length > 0) throw new Error(formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields));
+    if (validation.invalidFields.includes('note_type')) throw new Error(formatInvalidTaskNoteTypeMessage(allowedNoteTypes));
     await execSqlAsync(`update new_research_tasks set
-      title = ${sqlEscape(typeof patch.title === 'string' ? patch.title : existing.title)},
-      details = ${sqlEscape(typeof patch.details === 'string' ? patch.details : existing.details)},
-      ticker = ${sqlEscape(nextTicker)},
-      note_type = ${sqlEscape(nextNoteType)},
-      assignee = ${sqlEscape(typeof patch.assignee === 'string' ? patch.assignee : existing.assignee)},
-      priority = ${sqlEscape(nextPriority)},
-      deadline = ${sqlEscape(typeof patch.deadline === 'string' ? patch.deadline : existing.deadline)},
-      status = ${sqlEscape(nextStatus)},
-      archived = ${sqlEscape(nextArchived ? 1 : 0)},
+      title = ${sqlEscape(validation.normalized.title)},
+      details = ${sqlEscape(validation.normalized.details)},
+      ticker = ${sqlEscape(validation.normalized.ticker)},
+      note_type = ${sqlEscape(validation.normalized.note_type)},
+      assignee = ${sqlEscape(validation.normalized.assignee)},
+      priority = ${sqlEscape(validation.normalized.priority)},
+      deadline = ${sqlEscape(validation.normalized.deadline)},
+      status = ${sqlEscape(validation.normalized.status)},
+      archived = ${sqlEscape(validation.normalized.archived ? 1 : 0)},
       updated_at = ${sqlEscape(now)}
       where id = ${sqlEscape(taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     const updated = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
@@ -4632,15 +4632,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'POST' && url === '/api/research-tasks') {
       const payload = await readJsonBody(req);
       const actionCorrelationId = randomUUID();
-      const ticker = String(payload.ticker ?? '').trim().toUpperCase();
-      if (!ticker) {
-        writeJson(res, 400, { error: { message: 'Ticker is required.' } });
+      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+      const validation = validateAndNormalizeTaskContractPayload(payload, allowedNoteTypes);
+      if (validation.missingRequiredFields.length > 0) {
+        writeJson(res, 400, { error: { message: formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields) } });
         return true;
       }
-      const priority = String(payload.priority ?? '').trim().toLowerCase();
-      const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
-      const normalizedStatus = normalizeTaskStatus(payload.status);
-      const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed, normalizedStatus);
+      if (validation.invalidFields.includes('note_type')) {
+        writeJson(res, 400, { error: { message: formatInvalidTaskNoteTypeMessage(allowedNoteTypes) } });
+        return true;
+      }
       const nextLinkedFile = String(payload.linked_note_file_id ?? '').trim();
       if (nextLinkedFile) {
         const linkOwner = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} limit 1`))[0];
@@ -4651,13 +4652,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const now = new Date().toISOString();
       const id = randomUUID();
-      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
-      const noteType = normalizeTaskNoteType(payload.note_type, allowedNoteTypes);
-      if (!noteType) {
-        writeJson(res, 400, { error: { message: `Valid note_type is required. Allowed values: ${allowedNoteTypes.join(', ')}.` } });
-        return true;
-      }
-      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(normalizedStatus)}, ${sqlEscape(normalizedDateCompleted)}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(nextLinkedFile)}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(validation.normalized.title)}, ${sqlEscape(validation.normalized.details)}, ${sqlEscape(validation.normalized.ticker)}, ${sqlEscape(validation.normalized.note_type)}, ${sqlEscape(validation.normalized.assignee)}, ${sqlEscape(validation.normalized.priority)}, ${sqlEscape(validation.normalized.deadline)}, ${sqlEscape(validation.normalized.status)}, ${sqlEscape(validation.normalized.date_completed)}, ${sqlEscape(validation.normalized.archived ? 1 : 0)}, ${sqlEscape(nextLinkedFile)}, ${sqlEscape(validation.normalized.linked_note_path)}, ${sqlEscape(validation.normalized.research_location_folder_id)}, ${sqlEscape(validation.normalized.research_location_path)}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(id, 'create', 'Task created.');
       const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
       emitStructuredLog('task.create.outcome', {
@@ -4679,9 +4674,18 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 404, { error: { message: 'Task not found.' } });
         return true;
       }
-      const ticker = String(payload.ticker ?? existing.ticker).trim().toUpperCase();
-      if (!ticker) {
-        writeJson(res, 400, { error: { message: 'Ticker is required.' } });
+      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+      const validation = validateAndNormalizeTaskContractPayload({
+        ...existing,
+        ...payload,
+        archived: payload.archived === undefined ? Boolean(existing.archived) : payload.archived,
+      }, allowedNoteTypes);
+      if (validation.missingRequiredFields.length > 0) {
+        writeJson(res, 400, { error: { message: formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields) } });
+        return true;
+      }
+      if (validation.invalidFields.includes('note_type')) {
+        writeJson(res, 400, { error: { message: formatInvalidTaskNoteTypeMessage(allowedNoteTypes) } });
         return true;
       }
       const nextLinkedFile = String(payload.linked_note_file_id ?? existing.linked_note_file_id).trim();
@@ -4693,49 +4697,39 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           return true;
         }
       }
-      const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
-      const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
-      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
-      const noteType = payload.note_type === undefined
-        ? existing.note_type
-        : normalizeTaskNoteType(payload.note_type, allowedNoteTypes);
-      if (!noteType) {
-        writeJson(res, 400, { error: { message: `Valid note_type is required. Allowed values: ${allowedNoteTypes.join(', ')}.` } });
-        return true;
-      }
-      const normalizedStatus = normalizeTaskStatus(payload.status, normalizeTaskStatus(existing.status));
-      const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed ?? existing.date_completed, normalizedStatus);
+      const normalizedStatus = validation.normalized.status;
+      const normalizedDateCompleted = validation.normalized.date_completed;
       await execSqlAsync(`update new_research_tasks set
-        title = ${sqlEscape(payload.title ?? existing.title)},
-        details = ${sqlEscape(payload.details ?? existing.details)},
-        ticker = ${sqlEscape(ticker)},
-        note_type = ${sqlEscape(noteType)},
-        assignee = ${sqlEscape(payload.assignee ?? existing.assignee)},
-        priority = ${sqlEscape(normalizedPriority)},
-        deadline = ${sqlEscape(payload.deadline ?? existing.deadline)},
-        status = ${sqlEscape(normalizedStatus)},
-        date_completed = ${sqlEscape(normalizedDateCompleted)},
-        archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
+        title = ${sqlEscape(validation.normalized.title)},
+        details = ${sqlEscape(validation.normalized.details)},
+        ticker = ${sqlEscape(validation.normalized.ticker)},
+        note_type = ${sqlEscape(validation.normalized.note_type)},
+        assignee = ${sqlEscape(validation.normalized.assignee)},
+        priority = ${sqlEscape(validation.normalized.priority)},
+        deadline = ${sqlEscape(validation.normalized.deadline)},
+        status = ${sqlEscape(validation.normalized.status)},
+        date_completed = ${sqlEscape(validation.normalized.date_completed)},
+        archived = ${sqlEscape(validation.normalized.archived ? 1 : 0)},
         linked_note_file_id = ${sqlEscape(nextLinkedFile)},
         linked_note_path = ${sqlEscape(nextLinkedPath)},
-        research_location_folder_id = ${sqlEscape(payload.research_location_folder_id ?? existing.research_location_folder_id)},
-        research_location_path = ${sqlEscape(payload.research_location_path ?? existing.research_location_path)},
+        research_location_folder_id = ${sqlEscape(validation.normalized.research_location_folder_id)},
+        research_location_path = ${sqlEscape(validation.normalized.research_location_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
         where id = ${sqlEscape(taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       const changedFields: string[] = [];
       if (String(payload.title ?? existing.title) !== existing.title) changedFields.push('title');
       if (String(payload.details ?? existing.details) !== existing.details) changedFields.push('details');
-      if (ticker !== existing.ticker) changedFields.push('ticker');
-      if (noteType !== existing.note_type) changedFields.push('note type');
-      if (normalizedPriority !== existing.priority) changedFields.push('priority');
-      if (String(payload.deadline ?? existing.deadline) !== existing.deadline) changedFields.push('deadline');
+      if (validation.normalized.ticker !== existing.ticker) changedFields.push('ticker');
+      if (validation.normalized.note_type !== existing.note_type) changedFields.push('note type');
+      if (validation.normalized.priority !== existing.priority) changedFields.push('priority');
+      if (validation.normalized.deadline !== existing.deadline) changedFields.push('deadline');
       if (normalizedDateCompleted !== existing.date_completed) changedFields.push('completion date');
 
       const nextStatus = normalizedStatus;
       if (nextStatus !== existing.status) recordTaskEvent(taskId, 'status', `Status changed: ${existing.status} → ${nextStatus}.`);
-      const nextAssignee = String(payload.assignee ?? existing.assignee);
+      const nextAssignee = validation.normalized.assignee;
       if (nextAssignee !== existing.assignee) recordTaskEvent(taskId, 'assignee', `Assignee changed: ${existing.assignee || '—'} → ${nextAssignee || '—'}.`);
-      if (normalizedPriority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${normalizedPriority || '—'}.`);
+      if (validation.normalized.priority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${validation.normalized.priority || '—'}.`);
       const nextLinked = nextLinkedFile;
       if (!existing.linked_note_file_id && nextLinked) {
         recordTaskEvent(taskId, 'link', `Linked note: ${nextLinkedPath || nextLinked}.`);
@@ -4744,7 +4738,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       } else if (existing.linked_note_file_id && nextLinked !== existing.linked_note_file_id) {
         recordTaskEvent(taskId, 'link', `Relinked note: ${nextLinkedPath || nextLinked}.`);
       }
-      const nextArchived = payload.archived === undefined ? Boolean(existing.archived) : Boolean(payload.archived);
+      const nextArchived = validation.normalized.archived;
       if (nextArchived !== Boolean(existing.archived)) recordTaskEvent(taskId, nextArchived ? 'archive' : 'unarchive', nextArchived ? 'Task archived.' : 'Task unarchived.');
       if (changedFields.length > 0) recordTaskEvent(taskId, 'edit', `Updated ${changedFields.join(', ')}.`);
 

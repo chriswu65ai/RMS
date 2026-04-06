@@ -2438,6 +2438,34 @@ test('archiving a research task preserves activity events', async () => {
   assert.equal(eventsAfterArchive.some((event) => event.event_type === 'archive'), true);
 });
 
+
+
+test('research task API acceptance and rejection follow the shared task contract wording', async () => {
+  const accepted = await callRoute('POST', '/api/research-tasks', {
+    title: 'Contract acceptance',
+    ticker: 'NVDA',
+    note_type: 'Research',
+  });
+  assert.equal(accepted.status, 200);
+
+  const missingTicker = await callRoute('POST', '/api/research-tasks', {
+    title: 'Missing ticker',
+    note_type: 'Research',
+  });
+  assert.equal(missingTicker.status, 400);
+  const missingPayload = JSON.parse(missingTicker.body) as { error?: { message?: string } };
+  assert.equal(missingPayload.error?.message, 'Missing required fields: ticker.');
+
+  const invalidNoteType = await callRoute('POST', '/api/research-tasks', {
+    title: 'Invalid note type',
+    ticker: 'NVDA',
+    note_type: 'NotAType',
+  });
+  assert.equal(invalidNoteType.status, 400);
+  const invalidPayload = JSON.parse(invalidNoteType.body) as { error?: { message?: string } };
+  assert.match(invalidPayload.error?.message ?? '', /^Invalid note_type\. Allowed values:/);
+});
+
 test('research task create clears date_completed when status is not completed', async () => {
   const createResponse = await callRoute('POST', '/api/research-tasks', {
     title: 'Normalize completion date',

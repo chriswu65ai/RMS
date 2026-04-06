@@ -17,6 +17,7 @@ import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
 import { applyTickerChangeToTask, findTickerFolderForTicker, resolveDestinationPreviewForTask, type DestinationPreview } from './destinationLogic';
+import { validateAndNormalizeTaskContractPayload, formatInvalidTaskNoteTypeMessage, formatMissingRequiredTaskFieldsMessage } from '../../../shared/taskValidation';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -94,7 +95,6 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     () => [...visibleTasks].sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]),
     [visibleTasks],
   );
-  const findTickerFolder = (ticker: string, availableFolders: Folder[]) => findTickerFolderForTicker(ticker, availableFolders);
   const matchingTemplateForType = (typeValue: string) => {
     const target = typeValue.trim().toLowerCase();
     if (!target) return null;
@@ -228,11 +228,27 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   const saveTask = async () => {
     if (!modalState) return;
-    if (!modalState.task.ticker.trim()) return setBoardError('Ticker is required.');
-    const willAutoComplete = modalState.task.date_completed.trim() && modalState.task.status !== TaskStatus.Completed;
+    const allowedNoteTypes = getNoteTypeSelectOptions(noteTypes)
+      .filter((value) => value !== EMPTY_NOTE_TYPE_PLACEHOLDER);
+    const validation = validateAndNormalizeTaskContractPayload(modalState.task, allowedNoteTypes);
+    if (validation.missingRequiredFields.length > 0) {
+      setBoardError(formatMissingRequiredTaskFieldsMessage(validation.missingRequiredFields));
+      return;
+    }
+    if (validation.invalidFields.includes('note_type')) {
+      setBoardError(formatInvalidTaskNoteTypeMessage(allowedNoteTypes));
+      return;
+    }
+    const normalizedTask: NewResearchTaskInput = {
+      ...modalState.task,
+      ...validation.normalized,
+      status: validation.normalized.status as TaskStatus,
+      priority: validation.normalized.priority as NewResearchTaskInput['priority'],
+    };
+    const willAutoComplete = normalizedTask.date_completed.trim() && normalizedTask.status !== TaskStatus.Completed;
     const payload: NewResearchTaskInput = willAutoComplete
-      ? { ...modalState.task, status: TaskStatus.Completed }
-      : modalState.task;
+      ? { ...normalizedTask, status: TaskStatus.Completed }
+      : normalizedTask;
 
     setSaving(true);
     setBoardError(null);
