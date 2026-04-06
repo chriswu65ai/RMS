@@ -748,6 +748,153 @@ test('agent generate keeps attachment context in final provider input on non-sea
   }
 });
 
+test('agent generate excludes task-only attachments and includes note-linked attachments', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const createdTaskResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Attachment resolver test task',
+    ticker: 'RMS',
+    note_type: 'research',
+    linked_note_file_id: noteId,
+  });
+  assert.equal(createdTaskResponse.status, 200);
+  const createdTask = JSON.parse(createdTaskResponse.body) as { id: string };
+  assert.equal(Boolean(createdTask.id), true);
+
+  const taskAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: createdTask.id,
+    original_name: 'task-only.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'task-only.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Task-only attachment should be excluded', 'utf8'),
+  });
+  const noteAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'note-only.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'note-only.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Note attachment should be included', 'utf8'),
+  });
+
+  const taskUpload = await callRoute('POST', '/api/attachments/upload', taskAttachment.body, taskAttachment.headers);
+  const noteUpload = await callRoute('POST', '/api/attachments/upload', noteAttachment.body, noteAttachment.headers);
+  assert.equal(taskUpload.status, 200);
+  assert.equal(noteUpload.status, 200);
+  const taskAttachmentId = (JSON.parse(taskUpload.body) as { id: string }).id;
+  const noteAttachmentId = (JSON.parse(noteUpload.body) as { id: string }).id;
+
+  const originalGenerate = providerRegistry.ollama.generate;
+  let capturedInput = '';
+  providerRegistry.ollama.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      input_text: 'Summarize context',
+    });
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /Note attachment should be included/);
+    assert.doesNotMatch(capturedInput, /Task-only attachment should be excluded/);
+
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; sources?: Array<{ kind: string; attachment_id?: string }> });
+    const sourcesFrame = frames.find((frame) => frame.type === 'sources');
+    assert.equal(Boolean(sourcesFrame), true);
+    const attachmentSourceIds = (sourcesFrame?.sources ?? [])
+      .filter((source) => source.kind === 'attachment')
+      .map((source) => source.attachment_id);
+    assert.deepEqual(attachmentSourceIds, [noteAttachmentId]);
+    assert.equal(attachmentSourceIds.includes(taskAttachmentId), false);
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('prompt attachment resolver behavior is identical across generation entry points', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const createdTaskResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Resolver parity task',
+    ticker: 'RMS',
+    note_type: 'research',
+    linked_note_file_id: noteId,
+  });
+  assert.equal(createdTaskResponse.status, 200);
+  const createdTask = JSON.parse(createdTaskResponse.body) as { id: string };
+
+  const noteAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'parity-note.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'parity-note.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Parity attachment text', 'utf8'),
+  });
+  const noteUpload = await callRoute('POST', '/api/attachments/upload', noteAttachment.body, noteAttachment.headers);
+  assert.equal(noteUpload.status, 200);
+
+  const originalGenerate = providerRegistry.ollama.generate;
+  const capturedInputs: string[] = [];
+  providerRegistry.ollama.generate = async (request) => {
+    capturedInputs.push(request.inputText);
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  const extractAttachmentBlock = (input: string) => {
+    const start = input.indexOf('[ATTACHMENT_CONTEXT_BEGIN]');
+    const end = input.indexOf('[ATTACHMENT_CONTEXT_END]');
+    if (start === -1 || end === -1 || end < start) return '';
+    return input.slice(start, end + '[ATTACHMENT_CONTEXT_END]'.length);
+  };
+
+  try {
+    const agentResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      input_text: 'Provide summary',
+    });
+    assert.equal(agentResponse.status, 200);
+
+    const chatResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      content: 'Provide summary',
+    });
+    assert.equal(chatResponse.status, 200);
+
+    assert.equal(capturedInputs.length >= 2, true);
+    const agentAttachmentBlock = extractAttachmentBlock(capturedInputs[0] ?? '');
+    const chatAttachmentBlock = extractAttachmentBlock(capturedInputs[1] ?? '');
+    assert.equal(Boolean(agentAttachmentBlock), true);
+    assert.equal(Boolean(chatAttachmentBlock), true);
+    assert.equal(agentAttachmentBlock, chatAttachmentBlock);
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('non-ollama default model does not overwrite saved local_connection.model', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',

@@ -2160,6 +2160,56 @@ const runAttachmentCleanup = () => {
   return { removed_files: removedFiles, purged_attachments: expired.length };
 };
 
+const resolvePromptAttachmentsForGeneration = async (input: {
+  contextTaskId?: string;
+  contextNoteId?: string;
+}): Promise<{ attachmentContextBlock: string; attachmentSources: GenerationSource[] }> => {
+  const noteContextIds = new Set<string>();
+  const contextTaskId = input.contextTaskId?.trim() ?? '';
+  const contextNoteId = input.contextNoteId?.trim() ?? '';
+
+  if (contextTaskId) {
+    const task = (await queryJsonAsync<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(
+      `select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`,
+    ))[0];
+    if (task?.linked_note_file_id) noteContextIds.add(task.linked_note_file_id);
+  }
+  if (contextNoteId) noteContextIds.add(contextNoteId);
+  if (noteContextIds.size === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+
+  const noteIdsSql = Array.from(noteContextIds).map((id) => sqlEscape(id)).join(', ');
+  const noteAttachments = await queryJsonAsync<Pick<AttachmentLinkRow, 'attachment_id'>>(
+    `select attachment_id from attachment_links where link_type = 'note' and link_id in (${noteIdsSql})`,
+  );
+  const attachmentIds = Array.from(new Set(noteAttachments.map((row) => row.attachment_id).filter(Boolean)));
+  if (attachmentIds.length === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+
+  const idsSql = attachmentIds.map((id) => sqlEscape(id)).join(', ');
+  const candidates = await queryJsonAsync<AttachmentRow>(
+    `select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`,
+  );
+  if (candidates.length === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+
+  let consumed = 0;
+  const contextLines: string[] = ['[ATTACHMENT_CONTEXT_BEGIN]'];
+  const attachmentSources: GenerationSource[] = [];
+  candidates.forEach((attachment, index) => {
+    if (!attachment.parsed_text || consumed >= ATTACHMENT_CONTEXT_TOKEN_BUDGET) return;
+    const chunkBudgetChars = Math.max(200, (ATTACHMENT_CONTEXT_TOKEN_BUDGET - consumed) * 4);
+    const nextChunk = attachment.parsed_text.slice(0, chunkBudgetChars);
+    const nextTokens = estimateTokens(nextChunk);
+    consumed += nextTokens;
+    attachmentSources.push(toAttachmentGenerationSource(attachment));
+    contextLines.push(`### Source ${index + 1}: ${attachment.original_name} [attachment:${attachment.id}]`);
+    contextLines.push(nextChunk);
+  });
+  contextLines.push('[ATTACHMENT_CONTEXT_END]');
+  return {
+    attachmentContextBlock: contextLines.length > 2 ? contextLines.join('\n\n') : '',
+    attachmentSources,
+  };
+};
+
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
   try {
@@ -2208,6 +2258,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'POST' && url === '/api/chat/session/current/messages') {
       const payload = await readJsonBody(req);
       const inputText = String(payload.content ?? payload.input_text ?? '').trim();
+      const contextTaskId = String(payload.task_id ?? '').trim();
+      const contextNoteId = String(payload.note_id ?? '').trim();
       if (!inputText) {
         writeJson(res, 400, { error: { message: 'content is required.' } });
         return true;
@@ -2829,6 +2881,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeRuntimeFrame(errorFrame);
           }
           }
+        }
+        const promptAttachments = await resolvePromptAttachmentsForGeneration({
+          contextTaskId,
+          contextNoteId,
+        });
+        if (promptAttachments.attachmentSources.length > 0) {
+          const sourcesFrame = { type: 'sources', sources: promptAttachments.attachmentSources };
+          streamEvents.push(sourcesFrame);
+          writeRuntimeFrame(sourcesFrame);
+          generationPrompt = [promptAttachments.attachmentContextBlock, generationPrompt].filter(Boolean).join('\n\n');
         }
         const generationStartedFrame = {
           type: 'response_generation_started',
@@ -3526,9 +3588,6 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const inputText = String(payload.input_text ?? '');
       const contextTaskId = String(payload.task_id ?? '').trim();
       const contextNoteId = String(payload.note_id ?? '').trim();
-      const explicitAttachmentIds = Array.isArray(payload.attachment_ids)
-        ? payload.attachment_ids.map((value) => String(value ?? '').trim()).filter(Boolean)
-        : [];
       if (provider !== 'ollama' && !model) {
         writeJson(res, 400, { error: { message: 'Model is required.' } });
         return true;
@@ -3686,38 +3745,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           .filter((block) => block.trim().length > 0)
           .join('\n\n');
         let preparedInputText = buildPreparedInputText();
-        const attachmentCandidateIds = new Set<string>(explicitAttachmentIds);
-        if (contextTaskId) {
-          const task = (await queryJsonAsync<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(`select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`))[0];
-          const taskAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'task' and link_id = ${sqlEscape(contextTaskId)}`);
-          taskAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
-          if (task?.linked_note_file_id) {
-            const linkedNoteAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(task.linked_note_file_id)}`);
-            linkedNoteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
-          }
-        }
-        if (contextNoteId) {
-          const noteAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(contextNoteId)}`);
-          noteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
-        }
-        if (attachmentCandidateIds.size > 0) {
-          const idsSql = Array.from(attachmentCandidateIds).map((id) => sqlEscape(id)).join(', ');
-          const candidates = await queryJsonAsync<AttachmentRow>(`select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`);
-          let consumed = 0;
-          const contextLines: string[] = ['[ATTACHMENT_CONTEXT_BEGIN]'];
-          candidates.forEach((attachment, index) => {
-            if (!attachment.parsed_text || consumed >= ATTACHMENT_CONTEXT_TOKEN_BUDGET) return;
-            const chunkBudgetChars = Math.max(200, (ATTACHMENT_CONTEXT_TOKEN_BUDGET - consumed) * 4);
-            const nextChunk = attachment.parsed_text.slice(0, chunkBudgetChars);
-            const nextTokens = estimateTokens(nextChunk);
-            consumed += nextTokens;
-            normalizedSources.push(toAttachmentGenerationSource(attachment));
-            contextLines.push(`### Source ${index + 1}: ${attachment.original_name} [attachment:${attachment.id}]`);
-            contextLines.push(nextChunk);
-          });
-          contextLines.push('[ATTACHMENT_CONTEXT_END]');
-          if (contextLines.length > 2) attachmentContextBlock = contextLines.join('\n\n');
-        }
+        const promptAttachments = await resolvePromptAttachmentsForGeneration({
+          contextTaskId,
+          contextNoteId,
+        });
+        attachmentContextBlock = promptAttachments.attachmentContextBlock;
+        normalizedSources = [...promptAttachments.attachmentSources];
         preparedInputText = buildPreparedInputText();
         let searchWarningMessage: string | null = null;
         const routingDecision = decideWebSearchRouting(inputText);
