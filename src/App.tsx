@@ -42,6 +42,7 @@ const formatCreatedDate = (value: string) => {
 const formatUpdatedDate = (value: string) => {
   return formatLocalDateTime(value);
 };
+const DEFAULT_SETTINGS_SUBPAGE = 'ai';
 
 function TopNavigation() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -294,10 +295,11 @@ export function App() {
             <Route path="/agent" element={<AgentPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/settings" element={<SettingsLayout />}>
-              <Route index element={<Navigate to="ai" replace />} />
+              <Route index element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />
               <Route path="general" element={<SettingsGeneralPage />} />
               <Route path="ai" element={<SettingsAIPage />} />
               <Route path="attachments" element={<SettingsAttachmentsPage />} />
+              <Route path="*" element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />
             </Route>
           </Routes>
         )}
