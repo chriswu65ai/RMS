@@ -1,9 +1,12 @@
 import { BadgeInfo, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { listAttachments, unlinkAttachment, uploadAttachment } from '../../lib/dataApi';
+import { AttachmentDeleteDialog } from '../../components/attachments/AttachmentDeleteDialog';
+import { deleteAttachmentFromWorkspace, getAttachmentDownloadUrl, getAttachmentOpenUrl, listAttachments, unlinkAttachment, uploadAttachment } from '../../lib/dataApi';
+import type { IngestionDiagnosticReason } from '../../lib/agentApi';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import type { Attachment, FrontmatterModel } from '../../types/models';
 import { createAttachmentMutationCoordinator } from './attachmentMutationCoordinator';
+import { getAttachmentStatusBadgeLabel } from './attachmentUx';
 
 type Props = {
   frontmatter: FrontmatterModel;
@@ -21,6 +24,7 @@ type Props = {
   workspaceId: string;
   noteId: string;
   linkedTaskId?: string;
+  latestIngestionReasonsByAttachmentId?: Record<string, IngestionDiagnosticReason>;
 };
 
 const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; label: string }> = [
@@ -47,6 +51,7 @@ export function MetadataPanel({
   workspaceId,
   noteId,
   linkedTaskId,
+  latestIngestionReasonsByAttachmentId,
 }: Props) {
   const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? '');
   const [isBelowLg, setIsBelowLg] = useState(() =>
@@ -60,12 +65,20 @@ export function MetadataPanel({
   const mountedRef = useRef(true);
   const activeMutationCountByNoteRef = useRef<Record<string, number>>({});
   const [activeMutationNoteId, setActiveMutationNoteId] = useState<string | null>(null);
+  const [linkedTaskMutationActive, setLinkedTaskMutationActive] = useState(false);
+  const [pendingDeleteTarget, setPendingDeleteTarget] = useState<{
+    attachment: Attachment;
+    linkType: 'note' | 'task';
+    linkId: string;
+    contextLabel: string;
+  } | null>(null);
 
   useEffect(() => () => {
     mountedRef.current = false;
   }, []);
 
   const isMutationActiveForNote = !!noteId && activeMutationNoteId === noteId;
+  const isAnyAttachmentMutationActive = isMutationActiveForNote || linkedTaskMutationActive;
 
   const setMutationCountForNote = (targetNoteId: string, delta: 1 | -1) => {
     const nextCounts = { ...activeMutationCountByNoteRef.current };
@@ -129,6 +142,12 @@ export function MetadataPanel({
     void load();
     return () => { guard.cancel(); };
   }, [linkedTaskId, noteId]);
+
+  const reloadAttachments = async (linkType: 'note' | 'task', linkId: string) => {
+    const next = await listAttachments(linkType, linkId);
+    if (linkType === 'note') setAttachments(next);
+    else setLinkedTaskAttachments(next);
+  };
 
   useEffect(() => {
     setSelectedSector(frontmatter.sector ?? '');
@@ -218,7 +237,7 @@ export function MetadataPanel({
         <input
           className="mt-2 block w-full text-xs"
           type="file"
-          disabled={isMutationActiveForNote}
+          disabled={isAnyAttachmentMutationActive}
           onChange={async (event) => {
             const file = event.target.files?.[0];
             event.target.value = '';
@@ -236,22 +255,30 @@ export function MetadataPanel({
         <ul className="mt-2 space-y-1">
           {attachments.map((attachment) => (
             <li key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
-              <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
-              <button
-                className="rounded border border-slate-300 px-2 py-0.5"
-                disabled={isMutationActiveForNote}
-                onClick={async () => {
-                  await runAttachmentMutation(
-                    async () => {
-                      await unlinkAttachment(attachment.id, 'note', noteId);
-                      return listAttachments('note', noteId);
-                    },
-                    'Failed to remove attachment.',
-                  );
-                }}
-              >
-                Remove
-              </button>
+              <div className="min-w-0">
+                <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
+                {getAttachmentStatusBadgeLabel(attachment, latestIngestionReasonsByAttachmentId?.[attachment.id]) && (
+                  <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                    {getAttachmentStatusBadgeLabel(attachment, latestIngestionReasonsByAttachmentId?.[attachment.id])}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentOpenUrl(attachment.id)} target="_blank" rel="noreferrer">Open</a>
+                <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentDownloadUrl(attachment.id)} download>Download</a>
+                <button
+                  className="rounded border border-slate-300 px-2 py-0.5"
+                  disabled={isAnyAttachmentMutationActive}
+                  onClick={() => setPendingDeleteTarget({
+                    attachment,
+                    linkType: 'note',
+                    linkId: noteId,
+                    contextLabel: 'note',
+                  })}
+                >
+                  Remove
+                </button>
+              </div>
             </li>
           ))}
         </ul>
@@ -265,7 +292,33 @@ export function MetadataPanel({
             <ul className="mt-2 space-y-1">
               {linkedTaskAttachments.map((attachment) => (
                 <li key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
+                  <div className="min-w-0">
+                    <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
+                    {getAttachmentStatusBadgeLabel(attachment, latestIngestionReasonsByAttachmentId?.[attachment.id]) && (
+                      <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                        {getAttachmentStatusBadgeLabel(attachment, latestIngestionReasonsByAttachmentId?.[attachment.id])}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentOpenUrl(attachment.id)} target="_blank" rel="noreferrer">Open</a>
+                    <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentDownloadUrl(attachment.id)} download>Download</a>
+                    <button
+                      className="rounded border border-slate-300 px-2 py-0.5"
+                      disabled={isAnyAttachmentMutationActive}
+                      onClick={() => {
+                        if (!linkedTaskId) return;
+                        setPendingDeleteTarget({
+                          attachment,
+                          linkType: 'task',
+                          linkId: linkedTaskId,
+                          contextLabel: 'task',
+                        });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -387,6 +440,43 @@ export function MetadataPanel({
           </div>
         </aside>
       )}
+      <AttachmentDeleteDialog
+        open={pendingDeleteTarget !== null}
+        attachment={pendingDeleteTarget?.attachment ?? null}
+        contextLabel={pendingDeleteTarget?.contextLabel ?? 'note'}
+        isBusy={isAnyAttachmentMutationActive}
+        onClose={() => setPendingDeleteTarget(null)}
+        onConfirm={(scope) => {
+          const target = pendingDeleteTarget;
+          if (!target) return;
+          setPendingDeleteTarget(null);
+          if (target.linkType === 'note') {
+            void runAttachmentMutation(
+              async () => {
+                if (scope === 'workspace') await deleteAttachmentFromWorkspace(target.attachment.id);
+                else await unlinkAttachment(target.attachment.id, target.linkType, target.linkId);
+                return listAttachments(target.linkType, target.linkId);
+              },
+              scope === 'workspace' ? 'Failed to delete attachment from workspace.' : 'Failed to remove attachment.',
+            );
+            return;
+          }
+          if (!linkedTaskId) return;
+          setLinkedTaskMutationActive(true);
+          void runUiAsync(
+            async () => {
+              if (scope === 'workspace') await deleteAttachmentFromWorkspace(target.attachment.id);
+              else await unlinkAttachment(target.attachment.id, target.linkType, target.linkId);
+              await reloadAttachments(target.linkType, target.linkId);
+            },
+            {
+              fallbackMessage: scope === 'workspace' ? 'Failed to delete attachment from workspace.' : 'Failed to remove attachment.',
+              onError: (message) => setLinkedTaskAttachmentsError(message),
+              onSuccess: () => setLinkedTaskAttachmentsError(null),
+            },
+          ).finally(() => setLinkedTaskMutationActive(false));
+        }}
+      />
     </>
   );
 }
