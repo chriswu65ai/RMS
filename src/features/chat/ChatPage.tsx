@@ -7,19 +7,27 @@ import { runUiAsync } from '../../lib/uiAsync';
 import { ChatComposer } from './components/ChatComposer';
 import { ChatMessageItem } from './components/ChatMessageItem';
 import { ChatSessionToolbar } from './components/ChatSessionToolbar';
-import { CHAT_OVERLAY_CONTAINER_TEST_ID, JUMP_TO_LATEST_OVERLAY_CLASS, shouldShowJumpToLatest } from './chatLayout';
+import {
+  BOTTOM_LOCK_THRESHOLD,
+  CHAT_OVERLAY_CONTAINER_TEST_ID,
+  JUMP_TO_LATEST_OVERLAY_CLASS,
+  KEYBOARD_RECONCILE_DELAY_MS,
+  computeKeyboardInset,
+  isNearBottom,
+  shouldRestoreBottomAnchor,
+  shouldShowJumpToLatest,
+} from './chatLayout';
 import { createChatPageActionBindings } from './chatPageActionBindings';
-
-const BOTTOM_LOCK_THRESHOLD = 80;
 
 type JumpToLatestOverlayProps = {
   showJumpToLatest: boolean;
   onJumpToLatest: () => void;
+  bottomOffset: number;
 };
 
-export function JumpToLatestOverlay({ showJumpToLatest, onJumpToLatest }: JumpToLatestOverlayProps) {
+export function JumpToLatestOverlay({ showJumpToLatest, onJumpToLatest, bottomOffset }: JumpToLatestOverlayProps) {
   return (
-    <div data-testid={CHAT_OVERLAY_CONTAINER_TEST_ID} className={JUMP_TO_LATEST_OVERLAY_CLASS}>
+    <div data-testid={CHAT_OVERLAY_CONTAINER_TEST_ID} className={JUMP_TO_LATEST_OVERLAY_CLASS} style={{ bottom: bottomOffset }}>
       {showJumpToLatest ? (
         <button
           className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 shadow hover:bg-slate-50"
@@ -34,6 +42,10 @@ export function JumpToLatestOverlay({ showJumpToLatest, onJumpToLatest }: JumpTo
 
 export function ChatPage() {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const reconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewportInsetRef = useRef(0);
+  const wasAtBottomBeforeKeyboardRef = useRef(false);
   const dialog = useDialog();
   const messages = useChatStore((state) => state.messages);
   const running = useChatStore((state) => state.running);
@@ -51,6 +63,8 @@ export function ChatPage() {
   const [autoScrollLocked, setAutoScrollLocked] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [sessionBusy, setSessionBusy] = useState(false);
+  const [keyboardInsetBottom, setKeyboardInsetBottom] = useState(0);
+  const [composerHeight, setComposerHeight] = useState(0);
 
   const actions = useMemo(() => createChatPageActionBindings({
     sendMessage,
@@ -74,6 +88,65 @@ export function ChatPage() {
   useEffect(() => {
     if (autoScrollLocked) scrollToBottom(messages.length <= 1 ? 'auto' : 'smooth');
   }, [autoScrollLocked, messages]);
+
+  useEffect(() => {
+    const updateComposerHeight = () => {
+      const height = composerRef.current?.offsetHeight ?? 0;
+      setComposerHeight(height);
+    };
+    updateComposerHeight();
+    window.addEventListener('resize', updateComposerHeight);
+    return () => {
+      window.removeEventListener('resize', updateComposerHeight);
+    };
+  }, []);
+
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) return;
+
+    const reconcileViewport = () => {
+      const nextInset = computeKeyboardInset(window.innerHeight, visualViewport.height, visualViewport.offsetTop);
+      const prevInset = viewportInsetRef.current;
+      const scroller = scrollerRef.current;
+      const keyboardOpening = prevInset === 0 && nextInset > 0;
+      const keyboardClosing = prevInset > 0 && nextInset === 0;
+
+      if (keyboardOpening && scroller) {
+        wasAtBottomBeforeKeyboardRef.current = isNearBottom(scroller, BOTTOM_LOCK_THRESHOLD);
+      }
+
+      viewportInsetRef.current = nextInset;
+      setKeyboardInsetBottom(nextInset);
+
+      if (reconcileTimerRef.current) {
+        clearTimeout(reconcileTimerRef.current);
+      }
+
+      if (keyboardClosing) {
+        reconcileTimerRef.current = setTimeout(() => {
+          if (shouldRestoreBottomAnchor(wasAtBottomBeforeKeyboardRef.current, autoScrollLocked)) {
+            scrollToBottom('auto');
+          }
+          wasAtBottomBeforeKeyboardRef.current = false;
+        }, KEYBOARD_RECONCILE_DELAY_MS);
+      }
+    };
+
+    reconcileViewport();
+    visualViewport.addEventListener('resize', reconcileViewport);
+    visualViewport.addEventListener('scroll', reconcileViewport);
+    window.addEventListener('resize', reconcileViewport);
+
+    return () => {
+      visualViewport.removeEventListener('resize', reconcileViewport);
+      visualViewport.removeEventListener('scroll', reconcileViewport);
+      window.removeEventListener('resize', reconcileViewport);
+      if (reconcileTimerRef.current) {
+        clearTimeout(reconcileTimerRef.current);
+      }
+    };
+  }, [autoScrollLocked]);
 
   const runSessionAction = async (
     action: () => Promise<unknown>,
@@ -106,10 +179,10 @@ export function ChatPage() {
       <div
         ref={scrollerRef}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-4"
+        style={{ paddingBottom: composerHeight ? composerHeight + keyboardInsetBottom : undefined }}
         onScroll={(event) => {
           const node = event.currentTarget;
-          const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-          setAutoScrollLocked(distanceFromBottom < BOTTOM_LOCK_THRESHOLD);
+          setAutoScrollLocked(isNearBottom(node, BOTTOM_LOCK_THRESHOLD));
         }}
       >
         <div className="mx-auto w-full max-w-3xl space-y-4">
@@ -166,13 +239,14 @@ export function ChatPage() {
 
       <JumpToLatestOverlay
         showJumpToLatest={showJumpToLatest}
+        bottomOffset={composerHeight + keyboardInsetBottom + 16}
         onJumpToLatest={() => {
           setAutoScrollLocked(true);
           scrollToBottom();
         }}
       />
 
-      <div className="sticky bottom-0">
+      <div ref={composerRef} className="sticky bottom-0 z-20" style={{ bottom: keyboardInsetBottom }}>
         <ChatComposer running={running} onSend={actions.sendMessage} onCancel={actions.cancelActive} />
       </div>
     </section>
