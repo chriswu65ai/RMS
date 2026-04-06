@@ -120,8 +120,6 @@ const statusLabel = (status: AgentActivityLog['status']) => status.charAt(0).toU
 const formatDuration = (durationMs: number | null) => (durationMs && durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '—');
 const formatUsd = (amount: number | null) => (typeof amount === 'number' ? `$${amount.toFixed(4)}` : '—');
 type WebSearchControlsProps = {
-  webSearchEnabled: boolean;
-  setWebSearchEnabled: (value: boolean) => void;
   webSearchProvider: WebSearchProvider;
   setWebSearchProvider: (provider: WebSearchProvider) => void;
   webSearchMode: WebSearchMode;
@@ -141,8 +139,6 @@ type WebSearchControlsProps = {
   domainPolicyHelperText: string;
   webSearchSafeSearch: boolean;
   setWebSearchSafeSearch: (value: boolean) => void;
-  webSearchSourceCitation: boolean;
-  setWebSearchSourceCitation: (value: boolean) => void;
   webSearchProviderCapabilities: { recency: boolean; safeSearch: boolean };
   webSearchSearxngBaseUrl: string;
   setWebSearchSearxngBaseUrl: (value: string) => void;
@@ -153,8 +149,6 @@ type WebSearchControlsProps = {
 };
 
 export function WebSearchControls({
-  webSearchEnabled,
-  setWebSearchEnabled,
   webSearchProvider,
   setWebSearchProvider,
   webSearchMode,
@@ -174,8 +168,6 @@ export function WebSearchControls({
   domainPolicyHelperText,
   webSearchSafeSearch,
   setWebSearchSafeSearch,
-  webSearchSourceCitation,
-  setWebSearchSourceCitation,
   webSearchProviderCapabilities,
   webSearchSearxngBaseUrl,
   setWebSearchSearxngBaseUrl,
@@ -186,18 +178,6 @@ export function WebSearchControls({
 }: WebSearchControlsProps) {
   return (
     <div className="space-y-4">
-      <label className={CHECKBOX_WITH_LABEL_CLASS}>
-        <input
-          className={CHECKBOX_INPUT_CLASS}
-          type="checkbox"
-          checked={webSearchEnabled}
-          onChange={(event) => {
-            setWebSearchEnabled(event.target.checked);
-            setWebSearchStatusMessage('');
-          }}
-        />
-        <span>Enable web search</span>
-      </label>
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
         <label className="space-y-1 text-sm">
           <span className="text-slate-600">Provider</span>
@@ -343,15 +323,6 @@ export function WebSearchControls({
           <span>Safe search</span>
         </label>
         {!webSearchProviderCapabilities.safeSearch ? <p className="text-xs text-slate-500">Safe search is not available with DuckDuckGo. Switch Provider to SearXNG to enable this.</p> : null}
-        <label className={CHECKBOX_WITH_LABEL_CLASS}>
-          <input
-            className={CHECKBOX_INPUT_CLASS}
-            type="checkbox"
-            checked={webSearchSourceCitation}
-            onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
-          />
-          <span>Source citation</span>
-        </label>
       </div>
     </div>
   );
@@ -435,6 +406,7 @@ export function AgentPage() {
   const chatSettingsMessage = chatSettingsFeedback?.text ?? '';
   const webSearchStatusMessage = webSearchStatusFeedback?.text ?? '';
   const preferredSourcesMessage = preferredSourcesFeedback?.text ?? '';
+  const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
@@ -1175,10 +1147,9 @@ export function AgentPage() {
                 }
                 setDomainInputError('');
                 try {
-                  const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);
                   const created = await savePreferredSource({
                     domain: canonicalDomain,
-                    weight: normalizedWeight,
+                    weight: normalizedNewWeight,
                     enabled: newEnabled,
                   });
                   setPreferredSources((current) => [...current, created]);
@@ -1215,7 +1186,7 @@ export function AgentPage() {
                     step={1}
                     value={newWeight}
                     aria-label="Source importance"
-                    style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}
+                    style={{ accentColor: getSourceImportanceColor(normalizedNewWeight) }}
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <input
@@ -1230,7 +1201,7 @@ export function AgentPage() {
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <span className="min-w-[10rem] text-xs font-medium text-slate-700">
-                    {getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)} ({clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)})
+                    {getSourceImportanceLabel(normalizedNewWeight)} ({normalizedNewWeight})
                   </span>
                 </div>
               </label>

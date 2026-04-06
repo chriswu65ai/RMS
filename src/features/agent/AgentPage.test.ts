@@ -463,7 +463,8 @@ test('source importance controls use canonical 1-100 range with slider + numeric
   assert.equal(source.includes('step={1}'), true);
   assert.equal(source.includes('type="number"'), true);
   assert.equal(source.includes('aria-label="Source importance numeric"'), true);
-  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}'), true);
+  assert.equal(source.includes('const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
+  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(normalizedNewWeight) }}'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
 });
 
@@ -484,15 +485,28 @@ test('preferred source table displays exact stored importance and label without 
 test('preferred source payload clamps numeric input to canonical 1-100 before submit/edit', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));'), true);
-  assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
+  assert.equal(source.includes('const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
-  assert.equal(source.includes('weight: normalizedWeight,'), true);
+  assert.equal(source.includes('weight: normalizedNewWeight,'), true);
 });
 
 test('configure agent section header reads Configure Agent', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.match(source, />\s*Configure Agent\s*<\/h2>/);
   assert.equal(source.includes('<h2 className="text-lg font-semibold">Choose agent</h2>'), false);
+});
+
+test('configure agent section groups web-search toggles before web-search detail section', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  const configureIndex = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
+  const enableSearchIndex = source.indexOf('<span>Enable web search</span>');
+  const sourceCitationIndex = source.indexOf('<span>Source citation</span>');
+  const webSearchSectionIndex = source.indexOf('<h2 className="text-lg font-semibold">Web Search</h2>');
+
+  assert.ok(configureIndex >= 0, 'Expected Configure Agent section to exist.');
+  assert.ok(enableSearchIndex > configureIndex, 'Expected Enable web search toggle inside Configure Agent section.');
+  assert.ok(sourceCitationIndex > enableSearchIndex, 'Expected Source citation toggle to follow Enable web search toggle.');
+  assert.ok(webSearchSectionIndex > sourceCitationIndex, 'Expected Web Search section details to appear after Configure Agent toggles.');
 });
 
 test('activity log clear action requires confirmation before deleting rows', () => {
@@ -509,8 +523,6 @@ test('activity log clear action requires confirmation before deleting rows', () 
 
 test('web search component keeps common control DOM order stable when provider changes', () => {
   const renderControls = (provider: 'duckduckgo' | 'searxng') => renderToStaticMarkup(createElement(WebSearchControls, {
-    webSearchEnabled: true,
-    setWebSearchEnabled: noop,
     webSearchProvider: provider,
     setWebSearchProvider: noop,
     webSearchMode: 'single',
@@ -530,8 +542,6 @@ test('web search component keeps common control DOM order stable when provider c
     domainPolicyHelperText: 'domain helper',
     webSearchSafeSearch: true,
     setWebSearchSafeSearch: noop,
-    webSearchSourceCitation: true,
-    setWebSearchSourceCitation: noop,
     webSearchProviderCapabilities: provider === 'searxng' ? WEB_SEARCH_PROVIDER_CAPABILITIES.searxng : WEB_SEARCH_PROVIDER_CAPABILITIES.duckduckgo,
     webSearchSearxngBaseUrl: 'http://localhost:8080',
     setWebSearchSearxngBaseUrl: noop,
@@ -560,8 +570,6 @@ test('web search component keeps common control DOM order stable when provider c
 
 test('web search component validation feedback is announced as assertive alert', () => {
   const html = renderToStaticMarkup(createElement(WebSearchControls, {
-    webSearchEnabled: true,
-    setWebSearchEnabled: noop,
     webSearchProvider: 'searxng',
     setWebSearchProvider: noop,
     webSearchMode: 'single',
@@ -581,8 +589,6 @@ test('web search component validation feedback is announced as assertive alert',
     domainPolicyHelperText: 'domain helper',
     webSearchSafeSearch: true,
     setWebSearchSafeSearch: noop,
-    webSearchSourceCitation: true,
-    setWebSearchSourceCitation: noop,
     webSearchProviderCapabilities: WEB_SEARCH_PROVIDER_CAPABILITIES.searxng,
     webSearchSearxngBaseUrl: 'invalid',
     setWebSearchSearxngBaseUrl: noop,
