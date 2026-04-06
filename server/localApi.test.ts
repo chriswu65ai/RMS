@@ -1562,6 +1562,41 @@ test('agent activity log is runtime-only and resets on restart', async () => {
   assert.deepEqual(JSON.parse(afterRestart.body), []);
 });
 
+test('agent activity log clear endpoint deletes persisted rows and returns an empty follow-up list', async () => {
+  await callRoute('DELETE', '/api/agent/activity-log');
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+  });
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    const generateResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    });
+    assert.equal(generateResponse.status, 200);
+  } finally {
+    providerRegistry.openai.generate = originalGenerate;
+  }
+
+  const beforeClear = await callRoute('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(beforeClear.status, 200);
+  const beforeRows = JSON.parse(beforeClear.body) as Array<{ id: string }>;
+  assert.equal(beforeRows.length > 0, true);
+
+  const clearResponse = await callRoute('DELETE', '/api/agent/activity-log');
+  assert.equal(clearResponse.status, 200);
+  assert.deepEqual(JSON.parse(clearResponse.body), { error: null });
+
+  const afterClear = await callRoute('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(afterClear.status, 200);
+  assert.deepEqual(JSON.parse(afterClear.body), []);
+});
+
 test('agent settings normalize invalid web search values to defaults', async () => {
   const saveResponse = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
