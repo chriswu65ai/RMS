@@ -178,6 +178,22 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
 });
 
+test('system log GET returns entries array and DELETE clears entries', async () => {
+  const before = await callRoute('GET', '/api/system-log?limit=20');
+  assert.equal(before.status, 200);
+  const beforePayload = JSON.parse(before.body) as { entries: Array<{ timestamp: string; level: string; message: string }> };
+  assert.equal(Array.isArray(beforePayload.entries), true);
+
+  const cleared = await callRoute('DELETE', '/api/system-log');
+  assert.equal(cleared.status, 200);
+
+  const after = await callRoute('GET', '/api/system-log?limit=20');
+  assert.equal(after.status, 200);
+  const afterPayload = JSON.parse(after.body) as { entries: Array<{ timestamp: string; level: string; message: string }> };
+  assert.equal(Array.isArray(afterPayload.entries), true);
+  assert.equal(afterPayload.entries.length, 0);
+});
+
 test('put agent settings rejects invalid URL fields with a 400 response', async () => {
   const invalidInterfaceResponse = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

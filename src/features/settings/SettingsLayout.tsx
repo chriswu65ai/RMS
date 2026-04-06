@@ -4,6 +4,7 @@ const settingsNavItems = [
   { to: 'general', label: 'General', id: 'settings-nav-general' },
   { to: 'ai', label: 'AI', id: 'settings-nav-ai' },
   { to: 'attachments', label: 'Attachments', id: 'settings-nav-attachments' },
+  { to: 'system-log', label: 'System Log', id: 'settings-nav-system-log' },
 ] as const;
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) => (

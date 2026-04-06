@@ -18,6 +18,14 @@ import {
 
 type ApiError = { message: string };
 type ApiResult = { error: ApiError | null };
+type SystemLogEntry = {
+  timestamp: string;
+  level: string;
+  area: string;
+  message: string;
+  details?: unknown;
+  request_id?: string;
+};
 
 type TaskApiRow = Omit<NewResearchTask, 'archived'> & { archived: boolean | number | string };
 
@@ -290,4 +298,17 @@ export async function runAttachmentCleanupNow(): Promise<{ removed_files: number
   const response = await fetch('/api/attachments/cleanup', { method: 'POST' });
   if (!response.ok) throw new Error(await response.text());
   return readJson<{ removed_files: number; purged_attachments: number }>(response);
+}
+
+export async function listSystemLog(limit = 200): Promise<SystemLogEntry[]> {
+  const response = await fetch(`/api/system-log?limit=${encodeURIComponent(String(limit))}`);
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await readJson<{ entries: SystemLogEntry[] }>(response);
+  return Array.isArray(payload.entries) ? payload.entries : [];
+}
+
+export async function clearSystemLog(): Promise<ApiResult> {
+  const response = await fetch('/api/system-log', { method: 'DELETE' });
+  if (!response.ok) throw new Error(await response.text());
+  return readJson<ApiResult>(response);
 }
