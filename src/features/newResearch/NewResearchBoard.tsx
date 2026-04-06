@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -67,6 +67,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<Array<{ id: string; description: string; created_at: string }>>([]);
   const [modalAttachments, setModalAttachments] = useState<Attachment[]>([]);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const initialFocusRef = useRef<HTMLInputElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const modalTitleId = useId();
+  const modalDescriptionId = useId();
   const taskByLinkedFileId = useMemo(() => {
     const byLinkedFile = new Map<string, NewResearchTask>();
     tasks.forEach((task) => {
@@ -369,19 +374,44 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   useEffect(() => {
     if (!modalState) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    window.setTimeout(() => {
+      initialFocusRef.current?.focus();
+    }, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setModalState(null);
-      transitionTaskModal(null);
+      if (event.key === 'Escape') {
+        setModalState(null);
+        transitionTaskModal(null);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const container = modalRef.current;
+      if (!container) return;
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute('disabled') && element.tabIndex !== -1);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
+      restoreFocusRef.current?.focus();
     };
   }, [modalState, transitionTaskModal]);
 
@@ -398,6 +428,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     () => (modalState?.mode === 'edit' && modalState.id ? tasks.find((item) => item.id === modalState.id) ?? null : null),
     [modalState, tasks],
   );
+  const modalDescribedBy = modalAttachmentError || boardError ? modalDescriptionId : undefined;
 
   return (
     <div className="mt-4 space-y-4">
@@ -460,10 +491,23 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
           if (event.target !== event.currentTarget) return;
           closeModal();
         }}>
-          <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
-            <h3 className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
+          <div
+            ref={modalRef}
+            className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={modalTitleId}
+            aria-describedby={modalDescribedBy}
+          >
+            <h3 id={modalTitleId} className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
+            {(modalAttachmentError || boardError) && (
+              <p id={modalDescriptionId} className="mt-2 text-xs text-rose-600">
+                {modalAttachmentError ?? boardError}
+              </p>
+            )}
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
+              <label className="text-sm md:col-span-2">Title<input ref={initialFocusRef} className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
               <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;
                 const ticker = e.target.value.toUpperCase();
