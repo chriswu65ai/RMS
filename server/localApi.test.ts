@@ -1262,6 +1262,38 @@ test('preferred sources create normalizes domain and supports listing', async ()
   assert.equal(listPayload.some((item) => item.domain === 'example.com'), true);
 });
 
+test('preferred sources round-trip boundary weights 1 and 100', async () => {
+  const minCreateResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'min-weight.example.com',
+    weight: 1,
+  });
+  assert.equal(minCreateResponse.status, 200);
+  const minCreated = JSON.parse(minCreateResponse.body) as { id: string; weight: number };
+  assert.equal(minCreated.weight, 1);
+
+  const maxCreateResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'max-weight.example.com',
+    weight: 100,
+  });
+  assert.equal(maxCreateResponse.status, 200);
+  const maxCreated = JSON.parse(maxCreateResponse.body) as { id: string; weight: number };
+  assert.equal(maxCreated.weight, 100);
+
+  const maxPatchResponse = await callRoute('PATCH', `/api/agent/preferred-sources/${maxCreated.id}`, {
+    weight: 1,
+  });
+  assert.equal(maxPatchResponse.status, 200);
+  const maxPatched = JSON.parse(maxPatchResponse.body) as { weight: number };
+  assert.equal(maxPatched.weight, 1);
+
+  const minPatchResponse = await callRoute('PATCH', `/api/agent/preferred-sources/${minCreated.id}`, {
+    weight: 100,
+  });
+  assert.equal(minPatchResponse.status, 200);
+  const minPatched = JSON.parse(minPatchResponse.body) as { weight: number };
+  assert.equal(minPatched.weight, 100);
+});
+
 test('preferred sources validate domain, weight, and uniqueness', async () => {
   const invalidDomainResponse = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'not a domain' });
   assert.equal(invalidDomainResponse.status, 400);
@@ -1271,6 +1303,11 @@ test('preferred sources validate domain, weight, and uniqueness', async () => {
     weight: 0,
   });
   assert.equal(invalidWeightResponse.status, 400);
+  const invalidHighWeightResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'valid-example-high.com',
+    weight: 101,
+  });
+  assert.equal(invalidHighWeightResponse.status, 400);
 
   const firstCreate = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'duplicate.example.com' });
   assert.equal(firstCreate.status, 200);

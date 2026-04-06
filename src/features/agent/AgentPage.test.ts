@@ -450,28 +450,32 @@ test('custom domain source section uses renamed source importance terminology an
   assert.equal(source.includes('In “Use only listed domains,” source importance does not change rank; it only filters by domain.'), true);
 });
 
-test('source importance controls use constrained 1-5 sliders with label mapping and intensity color', () => {
+test('source importance controls use canonical 1-100 range with slider + numeric input and dynamic label/color helpers', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  assert.equal(source.includes('const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {'), true);
-  assert.equal(source.includes("1: 'Low'"), true);
-  assert.equal(source.includes("5: 'Critical'"), true);
+  assert.equal(source.includes('const SOURCE_IMPORTANCE_MIN = 1;'), true);
+  assert.equal(source.includes('const SOURCE_IMPORTANCE_MAX = 100;'), true);
+  assert.equal(source.includes('if (normalized <= 20) return \'Low\';'), true);
+  assert.equal(source.includes('return `hsl(${hue}, 75%, ${lightness}%)`;'), true);
   assert.equal(source.includes('type="range"'), true);
-  assert.equal(source.includes('min={1}'), true);
-  assert.equal(source.includes('max={5}'), true);
+  assert.equal(source.includes('min={SOURCE_IMPORTANCE_MIN}'), true);
+  assert.equal(source.includes('max={SOURCE_IMPORTANCE_MAX}'), true);
   assert.equal(source.includes('step={1}'), true);
+  assert.equal(source.includes('type="number"'), true);
+  assert.equal(source.includes('aria-label="Source importance numeric"'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
 });
 
-test('preferred source table displays source importance labels with optional numeric helper text', () => {
+test('preferred source table displays exact stored importance and label without hard clamp mismatch', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('getSourceImportanceLabel(source.weight)'), true);
-  assert.equal(source.includes('title={`Importance level ${source.weight}`}'), true);
+  assert.equal(source.includes('title={`Importance level ${source.weight} (${getSourceImportanceLabel(source.weight)})`}'), true);
   assert.equal(source.includes('<span className="ml-1 text-xs text-slate-400">({source.weight})</span>'), true);
 });
 
-test('preferred source payload keeps weight numeric after slider inputs', () => {
+test('preferred source payload clamps numeric input to canonical 1-100 before submit/edit', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || 1);'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
   assert.equal(source.includes('weight: normalizedWeight,'), true);

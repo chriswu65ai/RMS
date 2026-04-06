@@ -87,27 +87,26 @@ const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
   cancel: '/cancel',
   help: '/help',
 };
-const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {
-  1: 'Low',
-  2: 'Medium-low',
-  3: 'Medium',
-  4: 'High',
-  5: 'Critical',
-};
-const SOURCE_IMPORTANCE_COLORS: Record<number, string> = {
-  1: '#84cc16',
-  2: '#65a30d',
-  3: '#4d7c0f',
-  4: '#3f6212',
-  5: '#365314',
-};
+const SOURCE_IMPORTANCE_MIN = 1;
+const SOURCE_IMPORTANCE_MAX = 100;
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
-const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT, { stripSearxngSearchPath: true });
-const clampSourceImportance = (value: number) => Math.min(5, Math.max(1, value));
-const getSourceImportanceLabel = (value: number) => SOURCE_IMPORTANCE_LABELS[clampSourceImportance(value)];
-const getSourceImportanceColor = (value: number) => SOURCE_IMPORTANCE_COLORS[clampSourceImportance(value)];
-type FeedbackKind = 'success' | 'error';
-type FeedbackState = { kind: FeedbackKind; text: string };
+const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
+const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));
+const getSourceImportanceLabel = (value: number) => {
+  const normalized = clampSourceImportance(value);
+  if (normalized <= 20) return 'Low';
+  if (normalized <= 40) return 'Medium-low';
+  if (normalized <= 60) return 'Medium';
+  if (normalized <= 80) return 'High';
+  return 'Critical';
+};
+const getSourceImportanceColor = (value: number) => {
+  const normalized = clampSourceImportance(value);
+  const t = (normalized - SOURCE_IMPORTANCE_MIN) / (SOURCE_IMPORTANCE_MAX - SOURCE_IMPORTANCE_MIN);
+  const hue = Math.round(95 - (t * 15));
+  const lightness = Math.round(50 - (t * 15));
+  return `hsl(${hue}, 75%, ${lightness}%)`;
+};
 
 const providerLabel = (provider: AgentProvider) => {
   if (provider === 'openai') return 'ChatGPT';
@@ -1192,16 +1191,27 @@ export function AgentPage() {
                   <input
                     className="h-2 w-full cursor-pointer"
                     type="range"
-                    min={1}
-                    max={5}
+                    min={SOURCE_IMPORTANCE_MIN}
+                    max={SOURCE_IMPORTANCE_MAX}
                     step={1}
                     value={newWeight}
                     aria-label="Source importance"
                     style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
-                  <span className="min-w-[7rem] text-xs font-medium text-slate-700">
-                    {getSourceImportanceLabel(Number(newWeight) || 1)}
+                  <input
+                    className="input w-20"
+                    type="number"
+                    min={SOURCE_IMPORTANCE_MIN}
+                    max={SOURCE_IMPORTANCE_MAX}
+                    step={1}
+                    inputMode="numeric"
+                    aria-label="Source importance numeric"
+                    value={newWeight}
+                    onChange={(event) => setNewWeight(event.target.value)}
+                  />
+                  <span className="min-w-[10rem] text-xs font-medium text-slate-700">
+                    {getSourceImportanceLabel(Number(newWeight) || 1)} ({clampSourceImportance(Number(newWeight) || 1)})
                   </span>
                 </div>
               </label>
@@ -1242,20 +1252,31 @@ export function AgentPage() {
                               <input
                                 className="h-2 w-full cursor-pointer"
                                 type="range"
-                                min={1}
-                                max={5}
+                                min={SOURCE_IMPORTANCE_MIN}
+                                max={SOURCE_IMPORTANCE_MAX}
                                 step={1}
                                 value={editingWeight}
                                 aria-label="Source importance"
                                 style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}
                                 onChange={(event) => setEditingWeight(event.target.value)}
                               />
-                              <span className="min-w-[7rem] text-xs font-medium text-slate-700">
-                                {getSourceImportanceLabel(Number(editingWeight) || 1)}
+                              <input
+                                className="input w-20"
+                                type="number"
+                                min={SOURCE_IMPORTANCE_MIN}
+                                max={SOURCE_IMPORTANCE_MAX}
+                                step={1}
+                                inputMode="numeric"
+                                aria-label="Source importance numeric"
+                                value={editingWeight}
+                                onChange={(event) => setEditingWeight(event.target.value)}
+                              />
+                              <span className="min-w-[10rem] text-xs font-medium text-slate-700">
+                                {getSourceImportanceLabel(Number(editingWeight) || 1)} ({clampSourceImportance(Number(editingWeight) || 1)})
                               </span>
                             </div>
                           ) : (
-                            <span title={`Importance level ${source.weight}`}>
+                            <span title={`Importance level ${source.weight} (${getSourceImportanceLabel(source.weight)})`}>
                               {getSourceImportanceLabel(source.weight)}
                               <span className="ml-1 text-xs text-slate-400">({source.weight})</span>
                             </span>
