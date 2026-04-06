@@ -1,4 +1,5 @@
 import type { AgentToolCall, AgentToolDefinition } from './agentProviders';
+import { formatNoteTypeSuggestions, resolveCanonicalNoteType } from './noteTypeResolver';
 
 export type TaskStatus = 'ideas' | 'researching' | 'completed';
 export type TaskListStatus = TaskStatus | 'archived';
@@ -18,6 +19,7 @@ export type PendingActionStatus = 'pending' | 'confirmed' | 'cancelled';
 
 export type ChatToolAdapter = {
   listTasks: () => Promise<TaskRecord[]>;
+  resolveAllowedNoteTypes: () => Promise<string[]>;
   createTask: (input: {
     ticker: string;
     title: string;
@@ -34,7 +36,8 @@ export type ChatToolAdapter = {
     taskId?: string;
     noteId?: string;
     title?: string;
-  }) => Promise<{ note_id: string; note_path?: string; task_id?: string; action: 'created' | 'updated' }>;
+    note_type?: string;
+  }) => Promise<{ note_id: string; note_path?: string; task_id?: string; action: 'created' | 'updated'; template_path?: string | null; note_type?: string }>;
   savePendingActionDraft: (
     sessionId: string,
     actionKey: string,
@@ -92,6 +95,7 @@ type GenerateNoteArgs = {
   task_ref?: string;
   note_id?: string;
   title?: string;
+  note_type?: string;
 };
 
 type SupportedArgs = CreateTaskArgs | UpdateTaskArgs | ArchiveTaskArgs | ListByStatusArgs | GenerateNoteArgs;
@@ -187,23 +191,16 @@ const GENERATE_NOTE_SCHEMA: AgentToolDefinition = {
       task_ref: { type: 'string' },
       note_id: { type: 'string' },
       title: { type: 'string' },
+      note_type: { type: 'string' },
     },
     required: ['instruction'],
   },
 };
 
-export const CHAT_TOOLS: AgentToolDefinition[] = [
-  CREATE_TASK_SCHEMA,
-  UPDATE_TASK_SCHEMA,
-  ARCHIVE_TASK_SCHEMA,
-  LIST_TASKS_BY_STATUS_SCHEMA,
-  GENERATE_NOTE_SCHEMA,
-];
+export const CHAT_TOOLS: AgentToolDefinition[] = [CREATE_TASK_SCHEMA, UPDATE_TASK_SCHEMA, ARCHIVE_TASK_SCHEMA, LIST_TASKS_BY_STATUS_SCHEMA, GENERATE_NOTE_SCHEMA];
 
 const trimString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-
 const toUpperTicker = (value: unknown): string => trimString(value).toUpperCase();
-
 const actionKeyFor = (toolName: string): string => `chat_tool:${toolName}`;
 
 const findTaskMatches = (tasks: TaskRecord[], taskId?: string, taskRef?: string): TaskRecord[] => {
@@ -226,11 +223,7 @@ const saveDraftAndRequireConfirm = async (
   sessionId: string,
   toolName: string,
   draft: Record<string, unknown>,
-  confirmRequirement: PendingConfirmRequirement = {
-    tier: 'B',
-    plain_confirm_allowed: true,
-    examples: ['/confirm', 'confirm'],
-  },
+  confirmRequirement: PendingConfirmRequirement = { tier: 'B', plain_confirm_allowed: true, examples: ['/confirm', 'confirm'] },
 ): Promise<void> => {
   await adapter.savePendingActionDraft(sessionId, actionKeyFor(toolName), {
     tool_name: toolName,
@@ -242,17 +235,14 @@ const saveDraftAndRequireConfirm = async (
 
 export const runChatToolOrchestration = async (
   adapter: ChatToolAdapter,
-  input: {
-    sessionId: string;
-    toolCall: AgentToolCall;
-    explicitConfirm?: boolean;
-    askWhenInfoMissing?: boolean;
-  },
+  input: { sessionId: string; toolCall: AgentToolCall; explicitConfirm?: boolean; askWhenInfoMissing?: boolean },
 ): Promise<ChatToolOutcome> => {
   const { toolCall, sessionId } = input;
   const explicitConfirm = Boolean(input.explicitConfirm);
   const askWhenInfoMissing = input.askWhenInfoMissing !== false;
   const args = (toolCall.arguments ?? {}) as Record<string, unknown>;
+  const allowedNoteTypes = await adapter.resolveAllowedNoteTypes();
+  const suggestions = formatNoteTypeSuggestions(allowedNoteTypes);
 
   if (toolCall.name === 'create_task') {
     const normalized: CreateTaskArgs = {
@@ -263,36 +253,32 @@ export const runChatToolOrchestration = async (
       assignee: trimString(args.assignee) || undefined,
       priority: trimString(args.priority) || undefined,
       deadline: trimString(args.deadline) || undefined,
-      status: args.status === 'ideas' || args.status === 'researching' || args.status === 'completed'
-        ? args.status
-        : undefined,
+      status: args.status === 'ideas' || args.status === 'researching' || args.status === 'completed' ? args.status : undefined,
     };
     const missing = ['ticker', 'title', 'note_type'].filter((field) => !normalized[field as keyof CreateTaskArgs]);
+    const resolvedNoteType = resolveCanonicalNoteType(normalized.note_type, allowedNoteTypes);
+    if (!resolvedNoteType && !missing.includes('note_type')) missing.push('note_type');
     if (missing.length > 0) {
       if (!askWhenInfoMissing) {
         return {
           status: 'rejected',
-          narration_before: 'I cannot execute create_task because required fields are missing.',
-          narration_after: `Missing required fields: ${missing.join(', ')}.`,
+          narration_before: 'I cannot execute create_task because required fields are missing or invalid.',
+          narration_after: `Missing/invalid fields: ${missing.join(', ')}. Allowed note types: ${suggestions}.`,
           missing_fields: missing,
         };
       }
-      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: normalized, missing_fields: missing });
+      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: { ...normalized, note_type: resolvedNoteType ?? normalized.note_type }, missing_fields: missing, slots: { required: ['ticker', 'title', 'note_type'], optional: ['details', 'assignee', 'priority', 'deadline', 'status'] } });
       return {
         status: 'needs_confirmation',
         narration_before: 'I prepared a create_task draft but I am missing required fields.',
-        narration_after: `Draft saved. Please provide: ${missing.join(', ')}. Then explicitly confirm to execute.`,
+        narration_after: `Please provide required fields first: ${missing.join(', ')}. Allowed note types: ${suggestions}. Optional fields can be added after that (or say "skip").`,
         missing_fields: missing,
       };
     }
-    const narrationBefore = `I will create task ${normalized.ticker} — ${normalized.title}.`;
+    normalized.note_type = resolvedNoteType as string;
+    const narrationBefore = `I will create task ${normalized.ticker} — ${normalized.title} (note type: ${normalized.note_type}).`;
     const created = await adapter.createTask(normalized);
-    return {
-      status: 'executed',
-      narration_before: narrationBefore,
-      narration_after: `Task created successfully: ${created.ticker} — ${created.title}.`,
-      result: created as unknown as Record<string, unknown>,
-    };
+    return { status: 'executed', narration_before: narrationBefore, narration_after: `Task created successfully: ${created.ticker} — ${created.title}.`, result: created as unknown as Record<string, unknown> };
   }
 
   if (toolCall.name === 'update_task' || toolCall.name === 'archive_task' || toolCall.name === 'generate_note') {
@@ -303,42 +289,20 @@ export const runChatToolOrchestration = async (
 
     if (!taskId && !taskRef && toolCall.name !== 'generate_note') {
       if (!askWhenInfoMissing) {
-        return {
-          status: 'rejected',
-          narration_before: `I cannot execute ${toolCall.name} because task reference is missing.`,
-          narration_after: 'Provide task_id or task_ref.',
-          missing_fields: ['task_id|task_ref'],
-        };
+        return { status: 'rejected', narration_before: `I cannot execute ${toolCall.name} because task reference is missing.`, narration_after: 'Provide task_id or task_ref.', missing_fields: ['task_id|task_ref'] };
       }
       await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: args, missing_fields: ['task_id|task_ref'] });
-      return {
-        status: 'needs_confirmation',
-        narration_before: `I prepared a ${toolCall.name} draft but task reference is missing.`,
-        narration_after: 'Draft saved. Provide task_id or task_ref and explicitly confirm to execute.',
-        missing_fields: ['task_id|task_ref'],
-      };
+      return { status: 'needs_confirmation', narration_before: `I prepared a ${toolCall.name} draft but task reference is missing.`, narration_after: 'Draft saved. Provide task_id or task_ref and explicitly confirm to execute.', missing_fields: ['task_id|task_ref'] };
     }
 
     if (matches.length > 1) {
       const prompt = buildChoicePrompt(toolCall.name.replace('_', ' '), matches);
-      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, {
-        arguments: args,
-        ambiguous_matches: matches.map((task) => ({ id: task.id, ticker: task.ticker, title: task.title })),
-      });
-      return {
-        status: 'needs_disambiguation',
-        narration_before: 'I found multiple matching tasks, so I will not auto-pick.',
-        narration_after: 'Please pick one numbered option, then explicitly confirm.',
-        disambiguation_prompt: prompt,
-      };
+      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: args, ambiguous_matches: matches.map((task) => ({ id: task.id, ticker: task.ticker, title: task.title })) });
+      return { status: 'needs_disambiguation', narration_before: 'I found multiple matching tasks, so I will not auto-pick.', narration_after: 'Please pick one numbered option, then explicitly confirm.', disambiguation_prompt: prompt };
     }
 
     if ((taskId || taskRef) && matches.length === 0 && toolCall.name !== 'generate_note') {
-      return {
-        status: 'rejected',
-        narration_before: 'I tried to resolve the task reference.',
-        narration_after: 'No matching task was found. Please provide a valid task_id or clearer task_ref.',
-      };
+      return { status: 'rejected', narration_before: 'I tried to resolve the task reference.', narration_after: 'No matching task was found. Please provide a valid task_id or clearer task_ref.' };
     }
 
     const resolvedTask = matches[0];
@@ -352,74 +316,46 @@ export const runChatToolOrchestration = async (
         assignee: trimString(args.assignee) || undefined,
         priority: trimString(args.priority) || undefined,
         deadline: trimString(args.deadline) || undefined,
-        status: args.status === 'ideas' || args.status === 'researching' || args.status === 'completed'
-          ? args.status
-          : undefined,
+        status: args.status === 'ideas' || args.status === 'researching' || args.status === 'completed' ? args.status : undefined,
         archived: typeof args.archived === 'boolean' ? args.archived : undefined,
       };
+      if (patch.note_type) {
+        const canonical = resolveCanonicalNoteType(patch.note_type, allowedNoteTypes);
+        if (!canonical) {
+          await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask?.id, patch, missing_fields: ['note_type'] });
+          return { status: 'needs_confirmation', narration_before: 'I prepared an update_task draft but note_type is invalid.', narration_after: `Allowed note types: ${suggestions}.`, missing_fields: ['note_type'] };
+        }
+        patch.note_type = canonical;
+      }
       const hasPatchFields = Object.values(patch).some((value) => value !== undefined && value !== '');
       if (!resolvedTask || !hasPatchFields) {
         const missing: string[] = [];
         if (!resolvedTask) missing.push('task_id|task_ref');
         if (!hasPatchFields) missing.push('at least one update field');
         await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: args, missing_fields: missing });
-        return {
-          status: 'needs_confirmation',
-          narration_before: 'I prepared an update_task draft but it is incomplete.',
-          narration_after: `Draft saved. Missing: ${missing.join(', ')}. Explicit confirm is required after completion.`,
-          missing_fields: missing,
-        };
+        return { status: 'needs_confirmation', narration_before: 'I prepared an update_task draft but it is incomplete.', narration_after: `Draft saved. Missing: ${missing.join(', ')}. Explicit confirm is required after completion.`, missing_fields: missing };
       }
       if (!explicitConfirm) {
         await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask.id, patch });
-        return {
-          status: 'needs_confirmation',
-          narration_before: `I resolved task ${resolvedTask.ticker} — ${resolvedTask.title}.`,
-          narration_after: 'Draft saved. Please explicitly confirm before I apply updates.',
-        };
+        return { status: 'needs_confirmation', narration_before: `I resolved task ${resolvedTask.ticker} — ${resolvedTask.title}.`, narration_after: 'Draft saved. Please explicitly confirm before I apply updates.' };
       }
       const narrationBefore = `I will update task ${resolvedTask.ticker} — ${resolvedTask.title}.`;
       const updated = await adapter.updateTask(resolvedTask.id, patch as Record<string, unknown>);
-      return {
-        status: 'executed',
-        narration_before: narrationBefore,
-        narration_after: `Task updated successfully: ${updated.ticker} — ${updated.title}.`,
-        result: updated as unknown as Record<string, unknown>,
-      };
+      return { status: 'executed', narration_before: narrationBefore, narration_after: `Task updated successfully: ${updated.ticker} — ${updated.title}.`, result: updated as unknown as Record<string, unknown> };
     }
 
     if (toolCall.name === 'archive_task') {
       if (!resolvedTask) {
         await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: args, missing_fields: ['task_id|task_ref'] });
-        return {
-          status: 'needs_confirmation',
-          narration_before: 'I prepared an archive_task draft but task reference is missing.',
-          narration_after: 'Draft saved. Provide task_id or task_ref and explicitly confirm.',
-          missing_fields: ['task_id|task_ref'],
-        };
+        return { status: 'needs_confirmation', narration_before: 'I prepared an archive_task draft but task reference is missing.', narration_after: 'Draft saved. Provide task_id or task_ref and explicitly confirm.', missing_fields: ['task_id|task_ref'] };
       }
       if (!explicitConfirm) {
-        await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask.id, archived: true }, {
-          tier: 'C',
-          action: 'archive',
-          target_id: resolvedTask.id,
-          plain_confirm_allowed: false,
-          examples: [`/confirm archive ${resolvedTask.id}`],
-        });
-        return {
-          status: 'needs_confirmation',
-          narration_before: `I resolved task ${resolvedTask.ticker} — ${resolvedTask.title}.`,
-          narration_after: `Draft saved. To continue, reply: /confirm archive ${resolvedTask.id}.`,
-        };
+        await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask.id, archived: true }, { tier: 'C', action: 'archive', target_id: resolvedTask.id, plain_confirm_allowed: false, examples: [`/confirm archive ${resolvedTask.id}`] });
+        return { status: 'needs_confirmation', narration_before: `I resolved task ${resolvedTask.ticker} — ${resolvedTask.title}.`, narration_after: `Draft saved. To continue, reply: /confirm archive ${resolvedTask.id}.` };
       }
       const narrationBefore = `I will archive task ${resolvedTask.ticker} — ${resolvedTask.title}.`;
       const updated = await adapter.updateTask(resolvedTask.id, { archived: true });
-      return {
-        status: 'executed',
-        narration_before: narrationBefore,
-        narration_after: `Task archived successfully: ${updated.ticker} — ${updated.title}.`,
-        result: updated as unknown as Record<string, unknown>,
-      };
+      return { status: 'executed', narration_before: narrationBefore, narration_after: `Task archived successfully: ${updated.ticker} — ${updated.title}.`, result: updated as unknown as Record<string, unknown> };
     }
 
     const normalizedGenerate: GenerateNoteArgs = {
@@ -428,62 +364,61 @@ export const runChatToolOrchestration = async (
       task_ref: taskRef || undefined,
       note_id: trimString(args.note_id) || undefined,
       title: trimString(args.title) || undefined,
+      note_type: trimString(args.note_type) || undefined,
     };
-    if (!normalizedGenerate.instruction) {
+    const missingGenerate: string[] = [];
+    if (!normalizedGenerate.instruction) missingGenerate.push('instruction');
+    const requiresCreateNoteType = !normalizedGenerate.note_id;
+    const canonicalGenerateType = resolveCanonicalNoteType(normalizedGenerate.note_type ?? resolvedTask?.note_type ?? '', allowedNoteTypes);
+    if (requiresCreateNoteType && !canonicalGenerateType) missingGenerate.push('note_type');
+    if (missingGenerate.length > 0) {
       await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, {
-        arguments: normalizedGenerate,
-        missing_fields: ['instruction'],
+        arguments: { ...normalizedGenerate, note_type: canonicalGenerateType ?? normalizedGenerate.note_type },
+        missing_fields: missingGenerate,
+        slots: {
+          required: ['instruction', ...(requiresCreateNoteType ? ['note_type'] : [])],
+          optional: ['title', 'task_id|task_ref', 'note_id'],
+          suggestions: { note_type: allowedNoteTypes },
+        },
       });
       return {
         status: 'needs_confirmation',
-        narration_before: 'I prepared a generate_note draft but instruction is missing.',
-        narration_after: 'Draft saved. Add instruction text and explicitly confirm to execute.',
-        missing_fields: ['instruction'],
+        narration_before: 'I prepared a generate_note draft but required fields are missing.',
+        narration_after: `Please provide required fields first (${missingGenerate.join(', ')}). Allowed note types: ${suggestions}. Then provide optional fields or say "skip" for each optional field.`,
+        missing_fields: missingGenerate,
       };
     }
+    normalizedGenerate.note_type = canonicalGenerateType ?? undefined;
+
     if (!explicitConfirm && (!normalizedGenerate.task_id || matches.length > 0)) {
       const isOverwrite = Boolean(normalizedGenerate.note_id);
       const confirmRequirement: PendingConfirmRequirement = isOverwrite
-        ? {
-          tier: 'C',
-          action: 'overwrite',
-          target_id: normalizedGenerate.note_id,
-          plain_confirm_allowed: false,
-          examples: [`/confirm overwrite ${normalizedGenerate.note_id}`],
-        }
-        : {
-          tier: 'B',
-          plain_confirm_allowed: true,
-          examples: ['/confirm', 'confirm'],
-        };
-      await saveDraftAndRequireConfirm(
-        adapter,
-        sessionId,
-        toolCall.name,
-        normalizedGenerate as unknown as Record<string, unknown>,
-        confirmRequirement,
-      );
+        ? { tier: 'C', action: 'overwrite', target_id: normalizedGenerate.note_id, plain_confirm_allowed: false, examples: [`/confirm overwrite ${normalizedGenerate.note_id}`] }
+        : { tier: 'B', plain_confirm_allowed: true, examples: ['/confirm', 'confirm'] };
+      const templateSummary = normalizedGenerate.note_id ? 'existing note update' : `template routing by note_type=${normalizedGenerate.note_type}`;
+      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { ...normalizedGenerate, confirmation_summary: { note_type: normalizedGenerate.note_type ?? null, template_mapping: templateSummary } } as unknown as Record<string, unknown>, confirmRequirement);
       return {
         status: 'needs_confirmation',
         narration_before: 'I prepared a generate_note draft.',
         narration_after: isOverwrite
           ? `Draft saved. To continue, reply: /confirm overwrite ${normalizedGenerate.note_id}.`
-          : 'Draft saved. Reply /confirm (or confirm) when ready.',
+          : `Draft saved. Confirmation summary: note type ${normalizedGenerate.note_type}; ${templateSummary}. Reply /confirm (or confirm) when ready.`,
       };
     }
     const narrationBefore = normalizedGenerate.task_id
-      ? `I will generate/update the note for ${resolvedTask?.ticker} — ${resolvedTask?.title}.`
-      : 'I will generate a note based on your instruction.';
+      ? `I will generate/update the note for ${resolvedTask?.ticker} — ${resolvedTask?.title} (note type: ${normalizedGenerate.note_type ?? resolvedTask?.note_type ?? 'n/a'}).`
+      : `I will generate a note based on your instruction (note type: ${normalizedGenerate.note_type}).`;
     const noteResult = await adapter.generateNote({
       instruction: normalizedGenerate.instruction,
       taskId: normalizedGenerate.task_id,
       noteId: normalizedGenerate.note_id,
       title: normalizedGenerate.title,
+      note_type: normalizedGenerate.note_type,
     });
     return {
       status: 'executed',
       narration_before: narrationBefore,
-      narration_after: `Note ${noteResult.action} successfully (note_id: ${noteResult.note_id}).`,
+      narration_after: `Note ${noteResult.action} successfully (note_id: ${noteResult.note_id}, note_type: ${noteResult.note_type ?? normalizedGenerate.note_type ?? 'n/a'}, template: ${noteResult.template_path ?? 'none'}).`,
       result: noteResult as unknown as Record<string, unknown>,
     };
   }
@@ -491,29 +426,14 @@ export const runChatToolOrchestration = async (
   if (toolCall.name === 'list_tasks_by_status') {
     const status = args.status;
     if (status !== 'ideas' && status !== 'researching' && status !== 'completed' && status !== 'archived') {
-      return {
-        status: 'rejected',
-        narration_before: 'I attempted to list tasks by status.',
-        narration_after: 'Invalid status. Use one of ideas, researching, completed, archived.',
-      };
+      return { status: 'rejected', narration_before: 'I attempted to list tasks by status.', narration_after: 'Invalid status. Use one of ideas, researching, completed, archived.' };
     }
     const all = await adapter.listTasks();
-    const filtered = status === 'archived'
-      ? all.filter((task) => task.archived)
-      : all.filter((task) => !task.archived && task.status === status);
-    return {
-      status: 'executed',
-      narration_before: `I will list tasks in ${status}.`,
-      narration_after: `Found ${filtered.length} task(s) in ${status}.`,
-      result: { status, tasks: filtered },
-    };
+    const filtered = status === 'archived' ? all.filter((task) => task.archived) : all.filter((task) => !task.archived && task.status === status);
+    return { status: 'executed', narration_before: `I will list tasks in ${status}.`, narration_after: `Found ${filtered.length} task(s) in ${status}.`, result: { status, tasks: filtered } };
   }
 
-  return {
-    status: 'rejected',
-    narration_before: 'I received a tool call.',
-    narration_after: `Unsupported tool: ${toolCall.name}.`,
-  };
+  return { status: 'rejected', narration_before: 'I received a tool call.', narration_after: `Unsupported tool: ${toolCall.name}.` };
 };
 
 export const chatToolSchemas = {
@@ -525,5 +445,4 @@ export const chatToolSchemas = {
 } as const;
 
 export const isSupportedChatTool = (name: string): name is keyof typeof chatToolSchemas => name in chatToolSchemas;
-
 export const parseToolArgs = <T extends SupportedArgs>(toolCall: AgentToolCall): T => (toolCall.arguments ?? {}) as T;
