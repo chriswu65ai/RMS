@@ -2408,6 +2408,144 @@ test('chat intent routing asks clarification for ambiguous action-like prompts',
   }
 });
 
+test('chat acceptance matrix enforces conversation/action/ambiguous routing thresholds', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'off',
+    },
+  });
+
+  const conversationPrompts = [
+    'Explain index funds in plain English.',
+    'What are three study habits that improve retention?',
+    'How can I structure my day for deep work?',
+    'What is the difference between RAM and storage?',
+    'Give me a short pep talk before an interview.',
+    'How should I think about risk versus reward?',
+    'Compare monoliths and microservices at a high level.',
+    'What does opportunity cost mean?',
+    'How do I get better at asking clarifying questions?',
+    'What are common signs of burnout?',
+  ];
+  const ambiguousPrompts = [
+    'Can you help with my tasks?',
+    'I need something done for Tesla.',
+    'Do something with my notes.',
+    'Can we work on my backlog?',
+    'Could you manage my todo list?',
+    'Can you help me with AAPL?',
+    'Handle my note workflow.',
+    'Can you take care of this task list?',
+    'Need help organizing my projects.',
+    'Can we do something about this note?',
+  ];
+  const actionPrompts: Array<{ content: string; expectedTool: string }> = [
+    { content: 'list my idea tasks', expectedTool: 'list_tasks_by_status' },
+    { content: 'create a task for nvda titled momentum check', expectedTool: 'create_task' },
+    { content: 'update task t1 status to active', expectedTool: 'update_task' },
+    { content: 'archive task t1', expectedTool: 'archive_task' },
+    { content: 'generate note from task t1', expectedTool: 'generate_note' },
+    { content: 'list my blocked tasks', expectedTool: 'list_tasks_by_status' },
+    { content: 'create a task for aapl titled earnings prep', expectedTool: 'create_task' },
+    { content: 'update task t2 title to revised title', expectedTool: 'update_task' },
+    { content: 'archive task t2 now', expectedTool: 'archive_task' },
+    { content: 'draft a note from task t2', expectedTool: 'generate_note' },
+  ];
+
+  const routeFromBody = (body: string): string => {
+    const frames = body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string });
+    return frames.find((frame) => frame.type === 'intent_routing')?.route ?? 'missing';
+  };
+
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async (request) => {
+    const text = request.inputText.toLowerCase();
+    const mapping: Array<{ token: string; name: string }> = [
+      { token: 'list my idea tasks', name: 'list_tasks_by_status' },
+      { token: 'list my blocked tasks', name: 'list_tasks_by_status' },
+      { token: 'create a task', name: 'create_task' },
+      { token: 'update task', name: 'update_task' },
+      { token: 'archive task', name: 'archive_task' },
+      { token: 'generate note from task', name: 'generate_note' },
+      { token: 'draft a note from task', name: 'generate_note' },
+    ];
+    const matched = mapping.find((entry) => text.includes(entry.token));
+    if (!matched) throw new Error(`unmapped action prompt: ${request.inputText}`);
+    return {
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: `matrix-${matched.name}`,
+        name: matched.name,
+        arguments: matched.name === 'list_tasks_by_status' ? { status: 'ideas' } : {},
+      }],
+    };
+  };
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Conversational answer', latencyMs: 1 });
+
+  try {
+    let conversationAsAction = 0;
+    let conversationAsConversation = 0;
+    for (const prompt of conversationPrompts) {
+      const response = await callRoute('POST', '/api/chat/session/current/messages', { content: prompt });
+      assert.equal(response.status, 200);
+      const route = routeFromBody(response.body);
+      if (route === 'action') conversationAsAction += 1;
+      if (route === 'conversation') conversationAsConversation += 1;
+    }
+
+    let ambiguousClarified = 0;
+    for (const prompt of ambiguousPrompts) {
+      const response = await callRoute('POST', '/api/chat/session/current/messages', { content: prompt });
+      assert.equal(response.status, 200);
+      const route = routeFromBody(response.body);
+      if (route === 'ambiguous') ambiguousClarified += 1;
+      const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+      assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), false);
+    }
+
+    let successfulActionCompletions = 0;
+    for (const prompt of actionPrompts) {
+      const response = await callRoute('POST', '/api/chat/session/current/messages', { content: prompt.content, explicit_confirm: true });
+      assert.equal(response.status, 200);
+      const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string; outcome?: string; tool_name?: string });
+      assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.route === 'action'), true);
+      const toolResult = frames.find((frame) => frame.type === 'tool_call_result');
+      assert.equal(toolResult?.tool_name, prompt.expectedTool);
+      if (toolResult?.outcome === 'executed') successfulActionCompletions += 1;
+    }
+
+    const falsePositiveActionRate = conversationAsAction / conversationPrompts.length;
+    const conversationSuccessRate = conversationAsConversation / conversationPrompts.length;
+    const ambiguousClarificationRate = ambiguousClarified / ambiguousPrompts.length;
+    const actionCompletionRate = successfulActionCompletions / actionPrompts.length;
+
+    assert.equal(conversationPrompts.length, 10);
+    assert.equal(actionPrompts.length, 10);
+    assert.equal(ambiguousPrompts.length, 10);
+    assert.equal(falsePositiveActionRate <= 0.1, true, `false-positive action routing ${falsePositiveActionRate.toFixed(2)} exceeded 0.10`);
+    assert.equal(conversationSuccessRate >= 0.9, true, `conversation routing success ${conversationSuccessRate.toFixed(2)} below 0.90`);
+    assert.equal(ambiguousClarificationRate >= 0.9, true, `ambiguous clarification rate ${ambiguousClarificationRate.toFixed(2)} below 0.90`);
+    assert.equal(actionCompletionRate >= 0.9, true, `action completion rate ${actionCompletionRate.toFixed(2)} below 0.90`);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('command prefix mode ON blocks natural-language tool execution and returns guidance', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
