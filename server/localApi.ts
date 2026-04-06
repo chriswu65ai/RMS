@@ -57,6 +57,7 @@ type NewResearchTaskRow = {
   updated_at: string;
 };
 const VALID_TASK_PRIORITIES = new Set(['', 'low', 'medium', 'high']);
+const TASK_NOTE_LINK_CONFLICT_MESSAGE = 'That note is already linked to another task. Task↔note links must stay one-to-one.';
 
 type TaskActivityRow = {
   id: string;
@@ -4220,10 +4221,18 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const normalizedPriority = VALID_TASK_PRIORITIES.has(priority) ? priority : '';
       const normalizedStatus = normalizeTaskStatus(payload.status);
       const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed, normalizedStatus);
+      const nextLinkedFile = String(payload.linked_note_file_id ?? '').trim();
+      if (nextLinkedFile) {
+        const linkOwner = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} limit 1`))[0];
+        if (linkOwner) {
+          writeJson(res, 409, { error: { message: TASK_NOTE_LINK_CONFLICT_MESSAGE } });
+          return true;
+        }
+      }
       const now = new Date().toISOString();
       const id = randomUUID();
       const noteType = String(payload.note_type ?? '').trim();
-      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(normalizedStatus)}, ${sqlEscape(normalizedDateCompleted)}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(normalizedStatus)}, ${sqlEscape(normalizedDateCompleted)}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(nextLinkedFile)}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(id, 'create', 'Task created.');
       const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
       emitStructuredLog('task.create.outcome', {
@@ -4254,7 +4263,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (nextLinkedFile) {
         const linkOwner = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} and id != ${sqlEscape(taskId)} limit 1`))[0];
         if (linkOwner) {
-          writeJson(res, 409, { error: { message: 'That note is already linked to another task. Task↔note links must stay one-to-one.' } });
+          writeJson(res, 409, { error: { message: TASK_NOTE_LINK_CONFLICT_MESSAGE } });
           return true;
         }
       }
