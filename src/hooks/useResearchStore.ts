@@ -809,5 +809,7 @@ export const toLocalDateInputValue = (date = new Date()) => {
   return local.toISOString().slice(0, 10);
 };
 
+export const MARKDOWN_EXTENSION = '.md';
+
 export const buildCanonicalStockFileName = (date: string, ticker: string, type: string) =>
-  `${date} ${ticker.trim().toUpperCase()}-${type.trim().toLowerCase()}.md`;
+  `${date} ${ticker.trim().toUpperCase()}-${type.trim().toLowerCase()}`;
