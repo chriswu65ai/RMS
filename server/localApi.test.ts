@@ -762,6 +762,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
         recency?: string;
         domain_policy?: string;
         source_citation?: boolean;
+        fail_open_on_tool_error?: boolean;
         provider_config?: {
           searxng?: {
             base_url?: string;
@@ -780,6 +781,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.recency, '30d');
   assert.equal(payload.generation_params?.web_search?.domain_policy, 'prefer_list');
   assert.equal(payload.generation_params?.web_search?.source_citation, false);
+  assert.equal(payload.generation_params?.web_search?.fail_open_on_tool_error, true);
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://localhost:8080');
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, true);
 });
@@ -903,7 +905,7 @@ test('agent generate enriches input with deep web search context and caps source
   });
 });
 
-test('agent generate hard-fails when web search tool call fails', async () => {
+test('agent generate hard-fails when web search tool call fails in strict mode', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
     default_model: 'gpt-4.1',
@@ -913,6 +915,7 @@ test('agent generate hard-fails when web search tool call fails', async () => {
         mode: 'single',
         max_results: 5,
         timeout_ms: 3000,
+        fail_open_on_tool_error: false,
         domain_policy: 'open_web',
       },
     },
@@ -936,6 +939,7 @@ test('agent generate hard-fails when web search tool call fails', async () => {
     assert.equal(response.status, 200);
     const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(frames.some((line) => line.type === 'error' && line.message === 'search is down'), true);
+    assert.equal(frames.some((line) => line.type === 'search_warning' && line.message === 'search is down'), true);
     assert.equal(frames.some((line) => line.type === 'done'), false);
     const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
     assert.equal(activityResponse.status, 200);
@@ -1107,6 +1111,7 @@ test('agent settings normalize invalid web search values to defaults', async () 
     safe_search: false,
     recency: 'any',
     domain_policy: 'open_web',
+    fail_open_on_tool_error: true,
     source_citation: false,
     provider_config: {
       searxng: {
@@ -1669,7 +1674,12 @@ test('agent generate emits stream sources before done and warning frames on sear
     assert.equal(warningResponse.status, 200);
     const warningFrames = warningResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string; stage?: string; reason?: string });
     assert.equal(warningFrames.some((frame) => frame.type === 'tool_call_failed' && frame.reason === 'simulated failure'), true);
-    assert.equal(warningFrames.some((frame) => frame.type === 'error' && frame.message === 'simulated failure'), true);
+    assert.equal(warningFrames.some((frame) => frame.type === 'search_warning' && frame.message === 'simulated failure'), true);
+    assert.equal(warningFrames.some((frame) => frame.type === 'done'), true);
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
+    const activity = JSON.parse(activityResponse.body) as Array<{ status: string; search_warning: number; search_warning_message: string | null }>;
+    const warningEntry = activity.find((entry) => entry.status === 'success' && entry.search_warning === 1);
+    assert.equal(warningEntry?.search_warning_message, 'simulated failure');
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
