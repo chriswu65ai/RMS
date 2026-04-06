@@ -13,6 +13,7 @@ type ChatApiMessage = {
   role: string;
   content: string;
   created_at: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 type ChatMessagesResponse = {
@@ -104,6 +105,7 @@ const mapApiMessage = (message: ChatApiMessage): ChatMessage | null => {
     createdAt: Date.parse(message.created_at) || now(),
     status: 'idle',
     traces: [],
+    metadata: message.metadata ?? undefined,
   };
 };
 

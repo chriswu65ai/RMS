@@ -1603,6 +1603,71 @@ const buildToolFollowupText = (
   ].filter(Boolean).join('\n\n');
 };
 
+type ChatToolMetadata = {
+  note_id: string | null;
+  note_path: string | null;
+  task_id: string | null;
+  action: string | null;
+  tool_outcome: string;
+};
+
+const toToolMetadataString = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const buildStructuredToolMetadata = (
+  toolName: string,
+  outcome: {
+    status: 'executed' | 'needs_confirmation' | 'needs_disambiguation' | 'rejected';
+    result?: Record<string, unknown>;
+  },
+): ChatToolMetadata => ({
+  note_id: toToolMetadataString(outcome.result?.note_id),
+  note_path: toToolMetadataString(outcome.result?.note_path),
+  task_id: toToolMetadataString(outcome.result?.task_id),
+  action: toToolMetadataString(outcome.result?.action) ?? toolName,
+  tool_outcome: outcome.status,
+});
+
+const appendChatToolActivity = (input: {
+  metadata: ChatToolMetadata;
+  provider: AgentProvider;
+  model: string;
+  triggerSource: string;
+  initiatedBy: string;
+  turnStartedAt: number;
+  inputText: string;
+  outputText: string;
+}) => {
+  appendAgentActivityLog({
+    timestamp: new Date().toISOString(),
+    note_id: input.metadata.note_id ?? '',
+    action: input.metadata.action ?? 'chat_tool',
+    trigger_source: input.triggerSource,
+    initiated_by: input.initiatedBy,
+    provider: input.provider,
+    model: input.model,
+    status: 'success',
+    duration_ms: Date.now() - input.turnStartedAt,
+    input_chars: input.inputText.length,
+    output_chars: input.outputText.length,
+    token_estimate: null,
+    cost_estimate_usd: null,
+    error_message_short: null,
+    search_warning: 0,
+    search_warning_message: null,
+    web_search_enabled: 0,
+    tool_calls_attempted: 1,
+    tool_calls_succeeded: input.metadata.tool_outcome === 'executed' ? 1 : 0,
+    search_query_count: 0,
+    source_count: 0,
+    tool_failure_reason: null,
+    citation_events_json: null,
+  });
+};
+
 const buildChatToolAdapter = (sessionId: string) => ({
   listTasks: async () => queryJson<NewResearchTaskRow>(
     'select * from new_research_tasks order by created_at desc',
@@ -1694,7 +1759,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       if (!existing) throw new Error('Note not found.');
       const nextContent = [existing.content || '', '', `## Chat instruction`, input.instruction].join('\n').trim();
       execSql(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`);
-      return { note_id: existing.id, action: 'updated' as const };
+      return { note_id: existing.id, note_path: existing.path, task_id: input.taskId, action: 'updated' as const };
     }
     const workspace = ensureWorkspaceWithStarterContent();
     const noteId = randomUUID();
@@ -1706,7 +1771,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       execSql(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`);
       recordTaskEvent(input.taskId, 'link', `Linked generated note via chat orchestration: ${notePath}.`);
     }
-    return { note_id: noteId, action: 'created' as const };
+    return { note_id: noteId, note_path: notePath, task_id: input.taskId, action: 'created' as const };
   },
   savePendingActionDraft: async (targetSessionId: string, actionKey: string, draft: Record<string, unknown>, status?: 'pending' | 'confirmed' | 'cancelled') => {
     savePendingActionDraft(targetSessionId, actionKey, draft, status ?? 'pending');
@@ -2087,6 +2152,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let toolNarrationBefore = '';
         let toolNarrationAfter = '';
         let toolMetadata: Record<string, unknown> | null = null;
+        let structuredToolMetadata: ChatToolMetadata | null = null;
         let generationPrompt = contextPayload.prompt;
         if (pendingToolDraft?.draft && actionMode !== 'manual_only' && explicitConfirm) {
           const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
@@ -2168,8 +2234,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             }
             toolNarrationBefore = outcome.narration_before;
             toolNarrationAfter = outcome.narration_after;
+            const resolvedToolMetadata = buildStructuredToolMetadata(draftToolName, outcome);
+            structuredToolMetadata = resolvedToolMetadata;
             toolMetadata = {
-              tool_outcome: outcome.status,
+              ...resolvedToolMetadata,
               resumed_from_pending: true,
               pending_action_id: pendingToolDraft.id,
               missing_fields: outcome.missing_fields ?? null,
@@ -2367,6 +2435,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                   correlation: { turn_id: turnCorrelationId, session_id: session.id },
                   context: contextPayload.meta,
                   tool: {
+                    note_id: null,
+                    note_path: null,
+                    task_id: null,
+                    action: supportedCall.name,
                     tool_outcome: 'needs_confirmation',
                     explicit_confirm: explicitConfirm,
                     action_mode: actionMode,
@@ -2413,8 +2485,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             }
             toolNarrationBefore = outcome.narration_before;
             toolNarrationAfter = outcome.narration_after;
+            const resolvedToolMetadata = buildStructuredToolMetadata(supportedCall.name, outcome);
+            structuredToolMetadata = resolvedToolMetadata;
             toolMetadata = {
-              tool_outcome: outcome.status,
+              ...resolvedToolMetadata,
               missing_fields: outcome.missing_fields ?? null,
               disambiguation_prompt: outcome.disambiguation_prompt ?? null,
               result: outcome.result ?? null,
@@ -2556,6 +2630,18 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             },
           },
         });
+        if (structuredToolMetadata?.tool_outcome === 'executed') {
+          appendChatToolActivity({
+            metadata: structuredToolMetadata,
+            provider: preferred,
+            model: resolvedModel,
+            triggerSource: 'chat_tool',
+            initiatedBy: 'chat',
+            turnStartedAt,
+            inputText,
+            outputText: finalOutputText,
+          });
+        }
         const allMessages = queryJson<ChatMessageRow>(`select * from chat_messages where session_id = ${sqlEscape(session.id)} order by created_at asc, id asc`);
         const shouldSummarize = allMessages.length > policy.summarize_after_messages;
         if (shouldSummarize) {
