@@ -137,6 +137,29 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     };
   };
 
+  const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
+    const parts = path.split('/').map((part) => part.trim()).filter(Boolean);
+    let parent = rootFolder;
+
+    for (const part of parts) {
+      const expectedPath = parent ? `${parent.path}/${part}` : part;
+      const existing = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
+      if (existing) {
+        parent = existing;
+        continue;
+      }
+
+      const { error } = await createFolder(workspaceId, part, parent);
+      if (error) throw new Error(error.message);
+      await refresh();
+      const created = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
+      if (!created) throw new Error(`Folder was created at ${expectedPath}, but it could not be found.`);
+      parent = created;
+    }
+
+    return parent;
+  };
+
   useEffect(() => {
     const guard = createUiAsyncGuard();
     void runUiAsync(
@@ -302,13 +325,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     if (preview.needsFolderCreation) {
       const confirmed = await dialog.confirm('Create note from task', `Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
       if (!confirmed) return;
-      const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
-      const createParent = null;
-      const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
-      if (createFolderError) return setBoardError(createFolderError.message);
-      await refresh();
-      targetFolder = useResearchStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
-      if (!targetFolder) return setBoardError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
+      try {
+        targetFolder = await ensureFolderPath(workspace.id, preview.destinationPath, null);
+      } catch (error) {
+        return setBoardError(error instanceof Error ? error.message : 'Failed to create destination folder path.');
+      }
     }
 
     const canonicalName = `${baseName}${MARKDOWN_EXTENSION}`;
