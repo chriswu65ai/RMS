@@ -3270,6 +3270,159 @@ test('command prefix mode OFF allows natural-language tool execution via intent 
   }
 });
 
+
+test('command parsing accepts /task when followed by whitespace', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'on',
+      command_prefix_map: {
+        task: '/task',
+        note: '/note',
+        confirm: '/yes',
+        cancel: '/no',
+        help: '/help',
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  let plannerInput = '';
+  providerRegistry.ollama.generateToolFirstTurn = async (request) => {
+    plannerInput = request.inputText;
+    return {
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'slash-task-tool-1',
+        name: 'list_tasks_by_status',
+        arguments: { status: 'ideas' },
+      }],
+    };
+  };
+  providerRegistry.ollama.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: '/task create task for NVDA', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+    assert.match(plannerInput, /\[PREFIX_COMMAND\]\ntask/);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('command parsing does not treat /tasking as /task', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'chat',
+      command_prefix_mode: 'on',
+      command_prefix_map: {
+        task: '/task',
+        note: '/note',
+        confirm: '/yes',
+        cancel: '/no',
+        help: '/help',
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => {
+    throw new Error('tool planner should not run for /tasking');
+  };
+  providerRegistry.ollama.generate = async (request) => ({ outputText: request.inputText, latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: '/tasking create task for NVDA' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), false);
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /\/tasking create task for NVDA/);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('custom command prefixes preserve longest-prefix precedence for similar values', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'on',
+      command_prefix_map: {
+        task: '!task',
+        note: '!task-note',
+        confirm: '!ok',
+        cancel: '!stop',
+        help: '!help',
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  let plannerInput = '';
+  providerRegistry.ollama.generateToolFirstTurn = async (request) => {
+    plannerInput = request.inputText;
+    return {
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'longest-prefix-tool-1',
+        name: 'list_tasks_by_status',
+        arguments: { status: 'ideas' },
+      }],
+    };
+  };
+  providerRegistry.ollama.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: '!task-note list notes', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+    assert.match(plannerInput, /\[PREFIX_COMMAND\]\nnote/);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('custom command prefix map is reflected in command parsing', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
