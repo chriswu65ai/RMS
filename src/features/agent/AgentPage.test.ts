@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync.js';
+import { WebSearchControls } from './AgentPage.js';
 import {
   buildWebSearchSettingsPayload,
   convertTimeoutMsToSeconds,
@@ -14,6 +17,9 @@ import {
   WEB_SEARCH_PROVIDER_CAPABILITIES,
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
+import { validateEndpointUrl } from './urlNormalization.js';
+
+const noop = () => {};
 
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
@@ -182,6 +188,40 @@ test('web search save payload normalizes searxng base URL by removing trailing s
   });
 
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:8080');
+});
+
+test('web search save payload strips accidental /search from searxng base URL', () => {
+  const payload = buildWebSearchSettingsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, {
+    enabled: true,
+    provider: 'searxng',
+    mode: 'single',
+    maxResults: '5',
+    timeoutSeconds: '5',
+    safeSearch: true,
+    recency: 'any',
+    domainPolicy: 'open_web',
+    sourceCitation: false,
+    searxngBaseUrl: 'http://127.0.0.1:8080/search/',
+    searxngUseHtmlMode: false,
+  });
+
+  assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://127.0.0.1:8080');
+});
+
+test('agent page validation rejects invalid SearXNG and local interface URLs and blocks save actions', () => {
+  const invalidSearxngError = validateEndpointUrl('/xxx', 'SearXNG base URL', { stripSearxngSearchPath: true });
+  const invalidInterfaceError = validateEndpointUrl('/xxx', 'Interface URL');
+  const canSaveWebSearch = Number('6') > 0 && Number('10') > 0 && !invalidSearxngError;
+  const canSaveLocalSettings = '/xxx'.trim().length > 0 && !invalidInterfaceError;
+
+  assert.equal(invalidSearxngError, 'SearXNG base URL must be a valid URL.');
+  assert.equal(invalidInterfaceError, 'Interface URL must be a valid URL.');
+  assert.equal(canSaveWebSearch, false);
+  assert.equal(canSaveLocalSettings, false);
 });
 
 test('web search source citation UI default is unchecked for fresh and legacy settings', () => {
@@ -357,6 +397,34 @@ test('AgentPage save chat settings payload includes command prefix mode and comm
   assert.equal(source.includes('command_prefix_map: chatCommandPrefixMap,'), true);
 });
 
+test('chat settings feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [chatSettingsFeedback, setChatSettingsFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setChatSettingsFeedback({ kind: 'success', text: 'Chat settings saved. New turns will use this configuration.' });"), true);
+  assert.equal(source.includes("setChatSettingsFeedback({ kind: 'error', text: message });"), true);
+  assert.equal(source.includes("chatSettingsFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
+test('web search feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [webSearchStatusFeedback, setWebSearchStatusFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'success', text: 'Web search settings saved.' });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: message });"), true);
+  assert.equal(source.includes("setWebSearchStatusFeedback({ kind: 'error', text: searxngBaseUrlValidationError });"), true);
+  assert.equal(source.includes("webSearchStatusFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
+test('preferred source feedback stores explicit success/error kind and maps style from kind', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [preferredSourcesFeedback, setPreferredSourcesFeedback] = useState<FeedbackState | null>(null);"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Added ${created.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Updated ${updated.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'success', text: `Deleted ${source.domain}.` });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed creating preferred source.' });"), true);
+  assert.equal(source.includes("setPreferredSourcesFeedback({ kind: 'error', text: 'Domain must be valid, such as google.com.' });"), true);
+  assert.equal(source.includes("preferredSourcesFeedback.kind === 'success' ? 'text-emerald-700' : 'text-rose-700'"), true);
+});
+
 test('preferred source domain placeholder and validation copy use google.com examples', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('placeholder="google.com"'), true);
@@ -382,28 +450,32 @@ test('custom domain source section uses renamed source importance terminology an
   assert.equal(source.includes('In “Use only listed domains,” source importance does not change rank; it only filters by domain.'), true);
 });
 
-test('source importance controls use constrained 1-5 sliders with label mapping and intensity color', () => {
+test('source importance controls use canonical 1-100 range with slider + numeric input and dynamic label/color helpers', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  assert.equal(source.includes('const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {'), true);
-  assert.equal(source.includes("1: 'Low'"), true);
-  assert.equal(source.includes("5: 'Critical'"), true);
+  assert.equal(source.includes('const SOURCE_IMPORTANCE_MIN = 1;'), true);
+  assert.equal(source.includes('const SOURCE_IMPORTANCE_MAX = 100;'), true);
+  assert.equal(source.includes('if (normalized <= 20) return \'Low\';'), true);
+  assert.equal(source.includes('return `hsl(${hue}, 75%, ${lightness}%)`;'), true);
   assert.equal(source.includes('type="range"'), true);
-  assert.equal(source.includes('min={1}'), true);
-  assert.equal(source.includes('max={5}'), true);
+  assert.equal(source.includes('min={SOURCE_IMPORTANCE_MIN}'), true);
+  assert.equal(source.includes('max={SOURCE_IMPORTANCE_MAX}'), true);
   assert.equal(source.includes('step={1}'), true);
+  assert.equal(source.includes('type="number"'), true);
+  assert.equal(source.includes('aria-label="Source importance numeric"'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
 });
 
-test('preferred source table displays source importance labels with optional numeric helper text', () => {
+test('preferred source table displays exact stored importance and label without hard clamp mismatch', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('getSourceImportanceLabel(source.weight)'), true);
-  assert.equal(source.includes('title={`Importance level ${source.weight}`}'), true);
+  assert.equal(source.includes('title={`Importance level ${source.weight} (${getSourceImportanceLabel(source.weight)})`}'), true);
   assert.equal(source.includes('<span className="ml-1 text-xs text-slate-400">({source.weight})</span>'), true);
 });
 
-test('preferred source payload keeps weight numeric after slider inputs', () => {
+test('preferred source payload clamps numeric input to canonical 1-100 before submit/edit', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || 1);'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
   assert.equal(source.includes('weight: normalizedWeight,'), true);
@@ -412,13 +484,114 @@ test('preferred source payload keeps weight numeric after slider inputs', () => 
 test('web search controls render in expected order with checkbox row grouped at the bottom', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   const enableIndex = source.indexOf('<span>Enable web search</span>');
-  const settingsGridIndex = source.indexOf('md:grid-cols-3');
+  const settingsGridIndex = source.indexOf('grid-cols-1 md:grid-cols-2 xl:grid-cols-3');
   const checkboxRowIndex = source.indexOf('flex flex-wrap items-center gap-x-6 gap-y-3');
   const safeSearchIndex = source.indexOf('<span>Safe search</span>');
   assert.ok(enableIndex >= 0);
   assert.ok(settingsGridIndex > enableIndex);
   assert.ok(checkboxRowIndex > settingsGridIndex);
   assert.ok(safeSearchIndex > checkboxRowIndex);
+});
+
+test('web search component keeps common control DOM order stable when provider changes', () => {
+  const renderControls = (provider: 'duckduckgo' | 'searxng') => renderToStaticMarkup(createElement(WebSearchControls, {
+    webSearchEnabled: true,
+    setWebSearchEnabled: noop,
+    webSearchProvider: provider,
+    setWebSearchProvider: noop,
+    webSearchMode: 'single',
+    setWebSearchMode: noop,
+    webSearchModeHelperText: 'helper',
+    applyModeRecommendedPreset: noop,
+    webSearchMaxResults: '5',
+    setWebSearchMaxResults: noop,
+    setWebSearchMaxResultsOverridden: noop,
+    webSearchTimeoutSeconds: '8',
+    setWebSearchTimeoutSeconds: noop,
+    setWebSearchTimeoutOverridden: noop,
+    webSearchRecency: 'any',
+    setWebSearchRecency: noop,
+    webSearchDomainPolicy: 'open_web',
+    setWebSearchDomainPolicy: noop,
+    domainPolicyHelperText: 'domain helper',
+    webSearchSafeSearch: true,
+    setWebSearchSafeSearch: noop,
+    webSearchSourceCitation: true,
+    setWebSearchSourceCitation: noop,
+    webSearchProviderCapabilities: provider === 'searxng' ? WEB_SEARCH_PROVIDER_CAPABILITIES.searxng : WEB_SEARCH_PROVIDER_CAPABILITIES.duckduckgo,
+    webSearchSearxngBaseUrl: 'http://localhost:8080',
+    setWebSearchSearxngBaseUrl: noop,
+    searxngBaseUrlValidationError: '',
+    webSearchSearxngUseHtmlMode: false,
+    setWebSearchSearxngUseHtmlMode: noop,
+    setWebSearchStatusMessage: noop,
+  }));
+
+  const duckHtml = renderControls('duckduckgo');
+  const searxngHtml = renderControls('searxng');
+  const commonControlLabels = ['Provider', 'Mode', 'Max results', 'Timeout (seconds)', 'Recency', 'Domain policy'];
+  for (const html of [duckHtml, searxngHtml]) {
+    let lastIndex = -1;
+    for (const label of commonControlLabels) {
+      const nextIndex = html.indexOf(label);
+      assert.ok(nextIndex > lastIndex, `Expected ${label} after previous control`);
+      lastIndex = nextIndex;
+    }
+  }
+  assert.equal(duckHtml.includes('No extra settings for this provider.'), true);
+  assert.equal(duckHtml.includes('HTML instead of JSON API'), false);
+  assert.equal(searxngHtml.includes('SearXNG base URL'), true);
+  assert.equal(searxngHtml.includes('HTML instead of JSON API'), true);
+});
+
+test('web search component validation feedback is announced as assertive alert', () => {
+  const html = renderToStaticMarkup(createElement(WebSearchControls, {
+    webSearchEnabled: true,
+    setWebSearchEnabled: noop,
+    webSearchProvider: 'searxng',
+    setWebSearchProvider: noop,
+    webSearchMode: 'single',
+    setWebSearchMode: noop,
+    webSearchModeHelperText: 'helper',
+    applyModeRecommendedPreset: noop,
+    webSearchMaxResults: '5',
+    setWebSearchMaxResults: noop,
+    setWebSearchMaxResultsOverridden: noop,
+    webSearchTimeoutSeconds: '8',
+    setWebSearchTimeoutSeconds: noop,
+    setWebSearchTimeoutOverridden: noop,
+    webSearchRecency: 'any',
+    setWebSearchRecency: noop,
+    webSearchDomainPolicy: 'open_web',
+    setWebSearchDomainPolicy: noop,
+    domainPolicyHelperText: 'domain helper',
+    webSearchSafeSearch: true,
+    setWebSearchSafeSearch: noop,
+    webSearchSourceCitation: true,
+    setWebSearchSourceCitation: noop,
+    webSearchProviderCapabilities: WEB_SEARCH_PROVIDER_CAPABILITIES.searxng,
+    webSearchSearxngBaseUrl: 'invalid',
+    setWebSearchSearxngBaseUrl: noop,
+    searxngBaseUrlValidationError: 'SearXNG base URL must be a valid URL.',
+    webSearchSearxngUseHtmlMode: false,
+    setWebSearchSearxngUseHtmlMode: noop,
+    setWebSearchStatusMessage: noop,
+  }));
+
+  assert.equal(html.includes('role="alert"'), true);
+  assert.equal(html.includes('aria-live="assertive"'), true);
+});
+
+test('AgentPage save feedback regions use status for success and alert for validation or errors', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+
+  assert.equal(source.includes('role="status" aria-live="polite" className="mt-2 text-xs text-emerald-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="mt-2 text-xs text-rose-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="text-xs text-rose-700"'), true);
+  assert.equal(source.includes('role="alert" aria-live="assertive" className="text-xs text-rose-600"'), true);
+  assert.equal(source.includes("role={chatSettingsMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}"), true);
+  assert.equal(source.includes("role={webSearchStatusMessage.toLowerCase().includes('saved') ? 'status' : 'alert'}"), true);
+  assert.equal(source.includes("role={preferredSourcesMessage.toLowerCase().startsWith('failed') || preferredSourcesMessage.toLowerCase().startsWith('domain must') ? 'alert' : 'status'}"), true);
 });
 
 test('AgentPage web search UI includes recommended action, timeout seconds label, helper copy, and provider capability notices', () => {
@@ -429,6 +602,14 @@ test('AgentPage web search UI includes recommended action, timeout seconds label
   assert.equal(source.includes('Maximum wait time per provider request; timed-out passes may return no web evidence.'), true);
   assert.equal(source.includes('Not supported by DuckDuckGo adapter.'), true);
   assert.equal(source.includes('Safe search is not supported by DuckDuckGo adapter.'), true);
+});
+
+test('AgentPage web search save is independent from provider/model draft mismatch and relies on API validation errors', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('defaultProviderMatchesDraft'), false);
+  assert.equal(source.includes('defaultModelMatchesDraft'), false);
+  assert.equal(source.includes('Select an agent before saving web search settings.'), false);
+  assert.equal(source.includes('await saveAgentSettings(buildWebSearchSettingsPayload(settings,'), true);
 });
 
 test('EditorPane thinking stream keeps a max-5 render policy and rotates queue in groups of five', () => {

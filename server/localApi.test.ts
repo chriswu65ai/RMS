@@ -178,6 +178,48 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
 });
 
+test('put agent settings rejects invalid URL fields with a 400 response', async () => {
+  const invalidInterfaceResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: '/xxx',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  assert.equal(invalidInterfaceResponse.status, 400);
+  assert.match(invalidInterfaceResponse.body, /Interface URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+
+  const invalidSearxngResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        provider: 'searxng',
+        mode: 'single',
+        max_results: 6,
+        timeout_ms: 10000,
+        safe_search: false,
+        recency: 'any',
+        domain_policy: 'open_web',
+        source_citation: false,
+        provider_config: {
+          searxng: {
+            base_url: '/xxx',
+            use_json_api: true,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(invalidSearxngResponse.status, 400);
+  assert.match(invalidSearxngResponse.body, /SearXNG base URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+});
+
 test('saving ollama defaults persists switched model as a single source of truth', async () => {
   const firstSave = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
@@ -560,6 +602,78 @@ test('generate prepends parsed attachment context under token cap', async () => 
   }
 });
 
+test('agent generate preflight predicts truncation and returns diagnostics payload', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const largeBody = 'A'.repeat(10_000);
+  const multipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'large.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'large.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from(largeBody, 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+
+  const preflight = await callRoute('POST', '/api/agent/generate', {
+    provider: 'minimax',
+    model: 'mini',
+    note_id: noteId,
+    input_text: 'hello',
+    preflight_only: true,
+  });
+  assert.equal(preflight.status, 200);
+  const payload = JSON.parse(preflight.body) as {
+    predicted_truncation: boolean;
+    diagnostics: { total_eligible_attachments: number; partially_included_attachments: number; excluded_attachments: number };
+  };
+  assert.equal(payload.predicted_truncation, true);
+  assert.equal(payload.diagnostics.total_eligible_attachments >= 1, true);
+  assert.equal((payload.diagnostics.partially_included_attachments + payload.diagnostics.excluded_attachments) >= 1, true);
+});
+
+test('agent generate stream emits ingestion diagnostics frame with per-file reasons', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const pendingAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'pending.pdf',
+    mime_type: 'application/pdf',
+  }, {
+    name: 'pending.pdf',
+    mimeType: 'application/pdf',
+    content: Buffer.from('%PDF-1.7 fake', 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', pendingAttachment.body, pendingAttachment.headers);
+
+  const response = await callRoute('POST', '/api/agent/generate', {
+    provider: 'minimax',
+    model: 'mini',
+    note_id: noteId,
+    input_text: 'hello',
+  });
+  assert.equal(response.status, 200);
+  const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as {
+    type?: string;
+    diagnostics?: { files?: Array<{ reason?: string }> };
+  });
+  const diagnosticsFrame = frames.find((frame) => frame.type === 'ingestion_diagnostics');
+  assert.equal(Boolean(diagnosticsFrame), true);
+  assert.equal((diagnosticsFrame?.diagnostics?.files ?? []).some((file) => file.reason === 'parse_pending'), true);
+});
+
 test('agent generate keeps attachment context in final provider input on web-search success path', async () => {
   const bootstrap = await callRoute('GET', '/api/bootstrap');
   const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
@@ -745,6 +859,153 @@ test('agent generate keeps attachment context in final provider input on non-sea
     assert.equal(frames.some((frame) => frame.type === 'search_skipped'), true);
   } finally {
     providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate excludes task-only attachments and includes note-linked attachments', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const createdTaskResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Attachment resolver test task',
+    ticker: 'RMS',
+    note_type: 'research',
+    linked_note_file_id: noteId,
+  });
+  assert.equal(createdTaskResponse.status, 200);
+  const createdTask = JSON.parse(createdTaskResponse.body) as { id: string };
+  assert.equal(Boolean(createdTask.id), true);
+
+  const taskAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'task',
+    link_id: createdTask.id,
+    original_name: 'task-only.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'task-only.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Task-only attachment should be excluded', 'utf8'),
+  });
+  const noteAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'note-only.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'note-only.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Note attachment should be included', 'utf8'),
+  });
+
+  const taskUpload = await callRoute('POST', '/api/attachments/upload', taskAttachment.body, taskAttachment.headers);
+  const noteUpload = await callRoute('POST', '/api/attachments/upload', noteAttachment.body, noteAttachment.headers);
+  assert.equal(taskUpload.status, 200);
+  assert.equal(noteUpload.status, 200);
+  const taskAttachmentId = (JSON.parse(taskUpload.body) as { id: string }).id;
+  const noteAttachmentId = (JSON.parse(noteUpload.body) as { id: string }).id;
+
+  const originalGenerate = providerRegistry.ollama.generate;
+  let capturedInput = '';
+  providerRegistry.ollama.generate = async (request) => {
+    capturedInput = request.inputText;
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+  try {
+    const response = await callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      input_text: 'Summarize context',
+    });
+    assert.equal(response.status, 200);
+    assert.match(capturedInput, /Note attachment should be included/);
+    assert.doesNotMatch(capturedInput, /Task-only attachment should be excluded/);
+
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; sources?: Array<{ kind: string; attachment_id?: string }> });
+    const sourcesFrame = frames.find((frame) => frame.type === 'sources');
+    assert.equal(Boolean(sourcesFrame), true);
+    const attachmentSourceIds = (sourcesFrame?.sources ?? [])
+      .filter((source) => source.kind === 'attachment')
+      .map((source) => source.attachment_id);
+    assert.deepEqual(attachmentSourceIds, [noteAttachmentId]);
+    assert.equal(attachmentSourceIds.includes(taskAttachmentId), false);
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('prompt attachment resolver behavior is identical across generation entry points', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const createdTaskResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Resolver parity task',
+    ticker: 'RMS',
+    note_type: 'research',
+    linked_note_file_id: noteId,
+  });
+  assert.equal(createdTaskResponse.status, 200);
+  const createdTask = JSON.parse(createdTaskResponse.body) as { id: string };
+
+  const noteAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'parity-note.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'parity-note.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from('Parity attachment text', 'utf8'),
+  });
+  const noteUpload = await callRoute('POST', '/api/attachments/upload', noteAttachment.body, noteAttachment.headers);
+  assert.equal(noteUpload.status, 200);
+
+  const originalGenerate = providerRegistry.ollama.generate;
+  const capturedInputs: string[] = [];
+  providerRegistry.ollama.generate = async (request) => {
+    capturedInputs.push(request.inputText);
+    return { outputText: 'ok', latencyMs: 1 };
+  };
+
+  const extractAttachmentBlock = (input: string) => {
+    const start = input.indexOf('[ATTACHMENT_CONTEXT_BEGIN]');
+    const end = input.indexOf('[ATTACHMENT_CONTEXT_END]');
+    if (start === -1 || end === -1 || end < start) return '';
+    return input.slice(start, end + '[ATTACHMENT_CONTEXT_END]'.length);
+  };
+
+  try {
+    const agentResponse = await callRoute('POST', '/api/agent/generate', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      input_text: 'Provide summary',
+    });
+    assert.equal(agentResponse.status, 200);
+
+    const chatResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      provider: 'ollama',
+      model: 'ignored-by-ollama',
+      task_id: createdTask.id,
+      content: 'Provide summary',
+    });
+    assert.equal(chatResponse.status, 200);
+
+    assert.equal(capturedInputs.length >= 2, true);
+    const agentAttachmentBlock = extractAttachmentBlock(capturedInputs[0] ?? '');
+    const chatAttachmentBlock = extractAttachmentBlock(capturedInputs[1] ?? '');
+    assert.equal(Boolean(agentAttachmentBlock), true);
+    assert.equal(Boolean(chatAttachmentBlock), true);
+    assert.equal(agentAttachmentBlock, chatAttachmentBlock);
+  } finally {
+    providerRegistry.ollama.generate = originalGenerate;
   }
 });
 
@@ -1001,6 +1262,38 @@ test('preferred sources create normalizes domain and supports listing', async ()
   assert.equal(listPayload.some((item) => item.domain === 'example.com'), true);
 });
 
+test('preferred sources round-trip boundary weights 1 and 100', async () => {
+  const minCreateResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'min-weight.example.com',
+    weight: 1,
+  });
+  assert.equal(minCreateResponse.status, 200);
+  const minCreated = JSON.parse(minCreateResponse.body) as { id: string; weight: number };
+  assert.equal(minCreated.weight, 1);
+
+  const maxCreateResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'max-weight.example.com',
+    weight: 100,
+  });
+  assert.equal(maxCreateResponse.status, 200);
+  const maxCreated = JSON.parse(maxCreateResponse.body) as { id: string; weight: number };
+  assert.equal(maxCreated.weight, 100);
+
+  const maxPatchResponse = await callRoute('PATCH', `/api/agent/preferred-sources/${maxCreated.id}`, {
+    weight: 1,
+  });
+  assert.equal(maxPatchResponse.status, 200);
+  const maxPatched = JSON.parse(maxPatchResponse.body) as { weight: number };
+  assert.equal(maxPatched.weight, 1);
+
+  const minPatchResponse = await callRoute('PATCH', `/api/agent/preferred-sources/${minCreated.id}`, {
+    weight: 100,
+  });
+  assert.equal(minPatchResponse.status, 200);
+  const minPatched = JSON.parse(minPatchResponse.body) as { weight: number };
+  assert.equal(minPatched.weight, 100);
+});
+
 test('preferred sources validate domain, weight, and uniqueness', async () => {
   const invalidDomainResponse = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'not a domain' });
   assert.equal(invalidDomainResponse.status, 400);
@@ -1010,6 +1303,11 @@ test('preferred sources validate domain, weight, and uniqueness', async () => {
     weight: 0,
   });
   assert.equal(invalidWeightResponse.status, 400);
+  const invalidHighWeightResponse = await callRoute('POST', '/api/agent/preferred-sources', {
+    domain: 'valid-example-high.com',
+    weight: 101,
+  });
+  assert.equal(invalidHighWeightResponse.status, 400);
 
   const firstCreate = await callRoute('POST', '/api/agent/preferred-sources', { domain: 'duplicate.example.com' });
   assert.equal(firstCreate.status, 200);
@@ -2138,6 +2436,63 @@ test('archiving a research task preserves activity events', async () => {
   const eventsAfterArchive = JSON.parse(activityAfterArchive.body) as Array<{ event_type: string }>;
   assert.equal(eventsAfterArchive.length >= eventsBeforeArchive.length, true);
   assert.equal(eventsAfterArchive.some((event) => event.event_type === 'archive'), true);
+});
+
+test('research task create clears date_completed when status is not completed', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Normalize completion date',
+    ticker: 'ACME',
+    status: 'researching',
+    date_completed: '2026-01-01',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { status: string; date_completed: string };
+  assert.equal(createdTask.status, 'researching');
+  assert.equal(createdTask.date_completed, '');
+});
+
+test('research task create preserves provided date_completed when status is completed', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Keep completion date',
+    ticker: 'ACME',
+    status: 'completed',
+    date_completed: ' 2026-01-01 ',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { status: string; date_completed: string };
+  assert.equal(createdTask.status, 'completed');
+  assert.equal(createdTask.date_completed, '2026-01-01');
+});
+
+test('research task status transitions normalize date_completed correctly', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Status transition normalization',
+    ticker: 'ACME',
+    status: 'ideas',
+    date_completed: '2026-01-01',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string; status: string; date_completed: string };
+  assert.equal(createdTask.status, 'ideas');
+  assert.equal(createdTask.date_completed, '');
+
+  const completeResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'completed',
+    date_completed: ' 2026-02-02 ',
+  });
+  assert.equal(completeResponse.status, 200);
+  const completedTask = JSON.parse(completeResponse.body) as { status: string; date_completed: string };
+  assert.equal(completedTask.status, 'completed');
+  assert.equal(completedTask.date_completed, '2026-02-02');
+
+  const reopenResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    status: 'researching',
+    date_completed: '2026-03-03',
+  });
+  assert.equal(reopenResponse.status, 200);
+  const reopenedTask = JSON.parse(reopenResponse.body) as { status: string; date_completed: string };
+  assert.equal(reopenedTask.status, 'researching');
+  assert.equal(reopenedTask.date_completed, '');
 });
 
 test('deleting a research task also removes activity events', async () => {

@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { AttachmentDeleteDialog } from '../../components/attachments/AttachmentDeleteDialog';
 import type { Attachment, Folder, FrontmatterModel, NewResearchTask, NewResearchTaskInput } from '../../types/models';
 import { Priority, TaskStatus } from '../../types/models';
-import { createFile, createFolder, createNewResearchTask, deleteNewResearchTask, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
-import { buildCanonicalStockFileName, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
+import { createFile, createFolder, createNewResearchTask, deleteAttachmentFromWorkspace, deleteNewResearchTask, getAttachmentDownloadUrl, getAttachmentOpenUrl, linkAttachment, listAttachments, listNewResearchTasks, listTaskActivity, unlinkAttachment, updateNewResearchTask, uploadAttachment } from '../../lib/dataApi';
+import { buildCanonicalStockFileName, MARKDOWN_EXTENSION, toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
@@ -13,6 +14,7 @@ import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType,
 import { formatLocalDateTime } from '../../lib/time';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
+import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -37,8 +39,19 @@ const PRIORITY_RANK: Record<Priority | '', number> = {
   [Priority.Low]: 2,
   '': 3,
 };
+const OPEN_LINKED_NOTE_ACTION_LABEL = 'Open linked note';
+const CREATE_NOTE_FROM_TASK_ACTION_LABEL = 'Create note from task';
 
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
+type DestinationPreview = {
+  destinationPath: string;
+  fallbackPath: string;
+  missingFolderName: string;
+  needsFolderCreation: boolean;
+  selectedFolder: Folder | null;
+  ticker: string;
+  tickerFolder: Folder | null;
+};
 
 const blankTask = (): NewResearchTaskInput => ({
   title: '', details: '', ticker: '', note_type: '', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
@@ -65,6 +78,13 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityItems, setActivityItems] = useState<Array<{ id: string; description: string; created_at: string }>>([]);
   const [modalAttachments, setModalAttachments] = useState<Attachment[]>([]);
+  const [attachmentDeleteTarget, setAttachmentDeleteTarget] = useState<Attachment | null>(null);
+  const [attachmentDeleteBusy, setAttachmentDeleteBusy] = useState(false);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const initialFocusRef = useRef<HTMLInputElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const modalTitleId = useId();
+  const modalDescriptionId = useId();
   const taskByLinkedFileId = useMemo(() => {
     const byLinkedFile = new Map<string, NewResearchTask>();
     tasks.forEach((task) => {
@@ -100,7 +120,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     }) ?? null;
   };
 
-  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask) => {
+  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask): DestinationPreview => {
     const ticker = task.ticker.trim().toUpperCase();
     const researchLocationPath = (task.research_location_path ?? '').trim();
     const selectedFolder = task.research_location_folder_id
@@ -118,16 +138,37 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const missingFolderName = explicitFolderMissing ? explicitPath : (ticker || '');
 
     return {
-      selectedPath: selectedFolder?.path || explicitPath || 'Auto (ticker/default)',
       fallbackPath,
       destinationPath,
       needsFolderCreation,
       missingFolderName,
-      explicitFolderMissing,
       ticker,
       selectedFolder,
       tickerFolder,
     };
+  };
+
+  const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
+    const parts = path.split('/').map((part) => part.trim()).filter(Boolean);
+    let parent = rootFolder;
+
+    for (const part of parts) {
+      const expectedPath = parent ? `${parent.path}/${part}` : part;
+      const existing = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
+      if (existing) {
+        parent = existing;
+        continue;
+      }
+
+      const { error } = await createFolder(workspaceId, part, parent);
+      if (error) throw new Error(error.message);
+      await refresh();
+      const created = useResearchStore.getState().folders.find((folder) => folder.path === expectedPath);
+      if (!created) throw new Error(`Folder was created at ${expectedPath}, but it could not be found.`);
+      parent = created;
+    }
+
+    return parent;
   };
 
   useEffect(() => {
@@ -295,16 +336,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     if (preview.needsFolderCreation) {
       const confirmed = await dialog.confirm('Create note from task', `Folder "${preview.destinationPath}" does not exist. It will be created when you create this note. Continue?`);
       if (!confirmed) return;
-      const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
-      const createParent = null;
-      const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
-      if (createFolderError) return setBoardError(createFolderError.message);
-      await refresh();
-      targetFolder = useResearchStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
-      if (!targetFolder) return setBoardError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
+      try {
+        targetFolder = await ensureFolderPath(workspace.id, preview.destinationPath, null);
+      } catch (error) {
+        return setBoardError(error instanceof Error ? error.message : 'Failed to create destination folder path.');
+      }
     }
 
-    const existing = files.find((file) => !file.is_template && file.name === `${baseName}.md` && file.folder_id === (targetFolder?.id ?? null));
+    const canonicalName = `${baseName}${MARKDOWN_EXTENSION}`;
+    const existing = files.find((file) => !file.is_template && file.name === canonicalName && file.folder_id === (targetFolder?.id ?? null));
 
     if (existing) {
       const linkedOwner = taskByLinkedFileId.get(existing.id);
@@ -314,7 +354,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       }
     }
     const name = resolveUniqueMarkdownFileName(
-      baseName,
+      canonicalName,
       files.filter((file) => !file.is_template),
       targetFolder?.id ?? null,
     );
@@ -366,19 +406,44 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   useEffect(() => {
     if (!modalState) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    window.setTimeout(() => {
+      initialFocusRef.current?.focus();
+    }, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      setModalState(null);
-      transitionTaskModal(null);
+      if (event.key === 'Escape') {
+        setModalState(null);
+        transitionTaskModal(null);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const container = modalRef.current;
+      if (!container) return;
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute('disabled') && element.tabIndex !== -1);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
+      restoreFocusRef.current?.focus();
     };
   }, [modalState, transitionTaskModal]);
 
@@ -391,6 +456,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     () => (modalState ? resolveDestinationPreview(modalState.task) : null),
     [modalState, folders],
   );
+  const currentTask = useMemo(
+    () => (modalState?.mode === 'edit' && modalState.id ? tasks.find((item) => item.id === modalState.id) ?? null : null),
+    [modalState, tasks],
+  );
+  const modalDescribedBy = modalAttachmentError || boardError ? modalDescriptionId : undefined;
 
   return (
     <div className="mt-4 space-y-4">
@@ -438,7 +508,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
                       <p className="col-span-2 mt-1">Linked note: {hasLinkedNote(task) ? task.linked_note_path : '—'}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => { if (hasLinkedNote(task)) { openLinkedNote(task); return; } void createNoteFromTask(task); }}>{hasLinkedNote(task) ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
+                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => { if (hasLinkedNote(task)) { openLinkedNote(task); return; } void createNoteFromTask(task); }}>{hasLinkedNote(task) ? OPEN_LINKED_NOTE_ACTION_LABEL : CREATE_NOTE_FROM_TASK_ACTION_LABEL}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
                 {prioritizedTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
@@ -453,10 +523,23 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
           if (event.target !== event.currentTarget) return;
           closeModal();
         }}>
-          <div className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
-            <h3 className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
+          <div
+            ref={modalRef}
+            className="w-full max-w-xl rounded-xl bg-white p-4 shadow-xl"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={modalTitleId}
+            aria-describedby={modalDescribedBy}
+          >
+            <h3 id={modalTitleId} className="text-lg font-semibold">{modalState.mode === 'create' ? 'Create task' : 'Edit task'}</h3>
+            {(modalAttachmentError || boardError) && (
+              <p id={modalDescriptionId} className="mt-2 text-xs text-rose-600">
+                {modalAttachmentError ?? boardError}
+              </p>
+            )}
             <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <label className="text-sm md:col-span-2">Title<input className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
+              <label className="text-sm md:col-span-2">Title<input ref={initialFocusRef} className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
               <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;
                 const ticker = e.target.value.toUpperCase();
@@ -545,28 +628,24 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     {modalAttachments.length === 0 && <li className="text-slate-500">No attachments yet.</li>}
                     {modalAttachments.map((attachment) => (
                       <li key={attachment.id} className="flex items-center justify-between gap-2">
-                        <span className="truncate">{attachment.original_name} · {Math.round(attachment.size_bytes / 1024)}KB · {attachment.estimated_tokens} tok</span>
-                        <button
-                          className="rounded border border-slate-300 px-2 py-0.5"
-                          onClick={async () => {
-                            await runUiAsync(
-                              async () => {
-                                await unlinkAttachment(attachment.id, 'task', modalState.id!);
-                                return listAttachments('task', modalState.id!);
-                              },
-                              {
-                                fallbackMessage: 'Failed to remove attachment.',
-                                onSuccess: (attachments) => {
-                                  setModalAttachments(attachments);
-                                  setModalAttachmentError(null);
-                                },
-                                onError: (message) => setModalAttachmentError(message),
-                              },
-                            );
-                          }}
-                        >
-                          Remove
-                        </button>
+                        <div className="min-w-0">
+                          <span className="truncate">{attachment.original_name} · {Math.round(attachment.size_bytes / 1024)}KB · {attachment.estimated_tokens} tok</span>
+                          {getAttachmentStatusBadgeLabel(attachment) && (
+                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                              {getAttachmentStatusBadgeLabel(attachment)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentOpenUrl(attachment.id)} target="_blank" rel="noreferrer">Open</a>
+                          <a className="rounded border border-slate-300 px-2 py-0.5" href={getAttachmentDownloadUrl(attachment.id)} download>Download</a>
+                          <button
+                            className="rounded border border-slate-300 px-2 py-0.5"
+                            onClick={() => setAttachmentDeleteTarget(attachment)}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -601,16 +680,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 <button
                   className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   onClick={() => {
-                    const task = tasks.find((item) => item.id === modalState.id);
-                    if (!task) return;
-                    if (hasLinkedNote(task)) {
-                      openLinkedNote(task);
+                    if (!currentTask) return;
+                    if (hasLinkedNote(currentTask)) {
+                      openLinkedNote(currentTask);
                       return;
                     }
-                    void createNoteFromTask(task);
+                    void createNoteFromTask(currentTask);
                   }}
                 >
-                  {hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}
+                  {hasLinkedNote(modalState.task as NewResearchTask) ? OPEN_LINKED_NOTE_ACTION_LABEL : CREATE_NOTE_FROM_TASK_ACTION_LABEL}
                 </button>
               )}
               <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
@@ -620,6 +698,34 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         </div>,
         document.body,
       )}
+      <AttachmentDeleteDialog
+        open={Boolean(attachmentDeleteTarget && modalState?.id)}
+        attachment={attachmentDeleteTarget}
+        contextLabel="task"
+        isBusy={attachmentDeleteBusy}
+        onClose={() => setAttachmentDeleteTarget(null)}
+        onConfirm={(scope) => {
+          if (!attachmentDeleteTarget || !modalState?.id) return;
+          const targetAttachment = attachmentDeleteTarget;
+          setAttachmentDeleteBusy(true);
+          void runUiAsync(
+            async () => {
+              if (scope === 'workspace') await deleteAttachmentFromWorkspace(targetAttachment.id);
+              else await unlinkAttachment(targetAttachment.id, 'task', modalState.id!);
+              return listAttachments('task', modalState.id!);
+            },
+            {
+              fallbackMessage: scope === 'workspace' ? 'Failed to delete attachment from workspace.' : 'Failed to remove attachment.',
+              onSuccess: (attachments) => {
+                setModalAttachments(attachments);
+                setModalAttachmentError(null);
+                setAttachmentDeleteTarget(null);
+              },
+              onError: (message) => setModalAttachmentError(message),
+            },
+          ).finally(() => setAttachmentDeleteBusy(false));
+        }}
+      />
     </div>
   );
 }

@@ -1,4 +1,10 @@
-import { generateText, type StreamSource, type ThinkingEvent } from '../../lib/agentApi';
+import {
+  generateText,
+  preflightGenerateIngestion,
+  type StreamSource,
+  type ThinkingEvent,
+  type IngestionDiagnostics,
+} from '../../lib/agentApi';
 import { SaveMode, TriggerSource, type AgentProvider } from './types';
 
 export class GenerateUseCase {
@@ -12,6 +18,7 @@ export class GenerateUseCase {
     onSources?: (sources: StreamSource[]) => void;
     onSearchWarning?: (message: string) => void;
     onThinkingEvent?: (event: ThinkingEvent) => void;
+    onIngestionDiagnostics?: (diagnostics: IngestionDiagnostics) => void;
   }): Promise<{ outputText: string }> {
     return generateText({
       noteId: params.noteId,
@@ -25,6 +32,23 @@ export class GenerateUseCase {
       onSources: params.onSources,
       onSearchWarning: params.onSearchWarning,
       onThinkingEvent: params.onThinkingEvent,
+      onIngestionDiagnostics: params.onIngestionDiagnostics,
+    });
+  }
+
+  async preflight(params: {
+    noteId: string;
+    inputText: string;
+    provider: AgentProvider;
+    model: string;
+  }): Promise<{ diagnostics: IngestionDiagnostics; predicted_truncation: boolean }> {
+    return preflightGenerateIngestion({
+      noteId: params.noteId,
+      inputText: params.inputText,
+      provider: params.provider,
+      model: params.model,
+      triggerSource: TriggerSource.Manual,
+      saveMode: SaveMode.ManualOnly,
     });
   }
 }
