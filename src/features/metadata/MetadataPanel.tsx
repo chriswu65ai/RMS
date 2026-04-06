@@ -19,6 +19,7 @@ type Props = {
   viewTaskHelperText?: string;
   workspaceId: string;
   noteId: string;
+  linkedTaskId?: string;
 };
 
 const RECOMMENDATIONS: Array<{ value: '' | 'buy' | 'hold' | 'sell' | 'avoid'; label: string }> = [
@@ -44,34 +45,45 @@ export function MetadataPanel({
   viewTaskHelperText,
   workspaceId,
   noteId,
+  linkedTaskId,
 }: Props) {
   const [selectedSector, setSelectedSector] = useState(frontmatter.sector ?? '');
   const [isBelowLg, setIsBelowLg] = useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)').matches : false,
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [linkedTaskAttachments, setLinkedTaskAttachments] = useState<Attachment[]>([]);
   const [attachmentsError, setAttachmentsError] = useState<string | null>(null);
+  const [linkedTaskAttachmentsError, setLinkedTaskAttachmentsError] = useState<string | null>(null);
 
   useEffect(() => {
     const guard = createUiAsyncGuard();
     const load = async () => {
       if (!noteId) return;
-      await runUiAsync(
-        () => listAttachments('note', noteId),
+      await runUiAsync(async () => {
+        const nextNoteAttachments = await listAttachments('note', noteId);
+        const nextTaskAttachments = linkedTaskId ? await listAttachments('task', linkedTaskId) : [];
+        return { nextNoteAttachments, nextTaskAttachments };
+      },
         {
           fallbackMessage: 'Failed to load attachments.',
           isCancelled: guard.isCancelled,
-          onSuccess: (next) => {
-            setAttachments(next);
+          onSuccess: ({ nextNoteAttachments, nextTaskAttachments }) => {
+            setAttachments(nextNoteAttachments);
+            setLinkedTaskAttachments(nextTaskAttachments);
             setAttachmentsError(null);
+            setLinkedTaskAttachmentsError(null);
           },
-          onError: (message) => setAttachmentsError(message),
+          onError: (message) => {
+            setAttachmentsError(message);
+            setLinkedTaskAttachmentsError(linkedTaskId ? message : null);
+          },
         },
       );
     };
     void load();
     return () => { guard.cancel(); };
-  }, [noteId]);
+  }, [linkedTaskId, noteId]);
 
   useEffect(() => {
     setSelectedSector(frontmatter.sector ?? '');
@@ -155,6 +167,9 @@ export function MetadataPanel({
       </label>
       <div className="rounded border border-slate-200 p-2">
         <p className="text-xs font-medium text-slate-600">Attachments</p>
+        {linkedTaskId && (
+          <p className="mt-1 text-[11px] text-slate-500">Showing note attachments only. Linked task attachments are listed below.</p>
+        )}
         <input
           className="mt-2 block w-full text-xs"
           type="file"
@@ -207,6 +222,22 @@ export function MetadataPanel({
             </li>
           ))}
         </ul>
+        {linkedTaskId && (
+          <div className="mt-3 border-t border-slate-200 pt-2">
+            <p className="text-xs font-medium text-slate-600">Linked task attachments</p>
+            {linkedTaskAttachmentsError && <p className="mt-1 text-xs text-rose-600">{linkedTaskAttachmentsError}</p>}
+            {!linkedTaskAttachmentsError && linkedTaskAttachments.length === 0 && (
+              <p className="mt-1 text-xs text-slate-500">No linked task attachments.</p>
+            )}
+            <ul className="mt-2 space-y-1">
+              {linkedTaskAttachments.map((attachment) => (
+                <li key={attachment.id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate">{attachment.original_name} · {attachment.estimated_tokens} tok</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-xs text-slate-600">

@@ -1341,6 +1341,7 @@ export function EditorPane() {
         viewTaskHelperText={linkedTask ? `Linked to task: ${linkedTask.title || linkedTask.ticker || linkedTask.id}` : 'No linked task for this note.'}
         workspaceId={workspace?.id ?? ''}
         noteId={file.id}
+        linkedTaskId={linkedTask?.id}
       />
 
       {tableDialogOpen && (
