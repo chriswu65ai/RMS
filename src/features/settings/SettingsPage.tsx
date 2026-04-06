@@ -5,6 +5,7 @@ import { useResearchStore } from '../../hooks/useResearchStore';
 import { createFile, createFolder, getAttachmentSettings, runAttachmentCleanupNow, saveAttachmentSettings } from '../../lib/dataApi';
 import { exportWorkspaceMarkdownZip, readMarkdownEntriesFromImport } from '../../lib/exportMarkdown';
 import { splitFrontmatter } from '../../lib/frontmatter';
+import { normalizeFolderPathSegments } from '../../lib/folderPathSegments';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import type { Folder } from '../../types/models';
 
@@ -60,7 +61,7 @@ export function SettingsPage() {
   };
 
   const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
-    const parts = path.split('/').filter(Boolean);
+    const parts = normalizeFolderPathSegments(path);
     let parent = rootFolder;
 
     for (const part of parts) {
