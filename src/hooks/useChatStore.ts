@@ -99,7 +99,7 @@ const updateTraceStatus = (
 });
 
 const toUiRole = (role: string): ChatRole | null => {
-  if (role === 'user' || role === 'assistant') return role;
+  if (role === 'user' || role === 'assistant' || role === 'system') return role;
   return null;
 };
 

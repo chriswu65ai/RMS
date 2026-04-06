@@ -4,6 +4,13 @@ import { ToolTimeline } from './ToolTimeline';
 
 export function ChatMessageItem({ message, onRetry }: { message: ChatMessage; onRetry: (messageId: string) => void }) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
+  const containerClass = isUser ? 'justify-end' : isSystem ? 'justify-center' : 'justify-start';
+  const bubbleClass = isUser
+    ? 'bg-slate-900 text-white'
+    : isSystem
+      ? 'border border-emerald-200 bg-emerald-50 text-emerald-900'
+      : 'border border-slate-200 bg-slate-50 text-slate-800';
   const canRetry = Boolean(
     message.retryablePrompt
       && (message.status === 'error' || message.status === 'cancelled'),
@@ -13,8 +20,8 @@ export function ChatMessageItem({ message, onRetry }: { message: ChatMessage; on
     : (message.errorMessage ?? 'Something went wrong.');
 
   return (
-    <article className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm ${isUser ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-slate-50 text-slate-800'}`}>
+    <article className={`flex ${containerClass}`}>
+      <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm ${bubbleClass}`}>
         <p className="whitespace-pre-wrap leading-6">{message.text || (message.status === 'streaming' ? '…' : '')}</p>
         {message.role === 'assistant' ? <ToolTimeline traces={message.traces} /> : null}
         {canRetry ? (

@@ -1,4 +1,4 @@
-export type ChatRole = 'user' | 'assistant';
+export type ChatRole = 'user' | 'assistant' | 'system';
 
 export type ToolTraceStatus =
   | 'pending'
