@@ -110,6 +110,34 @@ export type StartGeneratePayload = {
   onThinkingEvent?: (event: ThinkingEvent) => void;
 };
 type ActiveGenerateStreamCallbacks = Pick<StartGeneratePayload, 'onProgress' | 'onSources' | 'onSearchWarning' | 'onThinkingEvent'>;
+export type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
+export type ThinkingPhase = 'waiting' | 'reasoning' | 'tool_running' | 'tool_completed' | 'tool_failed';
+export type ThinkingFeedEvent = {
+  id: string;
+  text: string;
+  type: ThinkingEvent['type'];
+};
+
+const THINKING_EVENT_HISTORY_LIMIT = 50;
+
+const streamSourceKey = (source: StreamSource) => (
+  source.kind === 'web' ? `web:${source.url}` : `attachment:${source.attachment_id}`
+);
+
+const mergeSourcesForBubble = (existing: StreamSource[], incoming: StreamSource[]): StreamSource[] => {
+  if (incoming.length === 0) return existing;
+  const merged: StreamSource[] = [];
+  const seen = new Set<string>();
+  const pushUnique = (source: StreamSource) => {
+    const key = streamSourceKey(source);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(source);
+  };
+  incoming.forEach(pushUnique);
+  existing.forEach(pushUnique);
+  return merged;
+};
 
 type Store = {
   workspace: Workspace | null;
@@ -131,6 +159,15 @@ type Store = {
   draftByFileId: Record<string, DraftEntry>;
   historyByFileId: Record<string, HistoryEntry>;
   generateJobsByFileId: Record<string, GenerateJob>;
+  generatedSourcesByFileId: Record<string, StreamSource[]>;
+  sourcesBubbleClosedByFileId: Record<string, boolean>;
+  thinkingEventsByFileId: Record<string, ThinkingFeedEvent[]>;
+  thinkingBubbleClosedByFileId: Record<string, boolean>;
+  thinkingStatusByFileId: Record<string, ThinkingStatus>;
+  thinkingPhaseByFileId: Record<string, ThinkingPhase>;
+  thinkingAttemptByFileId: Record<string, number | undefined>;
+  thinkingMaxAttemptsByFileId: Record<string, number | undefined>;
+  thinkingStartedAtByFileId: Record<string, number | undefined>;
   unsavedFileIds: string[];
   loading: boolean;
   error: string | null;
@@ -159,6 +196,20 @@ type Store = {
   getGenerateJob: (fileId: string) => GenerateJob;
   startGenerate: (fileId: string, payload: StartGeneratePayload) => Promise<string>;
   cancelGenerate: (fileId: string) => void;
+  resetGenerateTransientStateForFile: (fileId: string) => void;
+  mergeIncomingSourcesForFile: (fileId: string, incoming: StreamSource[]) => void;
+  appendThinkingEventsForFile: (fileId: string, incoming: ThinkingFeedEvent[]) => void;
+  setSourcesBubbleClosedForFile: (fileId: string, closed: boolean) => void;
+  setThinkingBubbleClosedForFile: (fileId: string, closed: boolean) => void;
+  setThinkingMetadataForFile: (fileId: string, metadata: {
+    phase?: ThinkingPhase;
+    attempt?: number;
+    maxAttempts?: number;
+    startedAt?: number;
+  }) => void;
+  markThinkingCompletedForFile: (fileId: string) => void;
+  markThinkingCancelledForFile: (fileId: string) => void;
+  markThinkingFailedForFile: (fileId: string) => void;
   setAgentProviderModels: (
     provider: AgentProvider,
     models: ModelListItem[],
@@ -314,6 +365,15 @@ export const useResearchStore = create<Store>()(
       draftByFileId: {},
       historyByFileId: {},
       generateJobsByFileId: {},
+      generatedSourcesByFileId: {},
+      sourcesBubbleClosedByFileId: {},
+      thinkingEventsByFileId: {},
+      thinkingBubbleClosedByFileId: {},
+      thinkingStatusByFileId: {},
+      thinkingPhaseByFileId: {},
+      thinkingAttemptByFileId: {},
+      thinkingMaxAttemptsByFileId: {},
+      thinkingStartedAtByFileId: {},
       loading: false,
       error: null,
       unsavedFileIds: [],
@@ -449,6 +509,108 @@ export const useResearchStore = create<Store>()(
       cancelGenerate: (fileId) => {
         activeGenerationControllersByFileId.get(fileId)?.abort();
       },
+      resetGenerateTransientStateForFile: (fileId) => set((state) => ({
+        generatedSourcesByFileId: {
+          ...state.generatedSourcesByFileId,
+          [fileId]: [],
+        },
+        sourcesBubbleClosedByFileId: {
+          ...state.sourcesBubbleClosedByFileId,
+          [fileId]: false,
+        },
+        thinkingEventsByFileId: {
+          ...state.thinkingEventsByFileId,
+          [fileId]: [],
+        },
+        thinkingBubbleClosedByFileId: {
+          ...state.thinkingBubbleClosedByFileId,
+          [fileId]: false,
+        },
+        thinkingStatusByFileId: {
+          ...state.thinkingStatusByFileId,
+          [fileId]: 'running',
+        },
+        thinkingPhaseByFileId: {
+          ...state.thinkingPhaseByFileId,
+          [fileId]: 'waiting',
+        },
+        thinkingAttemptByFileId: {
+          ...state.thinkingAttemptByFileId,
+          [fileId]: undefined,
+        },
+        thinkingMaxAttemptsByFileId: {
+          ...state.thinkingMaxAttemptsByFileId,
+          [fileId]: undefined,
+        },
+        thinkingStartedAtByFileId: {
+          ...state.thinkingStartedAtByFileId,
+          [fileId]: Date.now(),
+        },
+      })),
+      mergeIncomingSourcesForFile: (fileId, incoming) => set((state) => ({
+        generatedSourcesByFileId: {
+          ...state.generatedSourcesByFileId,
+          [fileId]: mergeSourcesForBubble(state.generatedSourcesByFileId[fileId] ?? [], incoming),
+        },
+      })),
+      appendThinkingEventsForFile: (fileId, incoming) => set((state) => {
+        if (incoming.length === 0) return state;
+        const existing = state.thinkingEventsByFileId[fileId] ?? [];
+        return {
+          thinkingEventsByFileId: {
+            ...state.thinkingEventsByFileId,
+            [fileId]: [...existing, ...incoming].slice(-THINKING_EVENT_HISTORY_LIMIT),
+          },
+        };
+      }),
+      setSourcesBubbleClosedForFile: (fileId, closed) => set((state) => ({
+        sourcesBubbleClosedByFileId: {
+          ...state.sourcesBubbleClosedByFileId,
+          [fileId]: closed,
+        },
+      })),
+      setThinkingBubbleClosedForFile: (fileId, closed) => set((state) => ({
+        thinkingBubbleClosedByFileId: {
+          ...state.thinkingBubbleClosedByFileId,
+          [fileId]: closed,
+        },
+      })),
+      setThinkingMetadataForFile: (fileId, metadata) => set((state) => ({
+        thinkingPhaseByFileId: typeof metadata.phase === 'undefined' ? state.thinkingPhaseByFileId : {
+          ...state.thinkingPhaseByFileId,
+          [fileId]: metadata.phase,
+        },
+        thinkingAttemptByFileId: typeof metadata.attempt === 'undefined' ? state.thinkingAttemptByFileId : {
+          ...state.thinkingAttemptByFileId,
+          [fileId]: metadata.attempt,
+        },
+        thinkingMaxAttemptsByFileId: typeof metadata.maxAttempts === 'undefined' ? state.thinkingMaxAttemptsByFileId : {
+          ...state.thinkingMaxAttemptsByFileId,
+          [fileId]: metadata.maxAttempts,
+        },
+        thinkingStartedAtByFileId: typeof metadata.startedAt === 'undefined' ? state.thinkingStartedAtByFileId : {
+          ...state.thinkingStartedAtByFileId,
+          [fileId]: metadata.startedAt,
+        },
+      })),
+      markThinkingCompletedForFile: (fileId) => set((state) => ({
+        thinkingStatusByFileId: {
+          ...state.thinkingStatusByFileId,
+          [fileId]: 'completed',
+        },
+      })),
+      markThinkingCancelledForFile: (fileId) => set((state) => ({
+        thinkingStatusByFileId: {
+          ...state.thinkingStatusByFileId,
+          [fileId]: 'cancelled',
+        },
+      })),
+      markThinkingFailedForFile: (fileId) => set((state) => ({
+        thinkingStatusByFileId: {
+          ...state.thinkingStatusByFileId,
+          [fileId]: 'failed',
+        },
+      })),
       setAgentProviderModels: (provider, models, metadata) => set((state) => ({
         agentModelsByProvider: {
           ...state.agentModelsByProvider,
@@ -589,6 +751,15 @@ export const useResearchStore = create<Store>()(
           draftByFileId: {},
           historyByFileId: {},
           generateJobsByFileId: {},
+          generatedSourcesByFileId: {},
+          sourcesBubbleClosedByFileId: {},
+          thinkingEventsByFileId: {},
+          thinkingBubbleClosedByFileId: {},
+          thinkingStatusByFileId: {},
+          thinkingPhaseByFileId: {},
+          thinkingAttemptByFileId: {},
+          thinkingMaxAttemptsByFileId: {},
+          thinkingStartedAtByFileId: {},
           unsavedFileIds: [],
           loading: false,
           error: null,
