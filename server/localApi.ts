@@ -1575,6 +1575,34 @@ const parseDisambiguationChoice = (inputText: string): number | null => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
+const buildToolFollowupText = (
+  outcome: 'needs_confirmation' | 'needs_disambiguation' | 'rejected',
+  narrationBefore: string,
+  narrationAfter: string,
+  disambiguationPrompt?: string,
+): string => {
+  const body = [narrationBefore, disambiguationPrompt, narrationAfter].filter(Boolean).join('\n\n');
+  if (outcome === 'needs_confirmation') {
+    return [
+      'I prepared the requested action and paused before execution.',
+      body,
+      'If this looks right, reply with /confirm (or confirm when allowed in this mode).',
+    ].filter(Boolean).join('\n\n');
+  }
+  if (outcome === 'needs_disambiguation') {
+    return [
+      'I started the action, but I need one more detail before I can continue.',
+      body,
+      'Reply with the requested detail and I’ll continue from there.',
+    ].filter(Boolean).join('\n\n');
+  }
+  return [
+    'I attempted the action, but I could not complete it.',
+    body,
+    'You can adjust the request and try again, or ask me to help rewrite it.',
+  ].filter(Boolean).join('\n\n');
+};
+
 const buildChatToolAdapter = (sessionId: string) => ({
   listTasks: async () => queryJson<NewResearchTaskRow>(
     'select * from new_research_tasks order by created_at desc',
@@ -2164,11 +2192,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             streamEvents.push(resultFrame);
             writeNdjson(res, resultFrame);
             if (outcome.status === 'needs_confirmation' || outcome.status === 'needs_disambiguation' || outcome.status === 'rejected') {
-              const toolOnlyText = [
+              const toolOnlyText = buildToolFollowupText(
+                outcome.status,
                 outcome.narration_before,
-                outcome.disambiguation_prompt,
                 outcome.narration_after,
-              ].filter(Boolean).join('\n\n');
+                outcome.disambiguation_prompt,
+              );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
               streamEvents.push(doneFrame);
               writeNdjson(res, doneFrame);
@@ -2405,11 +2434,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             streamEvents.push(resultFrame);
             writeNdjson(res, resultFrame);
             if (outcome.status === 'needs_confirmation' || outcome.status === 'needs_disambiguation' || outcome.status === 'rejected') {
-              const toolOnlyText = [
+              const toolOnlyText = buildToolFollowupText(
+                outcome.status,
                 outcome.narration_before,
-                outcome.disambiguation_prompt,
                 outcome.narration_after,
-              ].filter(Boolean).join('\n\n');
+                outcome.disambiguation_prompt,
+              );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
               streamEvents.push(doneFrame);
               writeNdjson(res, doneFrame);
@@ -2498,13 +2528,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         };
         streamEvents.push(generationCompletedFrame);
         writeNdjson(res, generationCompletedFrame);
-        const doneFrame = { type: 'done', ...result };
+        const finalOutputText = typeof result.outputText === 'string' && result.outputText.trim().length > 0
+          ? result.outputText
+          : assistantText;
+        const doneFrame = { type: 'done', ...result, outputText: finalOutputText };
         streamEvents.push(doneFrame);
         writeNdjson(res, doneFrame);
         const persistedIds = persistChatTurnAtomic({
           sessionId: session.id,
           userContent: inputText,
-          assistantContent: result.outputText,
+          assistantContent: finalOutputText,
           provider: preferred,
           model: resolvedModel,
           stream: { events: streamEvents, status: 'done' },

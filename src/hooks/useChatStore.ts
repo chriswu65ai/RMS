@@ -463,11 +463,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
 
           if (payload.type === 'done') {
+            const doneText = typeof payload.outputText === 'string' && payload.outputText.trim().length > 0
+              ? payload.outputText
+              : undefined;
             set((state) => ({
               running: false,
               messages: updateMessage(state.messages, assistantMessageId, (message) => ({
                 ...message,
-                text: payload.outputText ?? message.text,
+                text: doneText ?? message.text,
                 status: 'idle',
                 traces: message.traces.map((trace) => trace.status === 'running'
                   ? { ...trace, status: 'completed', endedAt: now() }
