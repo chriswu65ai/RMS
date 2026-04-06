@@ -495,6 +495,19 @@ test('configure agent section header reads Configure Agent', () => {
   assert.equal(source.includes('<h2 className="text-lg font-semibold">Choose agent</h2>'), false);
 });
 
+test('configure agent section groups web-search toggles before web-search detail section', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  const configureIndex = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
+  const enableSearchIndex = source.indexOf('<span>Enable web search</span>');
+  const sourceCitationIndex = source.indexOf('<span>Source citation</span>');
+  const webSearchSectionIndex = source.indexOf('<h2 className="text-lg font-semibold">Web Search</h2>');
+
+  assert.ok(configureIndex >= 0, 'Expected Configure Agent section to exist.');
+  assert.ok(enableSearchIndex > configureIndex, 'Expected Enable web search toggle inside Configure Agent section.');
+  assert.ok(sourceCitationIndex > enableSearchIndex, 'Expected Source citation toggle to follow Enable web search toggle.');
+  assert.ok(webSearchSectionIndex > sourceCitationIndex, 'Expected Web Search section details to appear after Configure Agent toggles.');
+});
+
 test('activity log clear action requires confirmation before deleting rows', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes("const shouldClear = await dialog.confirm("), true);
@@ -505,8 +518,6 @@ test('activity log clear action requires confirmation before deleting rows', () 
 
 test('web search component keeps common control DOM order stable when provider changes', () => {
   const renderControls = (provider: 'duckduckgo' | 'searxng') => renderToStaticMarkup(createElement(WebSearchControls, {
-    webSearchEnabled: true,
-    setWebSearchEnabled: noop,
     webSearchProvider: provider,
     setWebSearchProvider: noop,
     webSearchMode: 'single',
@@ -526,8 +537,6 @@ test('web search component keeps common control DOM order stable when provider c
     domainPolicyHelperText: 'domain helper',
     webSearchSafeSearch: true,
     setWebSearchSafeSearch: noop,
-    webSearchSourceCitation: true,
-    setWebSearchSourceCitation: noop,
     webSearchProviderCapabilities: provider === 'searxng' ? WEB_SEARCH_PROVIDER_CAPABILITIES.searxng : WEB_SEARCH_PROVIDER_CAPABILITIES.duckduckgo,
     webSearchSearxngBaseUrl: 'http://localhost:8080',
     setWebSearchSearxngBaseUrl: noop,
@@ -556,8 +565,6 @@ test('web search component keeps common control DOM order stable when provider c
 
 test('web search component validation feedback is announced as assertive alert', () => {
   const html = renderToStaticMarkup(createElement(WebSearchControls, {
-    webSearchEnabled: true,
-    setWebSearchEnabled: noop,
     webSearchProvider: 'searxng',
     setWebSearchProvider: noop,
     webSearchMode: 'single',
@@ -577,8 +584,6 @@ test('web search component validation feedback is announced as assertive alert',
     domainPolicyHelperText: 'domain helper',
     webSearchSafeSearch: true,
     setWebSearchSafeSearch: noop,
-    webSearchSourceCitation: true,
-    setWebSearchSourceCitation: noop,
     webSearchProviderCapabilities: WEB_SEARCH_PROVIDER_CAPABILITIES.searxng,
     webSearchSearxngBaseUrl: 'invalid',
     setWebSearchSearxngBaseUrl: noop,
