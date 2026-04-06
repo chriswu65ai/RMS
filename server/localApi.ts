@@ -1625,6 +1625,8 @@ const invokeProviderGenerate = (
   },
 ) => providerRegistry[provider].generate(request, apiKey, signal, options);
 
+const ALLOWED_COMMAND_PREFIX_DELIMITERS = new Set([':']);
+
 const parsePrefixedChatCommand = (
   inputText: string,
   prefixMap: ChatCommandPrefixMap,
@@ -1635,8 +1637,15 @@ const parsePrefixedChatCommand = (
     .map((name) => ({ name, prefix: prefixMap[name].trim() }))
     .filter((entry) => entry.prefix.length > 0)
     .sort((a, b) => b.prefix.length - a.prefix.length);
+  const normalizedInput = trimmed.toLowerCase();
   for (const entry of ordered) {
-    if (!trimmed.toLowerCase().startsWith(entry.prefix.toLowerCase())) continue;
+    const normalizedPrefix = entry.prefix.toLowerCase();
+    if (!normalizedInput.startsWith(normalizedPrefix)) continue;
+    const nextChar = trimmed.charAt(entry.prefix.length);
+    const hasValidBoundary = !nextChar
+      || /\s/.test(nextChar)
+      || ALLOWED_COMMAND_PREFIX_DELIMITERS.has(nextChar);
+    if (!hasValidBoundary) continue;
     const remainder = trimmed.slice(entry.prefix.length).trim();
     return { command: entry.name, remainder };
   }
