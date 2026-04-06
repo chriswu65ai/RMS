@@ -392,6 +392,10 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     () => (modalState ? resolveDestinationPreview(modalState.task) : null),
     [modalState, folders],
   );
+  const currentTask = useMemo(
+    () => (modalState?.mode === 'edit' && modalState.id ? tasks.find((item) => item.id === modalState.id) ?? null : null),
+    [modalState, tasks],
+  );
 
   return (
     <div className="mt-4 space-y-4">
@@ -602,16 +606,15 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                 <button
                   className="mr-auto rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   onClick={() => {
-                    const task = tasks.find((item) => item.id === modalState.id);
-                    if (!task) return;
-                    if (hasLinkedNote(task)) {
-                      openLinkedNote(task);
+                    if (!currentTask) return;
+                    if (hasLinkedNote(currentTask)) {
+                      openLinkedNote(currentTask);
                       return;
                     }
-                    void createNoteFromTask(task);
+                    void createNoteFromTask(currentTask);
                   }}
                 >
-                  {hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}
+                  {currentTask && hasLinkedNote(currentTask) ? 'Open linked note' : 'Create note from task'}
                 </button>
               )}
               <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
