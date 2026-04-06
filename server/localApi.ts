@@ -1870,7 +1870,17 @@ const runAttachmentCleanup = () => {
 
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
-  ensureInitialized();
+  try {
+    ensureInitialized();
+  } catch (error) {
+    writeJson(res, 500, {
+      error: {
+        code: 'LOCAL_API_INIT_FAILED',
+        message: error instanceof Error ? error.message : 'Local API initialization failed.',
+      },
+    });
+    return true;
+  }
 
   if (req.method === 'GET' && url === '/api/bootstrap') {
     const workspace = ensureWorkspaceWithStarterContent();
