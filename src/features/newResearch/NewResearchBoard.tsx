@@ -54,7 +54,8 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const { workspace, folders, files, refresh, transitionTaskModal, transitionTaskToNote, selectedTaskId } = useResearchStore();
   const [tasks, setTasks] = useState<NewResearchTask[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
+  const [modalAttachmentError, setModalAttachmentError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -134,7 +135,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     void runUiAsync(
       async () => {
         setLoading(true);
-        setError(null);
+        setBoardError(null);
         return listNewResearchTasks();
       },
       {
@@ -145,7 +146,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
           setLoading(false);
         },
         onError: (message) => {
-          setError(message);
+          setBoardError(message);
           setLoading(false);
         },
       },
@@ -173,7 +174,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       if (!modalState?.id) {
         guard.ifActive(() => {
           setModalAttachments([]);
-          setError(null);
+          setModalAttachmentError(null);
         });
         return;
       }
@@ -185,9 +186,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
           isCancelled: guard.isCancelled,
           onSuccess: (attachments) => {
             setModalAttachments(attachments);
-            setError(null);
+            setModalAttachmentError(null);
           },
-          onError: (message) => setError(message),
+          onError: (message) => setModalAttachmentError(message),
         },
       );
     };
@@ -227,14 +228,14 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
 
   const saveTask = async () => {
     if (!modalState) return;
-    if (!modalState.task.ticker.trim()) return setError('Ticker is required.');
+    if (!modalState.task.ticker.trim()) return setBoardError('Ticker is required.');
     const willAutoComplete = modalState.task.date_completed.trim() && modalState.task.status !== TaskStatus.Completed;
     const payload: NewResearchTaskInput = willAutoComplete
       ? { ...modalState.task, status: TaskStatus.Completed }
       : modalState.task;
 
     setSaving(true);
-    setError(null);
+    setBoardError(null);
     try {
       if (modalState.mode === 'create') {
         const created = await createNewResearchTask(payload);
@@ -246,7 +247,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       setModalState(null);
       transitionTaskModal(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save task.');
+      setBoardError(err instanceof Error ? err.message : 'Failed to save task.');
     } finally {
       setSaving(false);
     }
@@ -257,34 +258,34 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     try {
       const updated = await updateNewResearchTask(task.id, { ...task, status: nextStatus, date_completed: nextDate });
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
-    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to move task.'); }
+    } catch (err) { setBoardError(err instanceof Error ? err.message : 'Failed to move task.'); }
   };
 
   const toggleArchive = async (task: NewResearchTask) => {
     try {
       const updated = await updateNewResearchTask(task.id, { ...task, archived: !task.archived });
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
-    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to update archive status.'); }
+    } catch (err) { setBoardError(err instanceof Error ? err.message : 'Failed to update archive status.'); }
   };
 
   const removeTask = async (taskId: string) => {
     const confirmed = await dialog.confirm('Delete task', 'Permanently delete task and activity history?');
     if (!confirmed) return;
     try { await deleteNewResearchTask(taskId); setTasks((prev) => prev.filter((task) => task.id !== taskId)); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Failed to delete task.'); }
+    catch (err) { setBoardError(err instanceof Error ? err.message : 'Failed to delete task.'); }
   };
 
   const openLinkedNote = (task: NewResearchTask) => {
     const transition = transitionTaskToNote(task);
-    if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
+    if (!transition.ok) return setBoardError(transition.reason ?? 'Linked note is unavailable.');
     navigate('/research.html');
   };
 
   const createNoteFromTask = async (task: NewResearchTask) => {
-    if (!workspace) return setError('Workspace is not ready yet.');
+    if (!workspace) return setBoardError('Workspace is not ready yet.');
     const preview = resolveDestinationPreview(task);
     const ticker = preview.ticker;
-    if (!ticker) return setError('Ticker is required before creating a note.');
+    if (!ticker) return setBoardError('Ticker is required before creating a note.');
 
     const type = getCreateNoteType(task.note_type, noteTypes);
     const date = toLocalDateInputValue();
@@ -297,10 +298,10 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       const createName = preview.explicitFolderMissing ? preview.destinationPath : ticker;
       const createParent = null;
       const { error: createFolderError } = await createFolder(workspace.id, createName, createParent);
-      if (createFolderError) return setError(createFolderError.message);
+      if (createFolderError) return setBoardError(createFolderError.message);
       await refresh();
       targetFolder = useResearchStore.getState().folders.find((folder) => folder.path === preview.destinationPath) ?? null;
-      if (!targetFolder) return setError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
+      if (!targetFolder) return setBoardError(`Folder was created at ${preview.destinationPath}, but it could not be found.`);
     }
 
     const existing = files.find((file) => !file.is_template && file.name === `${baseName}.md` && file.folder_id === (targetFolder?.id ?? null));
@@ -308,7 +309,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     if (existing) {
       const linkedOwner = taskByLinkedFileId.get(existing.id);
       if (linkedOwner && linkedOwner.id !== task.id) {
-        setError(`A different task is already linked to ${existing.path}. Keep task↔note links one-to-one by creating a new note.`);
+        setBoardError(`A different task is already linked to ${existing.path}. Keep task↔note links one-to-one by creating a new note.`);
         return;
       }
     }
@@ -329,11 +330,11 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const body = templateBody ? `${taskContextBlock}\n${templateBody}` : taskContextBlock;
     const content = composeMarkdown(frontmatter, body);
     const result = await createFile({ workspaceId: workspace.id, folderId: targetFolder?.id ?? null, folderPath: targetFolder?.path ?? null, name, content, frontmatter });
-    if (result.error) return setError(result.error.message);
+    if (result.error) return setBoardError(result.error.message);
 
     await refresh();
     const created = useResearchStore.getState().files.find((file) => !file.is_template && file.path === `${targetFolder?.path ? `${targetFolder.path}/` : ''}${name}`);
-    if (!created) return setError('Note created, but it could not be selected automatically.');
+    if (!created) return setBoardError('Note created, but it could not be selected automatically.');
 
     const updatedTask = await updateNewResearchTask(task.id, { ...task, linked_note_file_id: created.id, linked_note_path: created.path });
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updatedTask : item)));
@@ -348,18 +349,18 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         if (failedCount > 0) {
           const totalCount = taskAttachments.length;
           attachmentLinkWarning = `Note created successfully, but ${failedCount} of ${totalCount} task attachment${totalCount === 1 ? '' : 's'} could not be linked to the note.`;
-          setError(attachmentLinkWarning);
+          setBoardError(attachmentLinkWarning);
         }
       }
     } catch (err) {
       attachmentLinkWarning = 'Note created successfully, but task attachments could not be fetched for linking.';
-      setError(err instanceof Error ? `${attachmentLinkWarning} ${err.message}` : attachmentLinkWarning);
+      setBoardError(err instanceof Error ? `${attachmentLinkWarning} ${err.message}` : attachmentLinkWarning);
     }
     if (attachmentLinkWarning) {
       await dialog.alert('Attachment linking warning', attachmentLinkWarning);
     }
     const transition = transitionTaskToNote(updatedTask, created.id);
-    if (!transition.ok) return setError(transition.reason ?? 'Linked note is unavailable.');
+    if (!transition.ok) return setBoardError(transition.reason ?? 'Linked note is unavailable.');
     navigate('/research.html');
   };
 
@@ -406,7 +407,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
         </label>
       </div>
 
-      {error && <PageState kind="error" message={error} />}
+      {boardError && <PageState kind="error" message={boardError} />}
       {loading ? <PageState kind="loading" message="Loading board..." /> : (
         <div className="grid gap-4 lg:grid-cols-3">
           {COLUMNS.map((column) => (
@@ -532,13 +533,14 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                           fallbackMessage: 'Failed to upload attachment.',
                           onSuccess: (attachments) => {
                             setModalAttachments(attachments);
-                            setError(null);
+                            setModalAttachmentError(null);
                           },
-                          onError: (message) => setError(message),
+                          onError: (message) => setModalAttachmentError(message),
                         },
                       );
                     }}
                   />
+                  {modalAttachmentError && <p className="mt-2 text-xs text-rose-600">{modalAttachmentError}</p>}
                   <ul className="mt-2 space-y-1 rounded border border-slate-200 p-2 text-xs">
                     {modalAttachments.length === 0 && <li className="text-slate-500">No attachments yet.</li>}
                     {modalAttachments.map((attachment) => (
@@ -556,9 +558,9 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                                 fallbackMessage: 'Failed to remove attachment.',
                                 onSuccess: (attachments) => {
                                   setModalAttachments(attachments);
-                                  setError(null);
+                                  setModalAttachmentError(null);
                                 },
-                                onError: (message) => setError(message),
+                                onError: (message) => setModalAttachmentError(message),
                               },
                             );
                           }}
