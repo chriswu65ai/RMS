@@ -17,6 +17,7 @@ import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { processResponseCitations } from './response/citation_pipeline';
+import { decideWebSearchRouting, shouldRenderCitationsForChatPrompt } from './chatRoutingHeuristics';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -3333,7 +3334,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           }
         }
         let searchWarningMessage: string | null = null;
-        if (normalizedWebSearchConfig.enabled) {
+        const routingDecision = decideWebSearchRouting(inputText);
+        const citationRequested = shouldRenderCitationsForChatPrompt(inputText);
+        const effectiveWebSearchConfig = {
+          ...normalizedWebSearchConfig,
+          source_citation: citationRequested,
+        };
+        if (normalizedWebSearchConfig.enabled && routingDecision.shouldSearch) {
           try {
             const orchestration = await runAgentToolOrchestration({
               provider,
@@ -3341,7 +3348,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               inputText,
               apiKey: apiKey ?? '',
               baseUrl: provider === 'ollama' ? ollamaRuntime.baseUrl : undefined,
-              settings: normalizedWebSearchConfig,
+              settings: effectiveWebSearchConfig,
               preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
               signal: controller.signal,
               onEvent: (event) => {
@@ -3370,8 +3377,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             const reason = error instanceof Error ? error.message : 'Web search tool orchestration failed.';
             searchWarningMessage = reason;
             toolFailureReason = reason;
-            writeNdjson(res, { type: 'search_warning', message: reason, fail_open: normalizedWebSearchConfig.fail_open_on_tool_error });
-            if (normalizedWebSearchConfig.fail_open_on_tool_error) {
+            writeNdjson(res, { type: 'search_warning', message: reason, fail_open: effectiveWebSearchConfig.fail_open_on_tool_error });
+            if (effectiveWebSearchConfig.fail_open_on_tool_error) {
               preparedInputText = inputText;
             } else {
               throw error;
@@ -3385,6 +3392,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
             tool_failure_reason: toolFailureReason,
             search_warning: searchWarningMessage,
+          });
+        } else if (normalizedWebSearchConfig.enabled) {
+          writeNdjson(res, {
+            type: 'search_skipped',
+            reason: routingDecision.reason,
+            web_search_enabled: true,
           });
         }
         if (normalizedSources.length > 0) {
@@ -3401,8 +3414,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         const citationResult = await processResponseCitations({
           outputText: result.outputText,
           sources: normalizedSources,
-          sourceCitationEnabled: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0,
-          retryCanonicalize: normalizedWebSearchConfig.source_citation && normalizedSources.length > 0
+          sourceCitationEnabled: citationRequested && normalizedSources.length > 0,
+          retryCanonicalize: citationRequested && normalizedSources.length > 0
             ? async () => {
               const retryPass = await invokeProviderGenerate(provider, {
                 model: resolvedModel,

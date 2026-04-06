@@ -1749,7 +1749,7 @@ test('agent generate failed runs retain attempted tool counts after tool phase s
   }
 });
 
-test('agent generate handles citation on/off output policy while keeping metadata and logging citation events', async () => {
+test('agent generate includes citations only when explicitly requested in prompt', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
   const receivedInputs: string[] = [];
@@ -1777,7 +1777,7 @@ test('agent generate handles citation on/off output policy while keeping metadat
           mode: 'single',
           max_results: 5,
           timeout_ms: 3000,
-          source_citation: false,
+          source_citation: true,
         },
       },
     });
@@ -1797,23 +1797,10 @@ test('agent generate handles citation on/off output policy while keeping metadat
     assert.equal(disabledDone?.outputText, 'Summary body');
     assert.equal((disabledDone?.web_search?.sourceCount ?? 0) > 0, true);
 
-    await callRoute('PUT', '/api/agent/settings', {
-      default_provider: 'openai',
-      default_model: 'gpt-4.1',
-      generation_params: {
-        web_search: {
-          enabled: true,
-          mode: 'single',
-          max_results: 5,
-          timeout_ms: 3000,
-          source_citation: true,
-        },
-      },
-    });
     const enabledResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
       provider: 'openai',
       model: 'gpt-4.1',
-      input_text: 'hello',
+      input_text: 'hello with citations',
     }));
     assert.equal(enabledResponse.status, 200);
     assert.match(receivedInputs.at(-1) ?? '', /Citation mode is REQUIRED/);
@@ -1841,6 +1828,68 @@ test('agent generate handles citation on/off output policy while keeping metadat
     const parsedEvents = JSON.parse(latestEnabled?.citation_events_json ?? '[]') as Array<{ event_type?: string }>;
     assert.equal(parsedEvents.some((event) => event.event_type === 'retry_invoked'), true);
     assert.equal(latestDisabled?.citation_events_json, null);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate routes web search by prompt heuristics when enabled', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  let searchCalls = 0;
+  searchProviderRegistry.duckduckgo.search = async () => {
+    searchCalls += 1;
+    return [{ title: 'News', url: 'https://example.com/news', snippet: 'snippet', provider: 'duckduckgo' }];
+  };
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+        },
+      },
+    });
+
+    const recencyResponse = await withOpenAiToolCalls(['latest ai headlines'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'What are the latest AI headlines today?',
+    }));
+    assert.equal(recencyResponse.status, 200);
+    assert.equal(searchCalls, 1);
+    const recencyFrames = recencyResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    assert.equal(recencyFrames.some((frame) => frame.type === 'tool_call_started'), true);
+
+    const conceptualResponse = await withOpenAiToolCalls(['brainstorm ideas'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'Brainstorm product ideas for students.',
+    }));
+    assert.equal(conceptualResponse.status, 200);
+    assert.equal(searchCalls, 1);
+    const conceptualFrames = conceptualResponse.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; reason?: string });
+    assert.equal(conceptualFrames.some((frame) => frame.type === 'tool_call_started'), false);
+    assert.equal(conceptualFrames.some((frame) => frame.type === 'search_skipped' && frame.reason === 'conceptual_or_opinion_or_brainstorm'), true);
+
+    const explicitNoWeb = await withOpenAiToolCalls(['latest market news'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'Give latest market updates but do not search the web.',
+    }));
+    assert.equal(explicitNoWeb.status, 200);
+    assert.equal(searchCalls, 1);
+    const explicitFrames = explicitNoWeb.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; reason?: string });
+    assert.equal(explicitFrames.some((frame) => frame.type === 'search_skipped' && frame.reason === 'explicit_no_web'), true);
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
