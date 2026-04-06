@@ -2585,6 +2585,127 @@ test('chat tool orchestration executes approved action and persists tool metadat
   }
 });
 
+test('stream done frame keeps meaningful outputText after successful tool execution', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'tool-success-meaningful-done',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async (_request, _apiKey, _signal, hooks) => {
+    hooks?.onTextDelta?.('I listed your idea tasks. ');
+    hooks?.onTextDelta?.('You can ask me to filter by ticker next.');
+    return { outputText: '', latencyMs: 1 };
+  };
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'list my idea tasks',
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.equal(done?.outputText, 'I listed your idea tasks. You can ask me to filter by ticker next.');
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('confirmation-required tool path emits natural-language done output with next step', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'tool-needs-confirm-meaningful-done',
+      name: 'create_task',
+      arguments: { ticker: 'aapl', title: 'Needs confirm draft' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'should not run', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'create a task for apple' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /prepared the requested action/i);
+    assert.match(done?.outputText ?? '', /reply with \/confirm|reply with confirm/i);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('tool rejection fallback emits natural-language done output with recovery guidance', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'tool-rejected-meaningful-done',
+      name: 'update_task',
+      arguments: { task_id: 'missing-task-id', status: 'researching' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'should not run', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'update missing task',
+      explicit_confirm: true,
+    });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; outputText?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'rejected'), true);
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /attempted the action/i);
+    assert.match(done?.outputText ?? '', /try again|help rewrite/i);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('chat tool orchestration keeps Tier C pending after disambiguation until structured confirmation is provided', async () => {
   await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
   await callRoute('PUT', '/api/agent/settings', {
