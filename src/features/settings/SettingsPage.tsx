@@ -1,5 +1,5 @@
 import { Download, Upload } from 'lucide-react';
-import { type ChangeEvent, useEffect, useState } from 'react';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { useResearchStore } from '../../hooks/useResearchStore';
 import { createFile, createFolder, getAttachmentSettings, runAttachmentCleanupNow, saveAttachmentSettings } from '../../lib/dataApi';
@@ -22,7 +22,9 @@ export function SettingsPage() {
   const [attachmentUsageBytes, setAttachmentUsageBytes] = useState(0);
   const [attachmentReclaimableBytes, setAttachmentReclaimableBytes] = useState(0);
   const [attachmentStatusError, setAttachmentStatusError] = useState<string | null>(null);
+  const [attachmentSaveStatus, setAttachmentSaveStatus] = useState<'idle' | 'saving' | 'success'>('idle');
   const [attachmentsLoading, setAttachmentsLoading] = useState(true);
+  const attachmentSaveSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => setNoteTypesInput(noteTypes.join(', ')), [noteTypes]);
   useEffect(() => setAssigneesInput(assignees.join(', ')), [assignees]);
@@ -50,6 +52,42 @@ export function SettingsPage() {
     );
     return () => guard.cancel();
   }, []);
+
+  useEffect(() => () => {
+    if (attachmentSaveSuccessTimeoutRef.current) {
+      clearTimeout(attachmentSaveSuccessTimeoutRef.current);
+      attachmentSaveSuccessTimeoutRef.current = null;
+    }
+  }, []);
+
+  const saveAttachmentPreferences = async () => {
+    setAttachmentSaveStatus('saving');
+    await runUiAsync(
+      () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
+      {
+        fallbackMessage: 'Failed to save attachment settings.',
+        onSuccess: (updated) => {
+          setAttachmentQuotaMb(updated.quota_mb);
+          setAttachmentRetentionDays(updated.retention_days);
+          setAttachmentUsageBytes(updated.usage_bytes);
+          setAttachmentReclaimableBytes(updated.reclaimable_bytes);
+          setAttachmentStatusError(null);
+          setAttachmentSaveStatus('success');
+          if (attachmentSaveSuccessTimeoutRef.current) {
+            clearTimeout(attachmentSaveSuccessTimeoutRef.current);
+          }
+          attachmentSaveSuccessTimeoutRef.current = setTimeout(() => {
+            setAttachmentSaveStatus('idle');
+            attachmentSaveSuccessTimeoutRef.current = null;
+          }, 2500);
+        },
+        onError: (message) => {
+          setAttachmentStatusError(message);
+          setAttachmentSaveStatus('idle');
+        },
+      },
+    );
+  };
 
   const exportAllFiles = async () => {
     if (!workspace) return;
@@ -201,41 +239,11 @@ export function SettingsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Total storage quota (MB)</span>
-                <input className="input" type="number" min={50} value={attachmentQuotaMb} disabled={attachmentsLoading} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={async () => {
-                  await runUiAsync(
-                    () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
-                    {
-                      fallbackMessage: 'Failed to save attachment settings.',
-                      onSuccess: (updated) => {
-                        setAttachmentQuotaMb(updated.quota_mb);
-                        setAttachmentRetentionDays(updated.retention_days);
-                        setAttachmentUsageBytes(updated.usage_bytes);
-                        setAttachmentReclaimableBytes(updated.reclaimable_bytes);
-                        setAttachmentStatusError(null);
-                      },
-                      onError: (message) => setAttachmentStatusError(message),
-                    },
-                  );
-                }} />
+                <input className="input" type="number" min={50} value={attachmentQuotaMb} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentQuotaMb(Number(event.target.value || 500))} onBlur={saveAttachmentPreferences} />
               </label>
               <label className="space-y-2 text-sm text-slate-600">
                 <span>Retention days</span>
-                <input className="input" type="number" min={1} value={attachmentRetentionDays} disabled={attachmentsLoading} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={async () => {
-                  await runUiAsync(
-                    () => saveAttachmentSettings({ quota_mb: attachmentQuotaMb, retention_days: attachmentRetentionDays }),
-                    {
-                      fallbackMessage: 'Failed to save attachment settings.',
-                      onSuccess: (updated) => {
-                        setAttachmentQuotaMb(updated.quota_mb);
-                        setAttachmentRetentionDays(updated.retention_days);
-                        setAttachmentUsageBytes(updated.usage_bytes);
-                        setAttachmentReclaimableBytes(updated.reclaimable_bytes);
-                        setAttachmentStatusError(null);
-                      },
-                      onError: (message) => setAttachmentStatusError(message),
-                    },
-                  );
-                }} />
+                <input className="input" type="number" min={1} value={attachmentRetentionDays} disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onChange={(event) => setAttachmentRetentionDays(Number(event.target.value || 30))} onBlur={saveAttachmentPreferences} />
               </label>
             </div>
             {attachmentsLoading ? (
@@ -247,7 +255,9 @@ export function SettingsPage() {
               </>
             )}
             {attachmentStatusError && <p className="mt-2 text-sm text-rose-600">{attachmentStatusError}</p>}
-            <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" disabled={attachmentsLoading} onClick={async () => {
+            {attachmentSaveStatus === 'saving' && <p className="mt-2 text-sm text-slate-500">Saving attachment settings…</p>}
+            {attachmentSaveStatus === 'success' && <p className="mt-2 text-sm text-emerald-600">Attachment settings saved.</p>}
+            <button className="mt-3 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" disabled={attachmentsLoading || attachmentSaveStatus === 'saving'} onClick={async () => {
               await runUiAsync(
                 async () => {
                   const result = await runAttachmentCleanupNow();
