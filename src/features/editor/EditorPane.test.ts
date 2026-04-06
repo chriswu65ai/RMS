@@ -1,6 +1,7 @@
 import { history, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck.js';
@@ -287,6 +288,17 @@ test('sources bubble merge deduplicates repeated attachment and web entries', ()
   assert.equal(merged.filter((source) => source.kind === 'web' && source.url === 'https://example.com/a').length, 1);
   assert.equal(merged.filter((source) => source.kind === 'attachment' && source.attachment_id === 'doc-1').length, 1);
   assert.equal(merged.some((source) => source.kind === 'web' && source.url === 'https://example.com/b'), true);
+});
+
+test('sources bubble header uses simplified Sources label without explanatory subheader copy', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+
+  assert.match(editorPaneSource, /<p className="font-semibold text-slate-900">Sources<\/p>/);
+  assert.equal(editorPaneSource.includes('Available / retrieved sources'), false);
+  assert.equal(
+    editorPaneSource.includes('Shown as context used during drafting; final markdown Sources list remains citation-driven.'),
+    false,
+  );
 });
 
 test('malformed or interrupted chunk sequence errors are tolerated and future updates still apply', () => {
