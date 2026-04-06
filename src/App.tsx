@@ -11,7 +11,6 @@ import { TemplateModal } from './features/templates/TemplateModal';
 import { useResearchStore } from './hooks/useResearchStore';
 import { fileToNoteModel, splitFrontmatter } from './lib/frontmatter';
 import { NewResearchBoard } from './features/newResearch/NewResearchBoard';
-import { AgentPage } from './features/agent/AgentPage';
 import { ChatPage } from './features/chat/ChatPage';
 import { SettingsLayout } from './features/settings/SettingsLayout';
 import { SettingsGeneralPage } from './features/settings/SettingsGeneralPage';
@@ -56,7 +55,6 @@ function TopNavigation() {
         <NavLink className={navClass} to="/tasks.html">Tasks</NavLink>
         <NavLink className={navClass} to="/research.html">Research</NavLink>
         <NavLink className={navClass} to="/chat">Chat</NavLink>
-        <NavLink className={navClass} to="/agent">Agent</NavLink>
         <NavLink className={navClass} to="/settings">Settings</NavLink>
       </nav>
     </div>
@@ -293,7 +291,7 @@ export function App() {
                 </ResearchRouteErrorBoundary>
               )}
             />
-            <Route path="/agent" element={<AgentPage />} />
+            <Route path="/agent" element={<Navigate to="/settings/ai" replace />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/settings" element={<SettingsLayout />}>
               <Route index element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />
