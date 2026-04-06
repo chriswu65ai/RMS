@@ -124,13 +124,13 @@ test('citation mode ON supports mixed web numeric and attachment alpha citations
 
   assert.match(result.normalizedText, /Web claim \[1\]\./);
   assert.match(result.normalizedText, /Attachment evidence \[a\]\./);
-  assert.match(result.outputText, /\[2\] \[Beta\]\(https:\/\/example\.com\/b\)/);
+  assert.match(result.outputText, /\[1\] \[Beta\]\(https:\/\/example\.com\/b\)/);
   assert.match(result.outputText, /\[a\] filename\.pdf/);
 });
 
 test('citation mode ON remaps attachment letters by first appearance and marks invalid attachment tokens', async () => {
   const result = await processResponseCitations({
-    outputText: 'Attachment two first [b]. Unknown attachment [c].',
+    outputText: 'Attachment two first [b]. Unknown attachment [c]. Extra token [d].',
     sourceCitationEnabled: true,
     sources: [
       { kind: 'attachment', attachment_id: 'doc-1', label: 'one.pdf' },
@@ -139,7 +139,56 @@ test('citation mode ON remaps attachment letters by first appearance and marks i
   });
 
   assert.match(result.normalizedText, /Attachment two first \[a\]\./);
-  assert.match(result.normalizedText, /Unknown attachment \[b\]\[lack citation\]\./);
+  assert.match(result.normalizedText, /Unknown attachment \[b\]\./);
+  assert.match(result.normalizedText, /Extra token \[c\]\[lack citation\]\./);
   assert.match(result.outputText, /\[a\] one\.pdf/);
-  assert.doesNotMatch(result.outputText, /\[b\] two\.pdf/);
+  assert.match(result.outputText, /\[b\] two\.pdf/);
+  assert.doesNotMatch(result.outputText, /\n\[c\]\s/);
+});
+
+test('citation mode ON keeps inline web citation and appendix entry index aligned when first seen citation is out of order', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Out of order citation [3].',
+    sourceCitationEnabled: true,
+    sources: [
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Gamma', url: 'https://example.com/c', snippet: '', provider: 'duckduckgo' },
+    ],
+  });
+
+  assert.match(result.normalizedText, /Out of order citation \[1\]\./);
+  assert.match(result.outputText, /\[1\] \[Gamma\]\(https:\/\/example\.com\/c\)/);
+  assert.doesNotMatch(result.outputText, /\[3\] \[Gamma\]/);
+});
+
+test('citation mode ON does not leave valid inline citation without matching appendix entry', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Single citation [2].',
+    sourceCitationEnabled: true,
+    sources: [
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
+    ],
+  });
+
+  assert.match(result.normalizedText, /Single citation \[1\]\./);
+  assert.match(result.outputText, /Sources\n\[1\] \[Beta\]\(https:\/\/example\.com\/b\)/);
+  assert.doesNotMatch(result.outputText, /\[2\] \[Beta\]/);
+});
+
+test('citation mode ON only appends cited attachments when mixed web and attachment sources are present', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Web [1] and attachment [attachment:doc-2].',
+    sourceCitationEnabled: true,
+    sources: [
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'attachment', attachment_id: 'doc-1', label: 'one.pdf' },
+      { kind: 'attachment', attachment_id: 'doc-2', label: 'two.pdf' },
+    ],
+  });
+
+  assert.match(result.outputText, /\[1\] \[Alpha\]\(https:\/\/example\.com\/a\)/);
+  assert.match(result.outputText, /\[a\] two\.pdf/);
+  assert.doesNotMatch(result.outputText, /\[b\] one\.pdf/);
 });
