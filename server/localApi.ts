@@ -514,6 +514,19 @@ const loadPendingActionDraft = (sessionId: string, actionKey: string): (ChatPend
   return { ...row, draft: parseJsonOrNull<Record<string, unknown>>(row.draft_json) };
 };
 
+const loadLatestPendingChatToolDraft = (sessionId: string): (ChatPendingActionRow & { draft: Record<string, unknown> | null }) | null => {
+  const row = queryJson<ChatPendingActionRow>(`
+    select * from chat_pending_actions
+    where session_id = ${sqlEscape(sessionId)}
+      and status = 'pending'
+      and action_key like 'chat_tool:%'
+    order by updated_at desc, created_at desc, id desc
+    limit 1
+  `)[0];
+  if (!row) return null;
+  return { ...row, draft: parseJsonOrNull<Record<string, unknown>>(row.draft_json) };
+};
+
 type SaveMemorySnapshotInput = {
   sessionId: string;
   rollingSummary: string;
@@ -1243,6 +1256,15 @@ const extractExplicitConfirm = (inputText: string, payload: Record<string, unkno
   return /\b(confirm|approved?|yes,?\s+do\s+it)\b/i.test(inputText);
 };
 
+const parseDisambiguationChoice = (inputText: string): number | null => {
+  const trimmed = inputText.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(?:option\s*)?(\d{1,2})$/i);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
 const buildChatToolAdapter = (sessionId: string) => ({
   listTasks: async () => queryJson<NewResearchTaskRow>(
     'select * from new_research_tasks order by created_at desc',
@@ -1600,14 +1622,142 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         tool_attempts: 0,
       });
       try {
-        const explicitConfirm = extractExplicitConfirm(inputText, payload as Record<string, unknown>);
+        let explicitConfirm = extractExplicitConfirm(inputText, payload as Record<string, unknown>);
+        const pendingToolDraft = loadLatestPendingChatToolDraft(session.id);
+        const disambiguationChoice = parseDisambiguationChoice(inputText);
+        if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null) {
+          explicitConfirm = true;
+        }
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
         let toolNarrationBefore = '';
         let toolNarrationAfter = '';
         let toolMetadata: Record<string, unknown> | null = null;
         let generationPrompt = contextPayload.prompt;
-        if (supportsToolCalling(preferred, resolvedModel)) {
+        if (pendingToolDraft?.draft && explicitConfirm) {
+          const draftToolName = typeof pendingToolDraft.draft.tool_name === 'string' ? pendingToolDraft.draft.tool_name : '';
+          const draftArguments = pendingToolDraft.draft.arguments && typeof pendingToolDraft.draft.arguments === 'object'
+            ? { ...(pendingToolDraft.draft.arguments as Record<string, unknown>) }
+            : {};
+          const payloadToolArguments = payload.tool_arguments && typeof payload.tool_arguments === 'object'
+            ? (payload.tool_arguments as Record<string, unknown>)
+            : null;
+          const mergedArguments = payloadToolArguments ? { ...draftArguments, ...payloadToolArguments } : draftArguments;
+          if (disambiguationChoice !== null) {
+            const ambiguousMatches = Array.isArray(pendingToolDraft.draft.ambiguous_matches)
+              ? pendingToolDraft.draft.ambiguous_matches as Array<Record<string, unknown>>
+              : [];
+            const selected = ambiguousMatches[disambiguationChoice - 1];
+            if (selected?.id && typeof selected.id === 'string') {
+              mergedArguments.task_id = selected.id;
+              if (!payloadToolArguments?.task_ref) delete mergedArguments.task_ref;
+            }
+          }
+          if (isSupportedChatTool(draftToolName)) {
+            toolCallsAttempted = 1;
+            const startFrame = {
+              type: 'tool_call_started',
+              tool_call_id: `pending-${pendingToolDraft.id}`,
+              tool_name: draftToolName,
+              arguments: mergedArguments,
+              resumed_from_pending: true,
+            };
+            streamEvents.push(startFrame);
+            writeNdjson(res, startFrame);
+            const adapter = buildChatToolAdapter(session.id);
+            const outcome = await runChatToolOrchestration(adapter, {
+              sessionId: session.id,
+              toolCall: {
+                id: `pending-${pendingToolDraft.id}`,
+                name: draftToolName,
+                arguments: mergedArguments,
+              },
+              explicitConfirm: true,
+            });
+            if (outcome.status === 'executed') {
+              toolCallsSucceeded = 1;
+              savePendingActionDraft(session.id, pendingToolDraft.action_key, pendingToolDraft.draft, 'confirmed');
+            }
+            toolNarrationBefore = outcome.narration_before;
+            toolNarrationAfter = outcome.narration_after;
+            toolMetadata = {
+              tool_outcome: outcome.status,
+              resumed_from_pending: true,
+              pending_action_id: pendingToolDraft.id,
+              missing_fields: outcome.missing_fields ?? null,
+              disambiguation_prompt: outcome.disambiguation_prompt ?? null,
+              result: outcome.result ?? null,
+              explicit_confirm: explicitConfirm,
+            };
+            const resultFrame = {
+              type: 'tool_call_result',
+              tool_call_id: `pending-${pendingToolDraft.id}`,
+              tool_name: draftToolName,
+              outcome: outcome.status,
+              narration_before: outcome.narration_before,
+              narration_after: outcome.narration_after,
+              missing_fields: outcome.missing_fields,
+              disambiguation_prompt: outcome.disambiguation_prompt,
+              result: outcome.result,
+              resumed_from_pending: true,
+            };
+            streamEvents.push(resultFrame);
+            writeNdjson(res, resultFrame);
+            if (outcome.status === 'needs_confirmation' || outcome.status === 'needs_disambiguation' || outcome.status === 'rejected') {
+              const toolOnlyText = [
+                outcome.narration_before,
+                outcome.disambiguation_prompt,
+                outcome.narration_after,
+              ].filter(Boolean).join('\n\n');
+              const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
+              streamEvents.push(doneFrame);
+              writeNdjson(res, doneFrame);
+              const persistedIds = persistChatTurnAtomic({
+                sessionId: session.id,
+                userContent: inputText,
+                assistantContent: toolOnlyText,
+                provider: preferred,
+                model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: {
+                  usage: null,
+                  costEstimate: null,
+                  completedAt: new Date().toISOString(),
+                  correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                  context: contextPayload.meta,
+                  tool: toolMetadata,
+                  metrics: {
+                    turn_latency_ms: Date.now() - turnStartedAt,
+                    tool_attempts: toolCallsAttempted,
+                    tool_successes: toolCallsSucceeded,
+                    tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
+                  },
+                },
+              });
+              emitStructuredLog('chat.turn.completed', {
+                correlation_id: turnCorrelationId,
+                session_id: session.id,
+                message_id: persistedIds.assistantMessageId,
+                turn_latency_ms: Date.now() - turnStartedAt,
+                stream_status: 'done',
+                tool_attempts: toolCallsAttempted,
+                tool_successes: toolCallsSucceeded,
+                tool_failures: Math.max(0, toolCallsAttempted - toolCallsSucceeded),
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+            generationPrompt = [
+              contextPayload.prompt,
+              '',
+              '[TOOL_ORCHESTRATION]',
+              toolNarrationBefore,
+              toolNarrationAfter,
+              `Tool result JSON: ${JSON.stringify(outcome.result ?? {})}`,
+            ].filter(Boolean).join('\n');
+          }
+        } else if (supportsToolCalling(preferred, resolvedModel)) {
           try {
             const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
             streamEvents.push(planningStart);

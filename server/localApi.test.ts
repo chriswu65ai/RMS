@@ -2026,6 +2026,89 @@ test('chat tool orchestration executes approved action and persists tool metadat
   }
 });
 
+test('chat tool orchestration resumes pending disambiguation when user replies with a numbered choice', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+
+  const seedOne = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'AAPL',
+    title: 'Apple idea alpha',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  assert.equal(seedOne.status, 201);
+  const seedTwo = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'AAPL',
+    title: 'Apple idea beta',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  assert.equal(seedTwo.status, 201);
+
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'post-tool summary', latencyMs: 1 });
+
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tool-archive-ambiguous',
+        name: 'archive_task',
+        arguments: { task_ref: 'aapl' },
+      }],
+    });
+
+    const firstResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'archive the apple task',
+      explicit_confirm: true,
+    });
+    assert.equal(firstResponse.status, 200);
+    const firstFrames = firstResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
+      outcome?: string;
+      disambiguation_prompt?: string;
+    });
+    const firstOutcome = firstFrames.find((frame) => frame.type === 'tool_call_result');
+    assert.equal(firstOutcome?.outcome, 'needs_disambiguation');
+    assert.match(firstOutcome?.disambiguation_prompt ?? '', /Reply with the task number/);
+
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [],
+    });
+    const secondResponse = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: '1',
+    });
+    assert.equal(secondResponse.status, 200);
+    const secondFrames = secondResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
+      outcome?: string;
+      resumed_from_pending?: boolean;
+    });
+    const resumedOutcome = secondFrames.find((frame) => frame.type === 'tool_call_result');
+    assert.equal(resumedOutcome?.resumed_from_pending, true);
+    assert.equal(resumedOutcome?.outcome, 'executed');
+
+    const tasksResponse = await callRoute('GET', '/api/research-tasks');
+    assert.equal(tasksResponse.status, 200);
+    const tasks = JSON.parse(tasksResponse.body) as Array<{ ticker: string; title: string; archived: boolean }>;
+    const archivedAaplCount = tasks.filter((task) => task.ticker === 'AAPL' && task.archived).length;
+    assert.equal(archivedAaplCount >= 1, true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('chat tool actions create/update/archive/list/generate_note execute through streaming orchestration', async () => {
   await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
   await callRoute('PUT', '/api/agent/settings', {
