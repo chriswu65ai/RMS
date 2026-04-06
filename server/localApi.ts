@@ -2658,6 +2658,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         clientAborted = true;
         controller.abort();
       });
+      let toolCallsAttempted = 0;
+      let toolCallsSucceeded = 0;
+      let queryCount = 0;
+      let sourceCount = 0;
+      let toolFailureReason: string | null = null;
       beginNdjson(res);
       writeNdjson(res, { type: 'status', stage: 'started' });
       try {
@@ -2684,8 +2689,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           enabled: Boolean(normalizedWebSearchConfig.enabled),
           provider: normalizedWebSearchConfig.provider,
           mode: normalizedWebSearchConfig.mode,
-          queryCount: 0,
-          sourceCount: 0,
+          queryCount,
+          sourceCount,
         };
         let normalizedSources: ReturnType<typeof normalizeStreamingSources> = [];
         let preparedInputText = inputText;
@@ -2722,9 +2727,6 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             preparedInputText = `${contextLines.join('\n\n')}\n\n${inputText}`;
           }
         }
-        let toolCallsAttempted = 0;
-        let toolCallsSucceeded = 0;
-        let toolFailureReason: string | null = null;
         let searchWarningMessage: string | null = null;
         if (normalizedWebSearchConfig.enabled) {
           try {
@@ -2737,14 +2739,27 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               settings: normalizedWebSearchConfig,
               preferredSources: preferredSources.map((source) => ({ domain: source.domain, weight: source.weight })),
               signal: controller.signal,
-              onEvent: (event) => writeNdjson(res, { type: event.type, ...event }),
+              onEvent: (event) => {
+                if (event.type === 'tool_call_started') {
+                  toolCallsAttempted += 1;
+                  queryCount += 1;
+                } else if (event.type === 'tool_call_result') {
+                  toolCallsSucceeded += 1;
+                  sourceCount += event.sourceCount;
+                } else if (event.type === 'tool_call_failed') {
+                  toolFailureReason = event.reason;
+                }
+                writeNdjson(res, { type: event.type, ...event });
+              },
             });
             normalizedSources = normalizeStreamingSources(orchestration.allSources);
-            webSearchMetadata.queryCount = orchestration.queryCount;
-            webSearchMetadata.sourceCount = orchestration.sourceCount;
             toolCallsAttempted = orchestration.toolCallsAttempted;
             toolCallsSucceeded = orchestration.toolCallsSucceeded;
+            queryCount = orchestration.queryCount;
+            sourceCount = orchestration.sourceCount;
             toolFailureReason = orchestration.toolFailureReason;
+            webSearchMetadata.queryCount = queryCount;
+            webSearchMetadata.sourceCount = sourceCount;
             preparedInputText = orchestration.consumedInputText;
           } catch (error) {
             const reason = error instanceof Error ? error.message : 'Web search tool orchestration failed.';
@@ -2820,19 +2835,21 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           web_search_enabled: normalizedWebSearchConfig.enabled ? 1 : 0,
           tool_calls_attempted: toolCallsAttempted,
           tool_calls_succeeded: toolCallsSucceeded,
-          search_query_count: webSearchMetadata.queryCount,
-          source_count: webSearchMetadata.sourceCount,
+          search_query_count: queryCount,
+          source_count: sourceCount,
           tool_failure_reason: toolFailureReason,
           citation_events_json: citationResult.citationEvents.length > 0 ? JSON.stringify(citationResult.citationEvents) : null,
         });
+        webSearchMetadata.queryCount = queryCount;
+        webSearchMetadata.sourceCount = sourceCount;
         writeNdjson(res, { type: 'done', ...result, outputText, web_search: webSearchMetadata });
         emitStructuredLog('agent.generate.completed', {
           correlation_id: actionCorrelationId,
           action: 'generate',
           turn_latency_ms: Date.now() - startedAt,
           stream_status: 'done',
-          search_query_count: webSearchMetadata.queryCount,
-          source_count: webSearchMetadata.sourceCount,
+          search_query_count: queryCount,
+          source_count: sourceCount,
         });
         res.end();
       } catch (error) {
@@ -2863,11 +2880,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           search_warning: 0,
           search_warning_message: null,
           web_search_enabled: settings.generation_params?.web_search?.enabled ? 1 : 0,
-          tool_calls_attempted: 0,
-          tool_calls_succeeded: 0,
-          search_query_count: 0,
-          source_count: 0,
-          tool_failure_reason: errorMessage.slice(0, 180),
+          tool_calls_attempted: toolCallsAttempted,
+          tool_calls_succeeded: toolCallsSucceeded,
+          search_query_count: queryCount,
+          source_count: sourceCount,
+          tool_failure_reason: toolFailureReason ?? errorMessage.slice(0, 180),
           citation_events_json: null,
         });
         if (res.headersSent) {
