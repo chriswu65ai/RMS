@@ -76,7 +76,8 @@ const CHAT_PROFILE_SOURCE_OPTIONS: Array<{ value: ChatProfileSource; label: stri
 ];
 const CHAT_ACTION_MODE_OPTIONS: Array<{ value: ChatActionMode; label: string; helper: string }> = [
   { value: 'assist', label: 'Assist (recommend only)', helper: 'Draft and explain actions without autonomously executing risky changes.' },
-  { value: 'act', label: 'Act (take action)', helper: 'Proceed with tool actions when enough context is available.' },
+  { value: 'confirm_required', label: 'Confirm required', helper: 'Plan actions and ask for explicit confirmation before execution.' },
+  { value: 'manual_only', label: 'Manual only', helper: 'Disable autonomous tool execution and stay conversational.' },
 ];
 const CHAT_COMMAND_NAMES: ChatCommandName[] = ['task', 'note', 'confirm', 'cancel', 'help'];
 const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
@@ -294,7 +295,11 @@ export function AgentPage() {
         setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
         setPreferredSources(sources);
         const chatPolicy = chatSettings.policy ?? {};
-        setChatActionMode(chatPolicy.action_mode === 'act' ? 'act' : 'assist');
+        setChatActionMode(
+          chatPolicy.action_mode === 'confirm_required' || chatPolicy.action_mode === 'manual_only'
+            ? chatPolicy.action_mode
+            : (chatPolicy.action_mode === 'act' ? 'confirm_required' : 'assist'),
+        );
         setChatAskWhenMissing(chatPolicy.ask_when_missing ?? true);
         setChatAnnounceActions(chatPolicy.announce_actions ?? true);
         setChatShowDetailedToolSteps(chatPolicy.detailed_tool_steps ?? false);
