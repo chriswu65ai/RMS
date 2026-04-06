@@ -147,6 +147,65 @@ const parseToolArguments = (value: unknown): Record<string, unknown> => {
   return {};
 };
 
+const extractWebSearchQuery = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const directQuery = typeof record.query === 'string' ? record.query.trim() : '';
+  if (directQuery) return directQuery;
+  const nestedArgs = record.arguments;
+  if (!nestedArgs || typeof nestedArgs !== 'object' || Array.isArray(nestedArgs)) return null;
+  const nestedQueryValue = (nestedArgs as Record<string, unknown>).query;
+  const nestedQuery = typeof nestedQueryValue === 'string'
+    ? nestedQueryValue.trim()
+    : '';
+  return nestedQuery || null;
+};
+
+const parseJsonObjectFromText = (outputText: string): Record<string, unknown> | null => {
+  const direct = outputText.trim();
+  if (!direct) return null;
+  try {
+    const parsed = JSON.parse(direct) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // fall back to fenced JSON extraction
+  }
+  const fencedMatch = direct.match(/```(?:json)?\s*([\s\S]+?)\s*```/i);
+  if (!fencedMatch?.[1]) return null;
+  try {
+    const parsed = JSON.parse(fencedMatch[1]) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const coerceTextToWebSearchToolCall = (outputText: string): { name: 'web_search'; arguments: { query: string } } | null => {
+  const normalized = outputText.trim();
+  if (!normalized) return null;
+  if (/<tool_code|<\/?tool_call|<\/?function/i.test(normalized)) return null;
+  const payload = parseJsonObjectFromText(normalized);
+  if (!payload) return null;
+
+  const toolCalls = payload.tool_calls;
+  if (Array.isArray(toolCalls)) {
+    if (toolCalls.length !== 1) return null;
+    const singleToolCall = toolCalls[0];
+    if (!singleToolCall || typeof singleToolCall !== 'object' || Array.isArray(singleToolCall)) return null;
+    const functionPayload = (singleToolCall as Record<string, unknown>).function;
+    if (!functionPayload || typeof functionPayload !== 'object' || Array.isArray(functionPayload)) return null;
+    const functionRecord = functionPayload as Record<string, unknown>;
+    if (String(functionRecord.name ?? '').trim() !== 'web_search') return null;
+    const query = extractWebSearchQuery(functionRecord);
+    return query ? { name: 'web_search', arguments: { query } } : null;
+  }
+
+  if (String(payload.name ?? '').trim() !== 'web_search') return null;
+  const query = extractWebSearchQuery(payload);
+  return query ? { name: 'web_search', arguments: { query } } : null;
+};
+
 const toolResponseUsage = (usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }) => ({
   inputTokens: usage?.prompt_tokens,
   outputTokens: usage?.completion_tokens,
@@ -476,6 +535,15 @@ class MinimaxAdapter implements ProviderAdapter {
 
     const firstAttempt = await this.callToolChat(baseRequestBody, apiKey, signal);
     if (firstAttempt.toolCalls.some((call) => call.name === 'web_search')) return firstAttempt;
+    if (firstAttempt.toolCalls.length === 0) {
+      const syntheticCall = coerceTextToWebSearchToolCall(firstAttempt.outputText);
+      if (syntheticCall) {
+        return {
+          ...firstAttempt,
+          toolCalls: [{ id: 'minimax-tool-coerced-1', ...syntheticCall }],
+        };
+      }
+    }
 
     return this.callToolChat({
       ...baseRequestBody,
