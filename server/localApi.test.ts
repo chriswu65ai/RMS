@@ -1686,6 +1686,69 @@ test('agent generate emits stream sources before done and warning frames on sear
   }
 });
 
+test('agent generate failed runs retain attempted tool counts after tool phase starts', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          fail_open_on_tool_error: false,
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+        },
+      },
+    });
+
+    searchProviderRegistry.duckduckgo.search = async () => {
+      throw new Error('simulated hard failure');
+    };
+    const failedResponse = await withOpenAiToolCalls(['hello'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'hello',
+    }));
+    assert.equal(failedResponse.status, 200);
+    const failedFrames = failedResponse.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
+      reason?: string;
+      message?: string;
+      aborted?: boolean;
+    });
+    assert.equal(failedFrames.some((frame) => frame.type === 'tool_call_started'), true);
+    assert.equal(failedFrames.some((frame) => frame.type === 'tool_call_failed' && frame.reason === 'simulated hard failure'), true);
+    assert.equal(failedFrames.some((frame) => frame.type === 'error' && frame.message === 'simulated hard failure' && frame.aborted === false), true);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=5');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{
+      status: string;
+      tool_calls_attempted: number;
+      tool_calls_succeeded: number;
+      search_query_count: number;
+      source_count: number;
+      tool_failure_reason: string | null;
+    }>;
+    const failedEntry = activity.find((entry) => entry.status === 'failed' && entry.tool_failure_reason === 'simulated hard failure');
+    assert.equal((failedEntry?.tool_calls_attempted ?? 0) > 0, true);
+    assert.equal((failedEntry?.search_query_count ?? 0) > 0, true);
+    assert.equal(failedEntry?.tool_calls_succeeded ?? 0, 0);
+    assert.equal(failedEntry?.source_count ?? 0, 0);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('agent generate handles citation on/off output policy while keeping metadata and logging citation events', async () => {
   const originalSearch = searchProviderRegistry.duckduckgo.search;
   const originalGenerate = providerRegistry.openai.generate;
