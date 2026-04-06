@@ -21,10 +21,27 @@ type ApiResult = { error: ApiError | null };
 type SystemLogEntry = {
   timestamp: string;
   level: string;
-  area: string;
+  area?: string;
   message: string;
   details?: unknown;
   request_id?: string;
+};
+type SystemLogQuery = {
+  level?: string;
+  from?: string;
+  to?: string;
+  q?: string;
+  limit?: number;
+  cursor?: string | null;
+};
+type SystemLogListResponse = {
+  entries: SystemLogEntry[];
+  page?: {
+    limit: number;
+    returned: number;
+    has_more: boolean;
+    next_cursor: string | null;
+  };
 };
 
 type TaskApiRow = Omit<NewResearchTask, 'archived'> & { archived: boolean | number | string };
@@ -64,6 +81,7 @@ export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTas
   return {
     ...values,
     ...normalized,
+    note_type: values.note_type.trim(),
     status,
     priority,
   };
@@ -300,11 +318,21 @@ export async function runAttachmentCleanupNow(): Promise<{ removed_files: number
   return readJson<{ removed_files: number; purged_attachments: number }>(response);
 }
 
-export async function listSystemLog(limit = 200): Promise<SystemLogEntry[]> {
-  const response = await fetch(`/api/system-log?limit=${encodeURIComponent(String(limit))}`);
+export async function listSystemLog(query: SystemLogQuery = {}): Promise<SystemLogListResponse> {
+  const params = new URLSearchParams();
+  if (query.level) params.set('level', query.level);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  if (query.q) params.set('q', query.q);
+  if (query.cursor) params.set('cursor', query.cursor);
+  params.set('limit', String(query.limit ?? 50));
+  const response = await fetch(`/api/system-log?${params.toString()}`);
   if (!response.ok) throw new Error(await response.text());
-  const payload = await readJson<{ entries: SystemLogEntry[] }>(response);
-  return Array.isArray(payload.entries) ? payload.entries : [];
+  const payload = await readJson<SystemLogListResponse>(response);
+  return {
+    entries: Array.isArray(payload.entries) ? payload.entries : [],
+    page: payload.page,
+  };
 }
 
 export async function clearSystemLog(): Promise<ApiResult> {

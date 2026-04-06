@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { providerRegistry } from './agentProviders.js';
 import { searchProviderRegistry, searchUtils } from './searchProviders.js';
+import { appendSystemLog, clearSystemLogs, logFatalProcessEvent, querySystemLogs } from './systemLog.js';
 
 type RouteHandler = (req: Readable & { method?: string; url?: string; on: (event: string, cb: () => void) => void }, res: MockResponse) => Promise<boolean>;
 
@@ -179,10 +180,38 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
 });
 
 test('system log GET returns entries array and DELETE clears entries', async () => {
+  clearSystemLogs();
+  appendSystemLog({ level: 'info', area: 'api', message: 'startup complete' });
+  appendSystemLog({ level: 'error', area: 'api', message: 'request failed: token=abc123' });
+  appendSystemLog({ level: 'fatal', area: 'process', message: 'fatal crash' });
+
   const before = await callRoute('GET', '/api/system-log?limit=20');
   assert.equal(before.status, 200);
-  const beforePayload = JSON.parse(before.body) as { entries: Array<{ timestamp: string; level: string; message: string }> };
+  const beforePayload = JSON.parse(before.body) as {
+    entries: Array<{ timestamp: string; level: string; message: string }>;
+    page: { has_more: boolean; next_cursor: string | null };
+  };
   assert.equal(Array.isArray(beforePayload.entries), true);
+  assert.equal(typeof beforePayload.page?.has_more, 'boolean');
+  assert.equal(beforePayload.entries[0]?.message.includes('abc123'), false);
+
+  const filtered = await callRoute('GET', '/api/system-log?level=error&q=request&limit=1');
+  assert.equal(filtered.status, 200);
+  const filteredPayload = JSON.parse(filtered.body) as {
+    entries: Array<{ level: string; message: string }>;
+    page: { next_cursor: string | null; has_more: boolean };
+  };
+  assert.equal(filteredPayload.entries.length, 1);
+  assert.equal(filteredPayload.entries[0]?.level, 'error');
+  assert.equal(filteredPayload.page.has_more, false);
+
+  const pagedA = await callRoute('GET', '/api/system-log?limit=2');
+  const pagedAPayload = JSON.parse(pagedA.body) as { entries: Array<{ timestamp: string }>; page: { next_cursor: string | null } };
+  assert.equal(pagedAPayload.entries.length, 2);
+  assert.equal(typeof pagedAPayload.page.next_cursor, 'string');
+  const pagedB = await callRoute('GET', `/api/system-log?limit=2&cursor=${encodeURIComponent(pagedAPayload.page.next_cursor ?? '')}`);
+  const pagedBPayload = JSON.parse(pagedB.body) as { entries: Array<{ timestamp: string }> };
+  assert.equal(pagedBPayload.entries.length >= 1, true);
 
   const cleared = await callRoute('DELETE', '/api/system-log');
   assert.equal(cleared.status, 200);
@@ -192,6 +221,33 @@ test('system log GET returns entries array and DELETE clears entries', async () 
   const afterPayload = JSON.parse(after.body) as { entries: Array<{ timestamp: string; level: string; message: string }> };
   assert.equal(Array.isArray(afterPayload.entries), true);
   assert.equal(afterPayload.entries.length, 0);
+});
+
+test('querySystemLogs paginates and parses invalid cursor defensively', () => {
+  clearSystemLogs();
+  appendSystemLog({ level: 'info', area: 'test', message: 'entry-1' });
+  appendSystemLog({ level: 'warn', area: 'test', message: 'entry-2' });
+  const first = querySystemLogs({ limit: 1 });
+  assert.equal(first.entries.length, 1);
+  assert.equal(typeof first.page.next_cursor, 'string');
+  const second = querySystemLogs({ limit: 1, cursor: first.page.next_cursor ?? undefined });
+  assert.equal(second.entries.length, 1);
+  const fromBadCursor = querySystemLogs({ limit: 1, cursor: 'not-valid-cursor' });
+  assert.equal(fromBadCursor.entries.length, 1);
+});
+
+test('fatal process events include runtime diagnostics and sanitized payloads', () => {
+  clearSystemLogs();
+  logFatalProcessEvent('uncaughtException', new Error('db failure token=abc123'));
+  const result = querySystemLogs({ level: 'fatal', limit: 1 });
+  assert.equal(result.entries.length, 1);
+  const details = result.entries[0]?.details as Record<string, unknown> | undefined;
+  assert.equal(typeof details?.runtime, 'string');
+  assert.equal(typeof details?.pid, 'number');
+  assert.equal(typeof details?.uptime_sec, 'number');
+  const payload = details?.payload as Record<string, unknown> | undefined;
+  assert.equal(typeof payload?.stack, 'string');
+  assert.equal(String(payload?.stack ?? '').includes('abc123'), false);
 });
 
 test('put agent settings rejects invalid URL fields with a 400 response', async () => {

@@ -25,3 +25,13 @@ test('settings app routes include nested subpages with /settings redirecting to 
   assert.equal(source.includes('<Route path="system-log" element={<SettingsSystemLogPage />} />'), true);
   assert.equal(source.includes('<Route path="*" element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />'), true);
 });
+
+test('system log settings page includes filtering, pagination, and export controls', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/settings/SettingsSystemLogPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Filter by level'), true);
+  assert.equal(source.includes('Filter by text'), true);
+  assert.equal(source.includes('From ISO time'), true);
+  assert.equal(source.includes('To ISO time'), true);
+  assert.equal(source.includes('Download'), true);
+  assert.equal(source.includes('Load older'), true);
+});
