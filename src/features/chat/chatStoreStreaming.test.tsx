@@ -125,7 +125,7 @@ test('chat store cancel marks in-flight assistant message as cancelled', async (
     await sendPromise;
     const assistant = useChatStore.getState().messages.find((entry) => entry.role === 'assistant');
     assert.equal(useChatStore.getState().running, false);
-    assert.equal(assistant?.status, 'error');
+    assert.equal(assistant?.status, 'cancelled');
     assert.equal(assistant?.errorMessage, 'Cancelled before any output.');
   } finally {
     globalThis.fetch = originalFetch;
