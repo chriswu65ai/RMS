@@ -59,3 +59,17 @@ test('normalizeChatSettingsPolicy canonicalizes legacy action mode values', () =
   assert.equal(normalized.actionMode, 'confirm_required');
   assert.equal(normalized.policy.action_mode, 'confirm_required');
 });
+
+test('resolveChatRuntimeSettings defaults to summary traces when policy/request do not opt in', () => {
+  const normalizedPolicy = normalizeChatSettingsPolicy({
+    action_mode: 'assist',
+  });
+
+  const resolved = resolveChatRuntimeSettings({
+    normalizedPolicy,
+    requestBody: {},
+    agentGenerationParams: null,
+  });
+
+  assert.equal(resolved.toolTraceVisibility, 'summary');
+});
