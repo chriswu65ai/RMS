@@ -38,6 +38,94 @@ type ThinkingStatusUi = {
   badgeClassName: string;
 };
 
+type StreamPreviewControllerOptions = {
+  throttleMs: number;
+  now?: () => number;
+  setTimer?: (callback: () => void, delayMs: number) => number;
+  clearTimer?: (timerId: number) => void;
+  onApply: (nextText: string) => void | Promise<void>;
+  onError?: (error: unknown) => void | Promise<void>;
+};
+
+type StreamPreviewController = {
+  onChunk: (nextText: string) => void;
+  complete: (finalText: string) => void;
+  cancel: () => void;
+};
+
+export const createStreamPreviewController = ({
+  throttleMs,
+  now = () => Date.now(),
+  setTimer = (callback, delayMs) => window.setTimeout(callback, delayMs),
+  clearTimer = (timerId) => window.clearTimeout(timerId),
+  onApply,
+  onError,
+}: StreamPreviewControllerOptions): StreamPreviewController => {
+  let streamBuffer = '';
+  let lastAppliedAt = 0;
+  let lastAppliedText = '';
+  let timerId: number | null = null;
+  let active = true;
+
+  const clearPendingTimer = () => {
+    if (timerId === null) return;
+    clearTimer(timerId);
+    timerId = null;
+  };
+
+  const safeApply = (nextText: string) => {
+    try {
+      void onApply(nextText);
+    } catch (error) {
+      if (onError) void onError(error);
+    }
+  };
+
+  const flush = () => {
+    if (!active) return;
+    if (!streamBuffer || streamBuffer === lastAppliedText) return;
+    const nowMs = now();
+    if (nowMs - lastAppliedAt < throttleMs) return;
+    lastAppliedAt = nowMs;
+    lastAppliedText = streamBuffer;
+    safeApply(streamBuffer);
+  };
+
+  const scheduleFlush = () => {
+    if (!active || timerId !== null) return;
+    const elapsedSinceApply = now() - lastAppliedAt;
+    const delay = Math.max(0, throttleMs - elapsedSinceApply);
+    timerId = setTimer(() => {
+      timerId = null;
+      flush();
+    }, delay);
+  };
+
+  return {
+    onChunk: (nextText: string) => {
+      if (!active) return;
+      streamBuffer = nextText;
+      flush();
+      scheduleFlush();
+    },
+    complete: (finalText: string) => {
+      if (!active) return;
+      clearPendingTimer();
+      streamBuffer = '';
+      if (finalText && finalText !== lastAppliedText) {
+        lastAppliedAt = now();
+        lastAppliedText = finalText;
+        safeApply(finalText);
+      }
+    },
+    cancel: () => {
+      active = false;
+      clearPendingTimer();
+      streamBuffer = '';
+    },
+  };
+};
+
 export const getThinkingStatusUi = (status: ThinkingStatus): ThinkingStatusUi => {
   switch (status) {
     case 'running':
@@ -185,10 +273,7 @@ export function EditorPane() {
   const originalTextByFileIdRef = useRef<Record<string, string | null>>({});
   const preGenerateVisibleTextByFileIdRef = useRef<Record<string, string | null>>({});
   const suppressOnChangeRef = useRef(0);
-  const streamBufferRef = useRef('');
-  const lastAppliedAtRef = useRef(0);
-  const lastAppliedStreamTextRef = useRef('');
-  const streamFlushTimerRef = useRef<number | null>(null);
+  const streamPreviewControllerRef = useRef<StreamPreviewController | null>(null);
   const isMountedRef = useRef(true);
   const streamFailureAlertShownByFileIdRef = useRef<Record<string, boolean>>({});
   const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
@@ -369,10 +454,8 @@ export function EditorPane() {
 
   useEffect(() => () => {
     isMountedRef.current = false;
-    if (streamFlushTimerRef.current !== null) {
-      window.clearTimeout(streamFlushTimerRef.current);
-      streamFlushTimerRef.current = null;
-    }
+    streamPreviewControllerRef.current?.cancel();
+    streamPreviewControllerRef.current = null;
   }, []);
 
 
@@ -912,23 +995,12 @@ export function EditorPane() {
     setThinkingMaxAttemptsByFileId((current) => ({ ...current, [file.id]: undefined }));
     setThinkingStartedAtByFileId((current) => ({ ...current, [file.id]: Date.now() }));
     setSearchWarningMessage(null);
-    streamBufferRef.current = '';
-    lastAppliedAtRef.current = 0;
-    lastAppliedStreamTextRef.current = '';
+    streamPreviewControllerRef.current?.cancel();
+    streamPreviewControllerRef.current = null;
     streamFailureAlertShownByFileIdRef.current[targetFileId] = false;
-    if (streamFlushTimerRef.current !== null) {
-      window.clearTimeout(streamFlushTimerRef.current);
-      streamFlushTimerRef.current = null;
-    }
-
     const clearStreamRuntime = () => {
-      if (streamFlushTimerRef.current !== null) {
-        window.clearTimeout(streamFlushTimerRef.current);
-        streamFlushTimerRef.current = null;
-      }
-      streamBufferRef.current = '';
-      lastAppliedAtRef.current = 0;
-      lastAppliedStreamTextRef.current = '';
+      streamPreviewControllerRef.current?.cancel();
+      streamPreviewControllerRef.current = null;
     };
 
     const reportGeneratePhaseError = async (phase: 'stream_update' | 'finalize', error: unknown) => {
@@ -1035,25 +1107,16 @@ export function EditorPane() {
       }
     };
 
-    const flushStreamBuffer = () => {
-      const bufferedText = streamBufferRef.current;
-      if (!bufferedText || bufferedText === lastAppliedStreamTextRef.current) return;
-      const now = Date.now();
-      if (now - lastAppliedAtRef.current < STREAM_UI_THROTTLE_MS) return;
-      lastAppliedAtRef.current = now;
-      lastAppliedStreamTextRef.current = bufferedText;
-      void applyStreamingPreviewText(bufferedText);
-    };
-
-    const scheduleStreamFlush = () => {
-      if (streamFlushTimerRef.current !== null) return;
-      const elapsedSinceApply = Date.now() - lastAppliedAtRef.current;
-      const delay = Math.max(0, STREAM_UI_THROTTLE_MS - elapsedSinceApply);
-      streamFlushTimerRef.current = window.setTimeout(() => {
-        streamFlushTimerRef.current = null;
-        flushStreamBuffer();
-      }, delay);
-    };
+    const streamPreviewController = createStreamPreviewController({
+      throttleMs: STREAM_UI_THROTTLE_MS,
+      onApply: (nextOutputText) => {
+        void applyStreamingPreviewText(nextOutputText);
+      },
+      onError: (error) => {
+        void reportGeneratePhaseError('stream_update', error);
+      },
+    });
+    streamPreviewControllerRef.current = streamPreviewController;
 
     try {
       const outputText = await startGenerate(targetFileId, {
@@ -1061,9 +1124,7 @@ export function EditorPane() {
         provider: defaultProvider,
         model: defaultModel,
         onProgress: (nextOutputText) => {
-          streamBufferRef.current = nextOutputText;
-          flushStreamBuffer();
-          scheduleStreamFlush();
+          streamPreviewController.onChunk(nextOutputText);
         },
         onSources: (sources) => {
           setGeneratedSourcesByFileId((current) => ({ ...current, [targetFileId]: sources }));
@@ -1095,6 +1156,7 @@ export function EditorPane() {
           });
         },
       });
+      streamPreviewController.complete(outputText);
       clearStreamRuntime();
       await finalizeGeneratedOutput(outputText);
       const generatedDraft = getDraft(targetFileId);
@@ -1162,11 +1224,8 @@ export function EditorPane() {
   };
 
   const cancelGenerate = () => {
-    if (streamFlushTimerRef.current !== null) {
-      window.clearTimeout(streamFlushTimerRef.current);
-      streamFlushTimerRef.current = null;
-    }
-    streamBufferRef.current = '';
+    streamPreviewControllerRef.current?.cancel();
+    streamPreviewControllerRef.current = null;
     cancelGenerateByFileId(file.id);
   };
 
