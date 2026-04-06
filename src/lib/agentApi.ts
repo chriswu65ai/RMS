@@ -36,13 +36,22 @@ export type ChatSettings = {
   created_at: string;
   updated_at: string;
 };
-export type StreamSource = {
+type StreamSourceWeb = {
+  kind: 'web';
   title: string;
   url: string;
   snippet: string;
   provider: string;
   published_at?: string;
 };
+
+type StreamSourceAttachment = {
+  kind: 'attachment';
+  attachment_id: string;
+  label: string;
+};
+
+export type StreamSource = StreamSourceWeb | StreamSourceAttachment;
 
 export type ThinkingEvent =
   | {

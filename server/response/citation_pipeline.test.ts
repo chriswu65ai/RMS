@@ -7,8 +7,8 @@ test('citation mode ON normalizes citation variants and remaps numbering by firs
     outputText: 'Claim one source 2. Claim two (1) and superscript ².',
     sourceCitationEnabled: true,
     sources: [
-      { title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
-      { title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
     ],
   });
 
@@ -22,7 +22,7 @@ test('citation mode ON output includes inline [n] markers and source list for re
   const result = await processResponseCitations({
     outputText: 'Answer with cite 【1】.',
     sourceCitationEnabled: true,
-    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+    sources: [{ kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
   });
 
   assert.match(result.outputText, /Answer with cite \[1\]\./);
@@ -35,7 +35,7 @@ test('citation mode ON performs one retry then marks unsupported spans with [lac
   const result = await processResponseCitations({
     outputText: 'Unsupported cite [44].',
     sourceCitationEnabled: true,
-    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+    sources: [{ kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
     retryCanonicalize: async () => {
       retryCount += 1;
       return 'Retried answer [44].';
@@ -53,7 +53,7 @@ test('citation mode OFF excludes inline [n] and source list from output', async 
   const result = await processResponseCitations({
     outputText: 'Body text [1]\n\nSources:\n[1] [Alpha](https://example.com/a)',
     sourceCitationEnabled: false,
-    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+    sources: [{ kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
   });
 
   assert.equal(result.outputText, 'Body text');
@@ -105,8 +105,41 @@ test('citation mode ON marks unresolved non-canonical citations with [lack citat
   const result = await processResponseCitations({
     outputText: 'Unknown marker source 77.',
     sourceCitationEnabled: true,
-    sources: [{ title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
+    sources: [{ kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' }],
   });
 
   assert.match(result.normalizedText, /\[1\]\[lack citation\]/);
+});
+
+test('citation mode ON supports mixed web numeric and attachment alpha citations with appendix rendering', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Web claim [2]. Attachment evidence [attachment:doc-123].',
+    sourceCitationEnabled: true,
+    sources: [
+      { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
+      { kind: 'attachment', attachment_id: 'doc-123', label: 'filename.pdf' },
+    ],
+  });
+
+  assert.match(result.normalizedText, /Web claim \[1\]\./);
+  assert.match(result.normalizedText, /Attachment evidence \[a\]\./);
+  assert.match(result.outputText, /\[2\] \[Beta\]\(https:\/\/example\.com\/b\)/);
+  assert.match(result.outputText, /\[a\] filename\.pdf/);
+});
+
+test('citation mode ON remaps attachment letters by first appearance and marks invalid attachment tokens', async () => {
+  const result = await processResponseCitations({
+    outputText: 'Attachment two first [b]. Unknown attachment [c].',
+    sourceCitationEnabled: true,
+    sources: [
+      { kind: 'attachment', attachment_id: 'doc-1', label: 'one.pdf' },
+      { kind: 'attachment', attachment_id: 'doc-2', label: 'two.pdf' },
+    ],
+  });
+
+  assert.match(result.normalizedText, /Attachment two first \[a\]\./);
+  assert.match(result.normalizedText, /Unknown attachment \[b\]\[lack citation\]\./);
+  assert.match(result.outputText, /\[a\] one\.pdf/);
+  assert.doesNotMatch(result.outputText, /\[b\] two\.pdf/);
 });

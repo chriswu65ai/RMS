@@ -1,4 +1,4 @@
-import { generateText, type ThinkingEvent } from '../../lib/agentApi';
+import { generateText, type StreamSource, type ThinkingEvent } from '../../lib/agentApi';
 import { SaveMode, TriggerSource, type AgentProvider } from './types';
 
 export class GenerateUseCase {
@@ -9,7 +9,7 @@ export class GenerateUseCase {
     model: string;
     signal?: AbortSignal;
     onProgress?: (nextOutputText: string) => void;
-    onSources?: (sources: Array<{ title: string; url: string; snippet: string; provider: string; published_at?: string }>) => void;
+    onSources?: (sources: StreamSource[]) => void;
     onSearchWarning?: (message: string) => void;
     onThinkingEvent?: (event: ThinkingEvent) => void;
   }): Promise<{ outputText: string }> {

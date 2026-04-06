@@ -79,7 +79,7 @@ test('generateText parses sources events and forwards them to callback', async (
     JSON.stringify({ type: 'status', stage: 'started' }),
     JSON.stringify({
       type: 'sources',
-      sources: [{ title: 'Doc', url: 'https://example.com/doc', snippet: 'snippet', provider: 'duckduckgo' }],
+      sources: [{ kind: 'web', title: 'Doc', url: 'https://example.com/doc', snippet: 'snippet', provider: 'duckduckgo' }],
     }),
     JSON.stringify({ type: 'done', outputText: 'final output' }),
   ]);
@@ -93,7 +93,11 @@ test('generateText parses sources events and forwards them to callback', async (
       triggerSource: 'manual',
       saveMode: 'manual_only',
       onSources: (sources) => {
-        seenSources.push(...sources.map((source) => ({ title: source.title, url: source.url })));
+        seenSources.push(
+          ...sources
+            .filter((source): source is Extract<typeof source, { kind: 'web' }> => source.kind === 'web')
+            .map((source) => ({ title: source.title, url: source.url })),
+        );
       },
     });
 

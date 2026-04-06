@@ -1,8 +1,8 @@
-import type { SearchResult } from '../searchProviders';
+import type { GenerationSource } from './generation_sources';
 
 type CitationProcessInput = {
   outputText: string;
-  sources: SearchResult[];
+  sources: GenerationSource[];
   sourceCitationEnabled: boolean;
   retryCanonicalize?: (prompt: string) => Promise<string>;
 };
@@ -56,12 +56,33 @@ const normalizeCitationVariants = (text: string): string => {
   normalized = normalized.replace(/［\s*(\d+)\s*］/g, '[$1]');
   normalized = normalized.replace(/\((\d+)\)/g, '[$1]');
   normalized = normalized.replace(/\b(?:source|sources|ref|reference)\s*#?\s*(\d+)\b/gi, '[$1]');
+  normalized = normalized.replace(/\[(?:attachment|att):\s*([a-z0-9-]+)\s*\]/gi, '[attachment:$1]');
   normalized = normalized.replace(new RegExp(`([${SUPERSCRIPT_DIGITS}]+)`, 'g'), (match) => {
     const numeric = match.split('').map((char) => SUPERSCRIPT_DIGIT_MAP[char] ?? '').join('');
     return numeric ? `[${numeric}]` : match;
   });
   normalized = normalized.replace(/\[(\d+)\s*,\s*(\d+)\]/g, '[$1][$2]');
   return normalized;
+};
+
+const indexToAttachmentToken = (index: number): string => {
+  let value = index;
+  let out = '';
+  while (value > 0) {
+    const base = (value - 1) % 26;
+    out = String.fromCharCode(97 + base) + out;
+    value = Math.floor((value - 1) / 26);
+  }
+  return out;
+};
+
+const attachmentTokenToIndex = (token: string): number | null => {
+  if (!/^[a-z]+$/.test(token)) return null;
+  let result = 0;
+  for (const char of token) {
+    result = (result * 26) + (char.charCodeAt(0) - 96);
+  }
+  return result;
 };
 
 const collectCitationOccurrences = (text: string): Array<{ index: number; start: number; end: number }> => {
@@ -101,6 +122,43 @@ const mapCitationIndicesByAppearance = (text: string) => {
   return { mappedText, originalByMappedIndex: reverseMap };
 };
 
+const mapAttachmentCitationTokensByAppearance = (text: string) => {
+  const map = new Map<string, number>();
+  let next = 1;
+  const mappedText = text
+    .replace(/\[attachment:([a-z0-9-]+)\]/gi, (_match, attachmentId: string) => {
+      const normalizedAttachmentId = attachmentId.toLowerCase();
+      if (!map.has(normalizedAttachmentId)) {
+        map.set(normalizedAttachmentId, next);
+        next += 1;
+      }
+      const tokenIndex = map.get(normalizedAttachmentId) ?? 1;
+      return `[${indexToAttachmentToken(tokenIndex)}]`;
+    });
+
+  const originalByMappedToken = new Map<string, string>();
+  for (const [attachmentId, mappedIndex] of Array.from(map.entries())) {
+    originalByMappedToken.set(indexToAttachmentToken(mappedIndex), attachmentId);
+  }
+
+  return { mappedText, originalByMappedToken };
+};
+
+const remapAttachmentLetterTokensByAppearance = (text: string) => {
+  const appearanceMap = new Map<string, number>();
+  let next = 1;
+  const mappedText = text.replace(/\[([a-z]+)\]/g, (_match, tokenLike: string) => {
+    const normalizedToken = tokenLike.toLowerCase();
+    if (!appearanceMap.has(normalizedToken)) {
+      appearanceMap.set(normalizedToken, next);
+      next += 1;
+    }
+    const mappedIndex = appearanceMap.get(normalizedToken) ?? 1;
+    return `[${indexToAttachmentToken(mappedIndex)}]`;
+  });
+  return { mappedText };
+};
+
 const validateCitationIndices = (text: string, originalByMappedIndex: Map<number, number>, sourceCount: number) => {
   const invalidMappedIndices = new Set<number>();
   const referencedMappedIndices = new Set<number>();
@@ -119,28 +177,77 @@ const validateCitationIndices = (text: string, originalByMappedIndex: Map<number
   };
 };
 
-const appendLackCitationForUnsupportedSpans = (text: string, invalidMappedIndices: Set<number>): string => {
-  if (invalidMappedIndices.size === 0) return text;
-  return text.replace(/\[(\d+)\]/g, (match, indexLike: string) => {
+const collectAttachmentCitationOccurrences = (text: string): Array<{ token: string; start: number; end: number }> => {
+  const occurrences: Array<{ token: string; start: number; end: number }> = [];
+  const regex = /\[([a-z]+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    occurrences.push({ token: match[1] ?? '', start: match.index, end: match.index + match[0].length });
+  }
+  return occurrences;
+};
+
+const validateAttachmentCitations = (referencedTokens: Set<string>, attachmentCount: number) => {
+  const invalidTokens = new Set<string>();
+  for (const token of Array.from(referencedTokens)) {
+    const mappedIndex = attachmentTokenToIndex(token);
+    if (!mappedIndex || mappedIndex < 1 || mappedIndex > attachmentCount) {
+      invalidTokens.add(token);
+    }
+  }
+
+  return {
+    isValid: invalidTokens.size === 0,
+    invalidTokens,
+  };
+};
+
+const appendLackCitationForUnsupportedSpans = (text: string, invalidMappedIndices: Set<number>, invalidAttachmentTokens: Set<string>): string => {
+  if (invalidMappedIndices.size === 0 && invalidAttachmentTokens.size === 0) return text;
+  let rewritten = text.replace(/\[(\d+)\]/g, (match, indexLike: string) => {
     const index = Number.parseInt(indexLike, 10);
     if (invalidMappedIndices.has(index)) {
       return `${match}[lack citation]`;
     }
     return match;
   });
+  rewritten = rewritten.replace(/\[([a-z]+)\]/g, (match, tokenLike: string) => {
+    if (invalidAttachmentTokens.has(tokenLike)) {
+      return `${match}[lack citation]`;
+    }
+    return match;
+  });
+  return rewritten;
 };
 
-const buildSourceAppendix = (sources: SearchResult[], referencedOriginalIndices: Set<number>): string => {
-  if (referencedOriginalIndices.size === 0) return '';
-  const lines = Array.from(referencedOriginalIndices)
+const buildSourceAppendix = (
+  webSources: Array<Extract<GenerationSource, { kind: 'web' }>>,
+  attachmentSources: Array<Extract<GenerationSource, { kind: 'attachment' }>>,
+  referencedOriginalIndices: Set<number>,
+  referencedAttachmentTokens: Set<string>,
+): string => {
+  if (referencedOriginalIndices.size === 0 && referencedAttachmentTokens.size === 0) return '';
+
+  const webLines = Array.from(referencedOriginalIndices)
     .sort((a, b) => a - b)
     .map((originalIndex) => {
-      const source = sources[originalIndex - 1];
+      const source = webSources[originalIndex - 1];
       if (!source) return null;
       const label = source.title.trim() || source.url;
       return `[${originalIndex}] [${label}](${source.url})`;
     })
     .filter((line): line is string => Boolean(line));
+
+  const attachmentLines = Array.from(referencedAttachmentTokens)
+    .sort((a, b) => (attachmentTokenToIndex(a) ?? 0) - (attachmentTokenToIndex(b) ?? 0))
+    .map((token) => {
+      const source = attachmentSources[(attachmentTokenToIndex(token) ?? 0) - 1];
+      if (!source) return null;
+      return `[${token}] ${source.label}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const lines = [...webLines, ...attachmentLines];
   if (lines.length === 0) return '';
   return `\n\nSources\n${lines.join('\n')}`;
 };
@@ -148,6 +255,8 @@ const buildSourceAppendix = (sources: SearchResult[], referencedOriginalIndices:
 const countCitationArtifacts = (text: string): number => {
   const markerPatterns = [
     /\[\d+\]/g,
+    /\[[a-z]+\]/g,
+    /\[(?:attachment|att):\s*[a-z0-9-]+\]/gi,
     /【\s*\d+\s*】/g,
     /［\s*\d+\s*］/g,
     new RegExp(`[${SUPERSCRIPT_DIGITS}]`, 'g'),
@@ -255,6 +364,8 @@ const rewriteCitationArtifacts = (text: string): string => {
   rewritten = stripRenderedCitationSections(rewritten);
   rewritten = rewritten
     .replace(/\s*(?:\[(\d+)\]|【\s*\d+\s*】|［\s*\d+\s*］|\((\d+)\))(?=[\s.,;:!?)]|$)/g, '')
+    .replace(/\[(?:attachment|att):\s*[a-z0-9-]+\]/gi, '')
+    .replace(/\[([a-z]+)\]/g, '')
     .replace(new RegExp(`[${SUPERSCRIPT_DIGITS}]`, 'g'), '')
     .replace(/\b(?:source|sources|reference|references|ref|refs)\s*#?\s*\d+\b/gi, '')
     .replace(/(?:^|\n)\s*(?:\[(?:\d+)\]\s*)+\s*(?=\n|$)/g, '\n')
@@ -265,6 +376,7 @@ const rewriteCitationArtifacts = (text: string): string => {
   // Final safety scrub for OFF mode guarantees.
   rewritten = rewritten
     .replace(/\[(\d+)\]/g, '')
+    .replace(/\[([a-z]+)\]/g, '')
     .replace(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:Sources|References)\s*:?\s*(?:\n|$)/gi, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -274,13 +386,29 @@ const rewriteCitationArtifacts = (text: string): string => {
 
 const processCitationModeOn = async (input: CitationProcessInput): Promise<CitationProcessOutput> => {
   const citationEvents: CitationActivityEvent[] = [];
+  const webSources = input.sources.filter((source): source is Extract<GenerationSource, { kind: 'web' }> => source.kind === 'web');
+  const attachmentSources = input.sources.filter((source): source is Extract<GenerationSource, { kind: 'attachment' }> => source.kind === 'attachment');
   const processOnce = (raw: string) => {
     const stripped = stripRenderedCitationSections(raw);
     const normalized = normalizeCitationVariants(stripped);
-    const mapped = mapCitationIndicesByAppearance(normalized);
-    const validation = validateCitationIndices(mapped.mappedText, mapped.originalByMappedIndex, input.sources.length);
-    const hasAnyCitation = collectCitationOccurrences(mapped.mappedText).length > 0;
-    return { stripped, normalized, mapped, validation, hasAnyCitation };
+    const mappedWeb = mapCitationIndicesByAppearance(normalized);
+    const mappedAttachments = mapAttachmentCitationTokensByAppearance(mappedWeb.mappedText);
+    const mappedAttachmentLetters = remapAttachmentLetterTokensByAppearance(mappedAttachments.mappedText);
+    const validationWeb = validateCitationIndices(mappedAttachmentLetters.mappedText, mappedWeb.originalByMappedIndex, webSources.length);
+    const referencedAttachmentTokens = new Set(collectAttachmentCitationOccurrences(mappedAttachmentLetters.mappedText).map((item) => item.token));
+    const validationAttachments = validateAttachmentCitations(referencedAttachmentTokens, attachmentSources.length);
+    const hasAnyCitation = collectCitationOccurrences(mappedAttachments.mappedText).length > 0 || referencedAttachmentTokens.size > 0;
+    return {
+      stripped,
+      normalized,
+      mappedWeb,
+      mappedAttachments,
+      mappedAttachmentLetters,
+      validationWeb,
+      validationAttachments,
+      referencedAttachmentTokens,
+      hasAnyCitation,
+    };
   };
 
   let currentText = input.outputText;
@@ -293,35 +421,44 @@ const processCitationModeOn = async (input: CitationProcessInput): Promise<Citat
     });
   }
 
-  if ((!pass.validation.isValid || !pass.hasAnyCitation) && input.retryCanonicalize) {
+  if ((!pass.validationWeb.isValid || !pass.validationAttachments.isValid || !pass.hasAnyCitation) && input.retryCanonicalize) {
     retryUsed = true;
     citationEvents.push({ event_type: 'retry_invoked' });
     currentText = await input.retryCanonicalize([
       input.outputText,
       '',
       'Reformat citations ONLY as [n] and ensure every [n] matches an available source index from tool outputs.',
+      'Use [attachment:id] for attachment citations when available.',
       'Do not fabricate citations.',
     ].join('\n'));
     pass = processOnce(currentText);
   }
 
-  const withUnsupported = appendLackCitationForUnsupportedSpans(pass.mapped.mappedText, pass.validation.invalidMappedIndices);
-  if (pass.validation.invalidMappedIndices.size > 0) {
+  const withUnsupported = appendLackCitationForUnsupportedSpans(
+    pass.mappedAttachmentLetters.mappedText,
+    pass.validationWeb.invalidMappedIndices,
+    pass.validationAttachments.invalidTokens,
+  );
+  if (pass.validationWeb.invalidMappedIndices.size > 0 || pass.validationAttachments.invalidTokens.size > 0) {
     citationEvents.push({
       event_type: 'unsupported_span_marked_lack_citation',
-      details: { unsupported_count: pass.validation.invalidMappedIndices.size },
+      details: { unsupported_count: pass.validationWeb.invalidMappedIndices.size + pass.validationAttachments.invalidTokens.size },
     });
   }
   const withMissingCitationMarker = pass.hasAnyCitation ? withUnsupported : `${withUnsupported}[lack citation]`;
   const referencedOriginalIndices = new Set<number>();
-  for (const mappedIndex of Array.from(pass.validation.referencedMappedIndices.values())) {
-    const original = pass.mapped.originalByMappedIndex.get(mappedIndex);
-    if (typeof original === 'number' && original >= 1 && original <= input.sources.length) {
+  for (const mappedIndex of Array.from(pass.validationWeb.referencedMappedIndices.values())) {
+    const original = pass.mappedWeb.originalByMappedIndex.get(mappedIndex);
+    if (typeof original === 'number' && original >= 1 && original <= webSources.length) {
       referencedOriginalIndices.add(original);
     }
   }
 
-  const outputText = `${withMissingCitationMarker}${buildSourceAppendix(input.sources, referencedOriginalIndices)}`;
+  const referencedAttachmentTokens = new Set<string>(
+    Array.from(pass.referencedAttachmentTokens).filter((token) => !pass.validationAttachments.invalidTokens.has(token)),
+  );
+
+  const outputText = `${withMissingCitationMarker}${buildSourceAppendix(webSources, attachmentSources, referencedOriginalIndices, referencedAttachmentTokens)}`;
 
   return {
     outputText,
