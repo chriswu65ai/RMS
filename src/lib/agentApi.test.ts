@@ -261,7 +261,7 @@ test('chat settings API uses dedicated endpoints for load/save/reload', async ()
 
     await saveChatSettings({
       policy: {
-        action_mode: 'act',
+        action_mode: 'confirm_required',
         ask_when_missing: false,
         profile_source: 'file',
         profile_file_path: '/tmp/profile.md',
@@ -276,7 +276,7 @@ test('chat settings API uses dedicated endpoints for load/save/reload', async ()
     ]);
     assert.deepEqual(seen[1]?.body, {
       policy: {
-        action_mode: 'act',
+        action_mode: 'confirm_required',
         ask_when_missing: false,
         profile_source: 'file',
         profile_file_path: '/tmp/profile.md',

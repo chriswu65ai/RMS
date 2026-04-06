@@ -246,10 +246,12 @@ export const runChatToolOrchestration = async (
     sessionId: string;
     toolCall: AgentToolCall;
     explicitConfirm?: boolean;
+    askWhenInfoMissing?: boolean;
   },
 ): Promise<ChatToolOutcome> => {
   const { toolCall, sessionId } = input;
   const explicitConfirm = Boolean(input.explicitConfirm);
+  const askWhenInfoMissing = input.askWhenInfoMissing !== false;
   const args = (toolCall.arguments ?? {}) as Record<string, unknown>;
 
   if (toolCall.name === 'create_task') {
@@ -267,6 +269,14 @@ export const runChatToolOrchestration = async (
     };
     const missing = ['ticker', 'title', 'note_type'].filter((field) => !normalized[field as keyof CreateTaskArgs]);
     if (missing.length > 0) {
+      if (!askWhenInfoMissing) {
+        return {
+          status: 'rejected',
+          narration_before: 'I cannot execute create_task because required fields are missing.',
+          narration_after: `Missing required fields: ${missing.join(', ')}.`,
+          missing_fields: missing,
+        };
+      }
       await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: normalized, missing_fields: missing });
       return {
         status: 'needs_confirmation',
@@ -292,6 +302,14 @@ export const runChatToolOrchestration = async (
     const matches = findTaskMatches(tasks, taskId, taskRef);
 
     if (!taskId && !taskRef && toolCall.name !== 'generate_note') {
+      if (!askWhenInfoMissing) {
+        return {
+          status: 'rejected',
+          narration_before: `I cannot execute ${toolCall.name} because task reference is missing.`,
+          narration_after: 'Provide task_id or task_ref.',
+          missing_fields: ['task_id|task_ref'],
+        };
+      }
       await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: args, missing_fields: ['task_id|task_ref'] });
       return {
         status: 'needs_confirmation',

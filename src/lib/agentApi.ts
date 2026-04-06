@@ -13,7 +13,7 @@ import type {
 
 type ApiError = { error?: { message?: string } | null };
 export type ChatProfileSource = 'built_in' | 'file' | 'merged';
-export type ChatActionMode = 'assist' | 'act';
+export type ChatActionMode = 'assist' | 'confirm_required' | 'manual_only';
 export type ChatCommandName = 'task' | 'note' | 'confirm' | 'cancel' | 'help';
 export type ChatCommandPrefixMode = 'on' | 'off' | boolean;
 export type ChatCommandPrefixMap = Record<ChatCommandName, string>;

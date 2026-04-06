@@ -2533,6 +2533,109 @@ test('custom command prefix map is reflected in command parsing', async () => {
   }
 });
 
+test('chat runtime settings deterministically reject missing-info tool drafts when ask_when_missing is disabled', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+      web_search: {
+        enabled: true,
+        provider: 'duckduckgo',
+        mode: 'single',
+        max_results: 5,
+        timeout_ms: 5000,
+        safe_search: true,
+        recency: 'any',
+        domain_policy: 'open_web',
+        source_citation: false,
+        fail_open_on_tool_error: true,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      ask_when_missing: false,
+      command_prefix_mode: 'off',
+      detailed_tool_steps: true,
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'missing-required-1',
+      name: 'create_task',
+      arguments: { ticker: 'AAPL' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'fallback', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'create a task for apple', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; outputText?: string });
+    assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.outcome === undefined), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'rejected'), true);
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /missing required fields/i);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('chat runtime settings hide tool trace frames when detailed_tool_steps is disabled', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      ask_when_missing: true,
+      command_prefix_mode: 'off',
+      detailed_tool_steps: false,
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'trace-hidden-1',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'listed', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'list my idea tasks', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    assert.equal(frames.some((frame) => String(frame.type ?? '').startsWith('tool_')), false);
+    assert.equal(frames.some((frame) => String(frame.type ?? '').startsWith('response_generation_')), false);
+    assert.equal(frames.some((frame) => frame.type === 'done' && typeof frame.outputText === 'string'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('chat tool orchestration executes approved action and persists structured tool metadata', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

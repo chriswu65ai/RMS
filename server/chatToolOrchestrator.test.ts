@@ -290,3 +290,22 @@ test('chat tool orchestration saves missing fields for create_task and allows ex
   assert.equal(archiveSelectionConfirmed.status, 'executed');
   assert.deepEqual(calls.updateTask.at(-1), { taskId: 'task-3', patch: { archived: true } });
 });
+
+test('chat tool orchestration rejects missing required fields when askWhenInfoMissing is disabled', async () => {
+  const { adapter, calls } = makeAdapter();
+
+  const missingCreateFields = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-missing-reject',
+    toolCall: {
+      id: 'tool-missing-reject',
+      name: 'create_task',
+      arguments: { ticker: 'amzn' },
+    },
+    explicitConfirm: true,
+    askWhenInfoMissing: false,
+  });
+
+  assert.equal(missingCreateFields.status, 'rejected');
+  assert.deepEqual(missingCreateFields.missing_fields, ['title', 'note_type']);
+  assert.equal(calls.drafts.length, 0);
+});

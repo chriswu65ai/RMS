@@ -18,6 +18,14 @@ import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
 import { processResponseCitations } from './response/citation_pipeline';
 import { decideWebSearchRouting, shouldRenderCitationsForChatPrompt } from './chatRoutingHeuristics';
+import {
+  normalizeChatSettingsPolicy,
+  resolveChatRuntimeSettings,
+  type CanonicalChatActionMode,
+  type ChatCommandName,
+  type ChatCommandPrefixMap,
+  type ChatCommandPrefixMode,
+} from './chatRuntimeSettingsResolver';
 import { secretStore } from './secretStore';
 
 type WorkspaceRow = { id: string; name: string; created_at: string; updated_at: string };
@@ -237,10 +245,6 @@ type ChatSettingsRow = {
 };
 
 type ChatPurgeRange = '24h' | '7d' | 'all';
-type CanonicalChatActionMode = 'assist' | 'confirm_required' | 'manual_only';
-type ChatCommandName = 'task' | 'note' | 'confirm' | 'cancel' | 'help';
-type ChatCommandPrefixMode = 'on' | 'off';
-type ChatCommandPrefixMap = Record<ChatCommandName, string>;
 type ChatIntentRoute = 'conversation' | 'action' | 'ambiguous';
 type ChatIntentConfidence = 'low' | 'medium' | 'high';
 
@@ -400,68 +404,6 @@ const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
   confirm: '/confirm',
   cancel: '/cancel',
   help: '/help',
-};
-const LEGACY_CHAT_ACTION_MODE_MAP: Record<string, CanonicalChatActionMode> = {
-  assist: 'assist',
-  act: 'confirm_required',
-  confirm: 'confirm_required',
-  require_confirm: 'confirm_required',
-  requires_confirm: 'confirm_required',
-  confirm_required: 'confirm_required',
-  manual: 'manual_only',
-  manual_only: 'manual_only',
-};
-
-const resolveChatActionMode = (rawMode: unknown): { mode: CanonicalChatActionMode; normalizedFrom: string | null; warningCode?: 'unknown_chat_action_mode' } => {
-  if (typeof rawMode !== 'string') return { mode: DEFAULT_CHAT_ACTION_MODE, normalizedFrom: null };
-  const normalizedInput = rawMode.trim().toLowerCase();
-  const mapped = LEGACY_CHAT_ACTION_MODE_MAP[normalizedInput];
-  if (mapped) {
-    return {
-      mode: mapped,
-      normalizedFrom: normalizedInput !== mapped ? normalizedInput : null,
-    };
-  }
-  return {
-    mode: DEFAULT_CHAT_ACTION_MODE,
-    normalizedFrom: normalizedInput || null,
-    warningCode: 'unknown_chat_action_mode',
-  };
-};
-
-const normalizeChatSettingsPolicy = (
-  policy: Record<string, unknown> | null | undefined,
-): {
-  policy: Record<string, unknown>;
-  actionMode: CanonicalChatActionMode;
-  normalizedFrom: string | null;
-  commandPrefixMode: ChatCommandPrefixMode;
-  commandPrefixMap: ChatCommandPrefixMap;
-  warningCode?: 'unknown_chat_action_mode';
-} => {
-  const nextPolicy = { ...(policy ?? {}) };
-  const resolved = resolveChatActionMode(nextPolicy.action_mode);
-  nextPolicy.action_mode = resolved.mode;
-  const rawPrefixMode = nextPolicy.command_prefix_mode;
-  const normalizedPrefixMode: ChatCommandPrefixMode = rawPrefixMode === true || rawPrefixMode === 'on' ? 'on' : 'off';
-  const rawPrefixMap = asObjectRecord(nextPolicy.command_prefix_map) ?? {};
-  const normalizedPrefixMap: ChatCommandPrefixMap = {
-    task: typeof rawPrefixMap.task === 'string' && rawPrefixMap.task.trim() ? rawPrefixMap.task.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.task,
-    note: typeof rawPrefixMap.note === 'string' && rawPrefixMap.note.trim() ? rawPrefixMap.note.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.note,
-    confirm: typeof rawPrefixMap.confirm === 'string' && rawPrefixMap.confirm.trim() ? rawPrefixMap.confirm.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.confirm,
-    cancel: typeof rawPrefixMap.cancel === 'string' && rawPrefixMap.cancel.trim() ? rawPrefixMap.cancel.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.cancel,
-    help: typeof rawPrefixMap.help === 'string' && rawPrefixMap.help.trim() ? rawPrefixMap.help.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.help,
-  };
-  nextPolicy.command_prefix_mode = normalizedPrefixMode;
-  nextPolicy.command_prefix_map = normalizedPrefixMap;
-  return {
-    policy: nextPolicy,
-    actionMode: resolved.mode,
-    normalizedFrom: resolved.normalizedFrom,
-    commandPrefixMode: normalizedPrefixMode,
-    commandPrefixMap: normalizedPrefixMap,
-    warningCode: resolved.warningCode,
-  };
 };
 
 const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
@@ -1986,9 +1928,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const settingsRow = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
       const policy = coerceChatContextPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
       const normalizedPolicy = normalizeChatSettingsPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
-      const actionMode = normalizedPolicy.actionMode;
-      const commandPrefixMode = normalizedPolicy.commandPrefixMode;
-      const commandPrefixMap = normalizedPolicy.commandPrefixMap;
+      const runtimeSettings = resolveChatRuntimeSettings({
+        normalizedPolicy,
+        requestBody: payload as Record<string, unknown>,
+        agentGenerationParams: settings.generation_params as Record<string, unknown> | null | undefined,
+      });
+      const actionMode = runtimeSettings.actionMode;
+      const commandPrefixMode = runtimeSettings.commandPrefixMode;
+      const commandPrefixMap = runtimeSettings.commandPrefixMap;
       const parsedPrefixedCommand = parsePrefixedChatCommand(inputText, commandPrefixMap);
       if (normalizedPolicy.warningCode) {
         emitStructuredLog('chat.action_mode.warning', {
@@ -2028,6 +1975,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       let assistantText = '';
       let persisted = false;
       beginNdjson(res);
+      const writeRuntimeFrame = (frame: Record<string, unknown>) => {
+        const frameType = typeof frame.type === 'string' ? frame.type : '';
+        const isTraceFrame = frameType.startsWith('tool_') || frameType.startsWith('response_generation_');
+        if (runtimeSettings.toolTraceVisibility === 'summary' && isTraceFrame) return;
+        writeNdjson(res, frame);
+      };
       writeNdjson(res, {
         type: 'status',
         stage: 'started',
@@ -2039,6 +1992,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         session_id: session.id,
         provider: preferred,
         model: resolvedModel,
+        web_search_enabled: runtimeSettings.webSearchEnabled,
         tool_attempts: 0,
       });
       try {
@@ -2327,7 +2281,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               confidence: intentRouting.confidence,
             };
             streamEvents.push(routeFrame);
-            writeNdjson(res, routeFrame);
+            writeRuntimeFrame(routeFrame);
             const doneFrame = { type: 'done', outputText: clarificationText, latencyMs: Date.now() - turnStartedAt };
             streamEvents.push(doneFrame);
             writeNdjson(res, doneFrame);
@@ -2360,7 +2314,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               confidence: intentRouting.confidence,
             };
             streamEvents.push(routeFrame);
-            writeNdjson(res, routeFrame);
+            writeRuntimeFrame(routeFrame);
           }
           if (shouldRunToolPlanning) {
           try {
@@ -2370,10 +2324,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               confidence: intentRouting.confidence,
             };
             streamEvents.push(routeFrame);
-            writeNdjson(res, routeFrame);
+            writeRuntimeFrame(routeFrame);
             const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
             streamEvents.push(planningStart);
-            writeNdjson(res, planningStart);
+            writeRuntimeFrame(planningStart);
             const planning = await providerRegistry[preferred].generateToolFirstTurn({
               model: resolvedModel,
               inputText: [
@@ -2394,7 +2348,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 : 'No tool calls planned.',
             };
             streamEvents.push(planFrame);
-            writeNdjson(res, planFrame);
+            writeRuntimeFrame(planFrame);
             const supportedCall = planning.toolCalls.find((call) => isSupportedChatTool(call.name));
             if (supportedCall) {
             if (actionMode === 'confirm_required' && !explicitConfirm) {
@@ -2413,7 +2367,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 narration_after: 'Explicit confirmation is required in current mode. Reply with confirmation to execute.',
               };
               streamEvents.push(confirmFrame);
-              writeNdjson(res, confirmFrame);
+              writeRuntimeFrame(confirmFrame);
               const doneFrame = {
                 type: 'done',
                 outputText: 'I prepared the action request. Explicit confirmation is required in current mode. Reply with confirmation to execute.',
@@ -2473,12 +2427,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               arguments: supportedCall.arguments,
             };
             streamEvents.push(startFrame);
-            writeNdjson(res, startFrame);
+            writeRuntimeFrame(startFrame);
             const adapter = buildChatToolAdapter(session.id);
             const outcome = await runChatToolOrchestration(adapter, {
               sessionId: session.id,
               toolCall: supportedCall as AgentToolCall,
               explicitConfirm,
+              askWhenInfoMissing: runtimeSettings.askWhenInfoMissing,
             });
             if (outcome.status === 'executed') {
               toolCallsSucceeded = 1;
@@ -2506,7 +2461,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               result: outcome.result,
             };
             streamEvents.push(resultFrame);
-            writeNdjson(res, resultFrame);
+            writeRuntimeFrame(resultFrame);
             if (outcome.status === 'needs_confirmation' || outcome.status === 'needs_disambiguation' || outcome.status === 'rejected') {
               const toolOnlyText = buildToolFollowupText(
                 outcome.status,
@@ -2566,7 +2521,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             const planningErrorMessage = planningError instanceof Error ? planningError.message : 'Tool planning failed.';
             const errorFrame = { type: 'tool_planning_failed', message: planningErrorMessage };
             streamEvents.push(errorFrame);
-            writeNdjson(res, errorFrame);
+            writeRuntimeFrame(errorFrame);
           }
           }
         }
@@ -2577,7 +2532,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           message: 'Generating final response.',
         };
         streamEvents.push(generationStartedFrame);
-        writeNdjson(res, generationStartedFrame);
+        writeRuntimeFrame(generationStartedFrame);
         const result = await providerRegistry[preferred].generate({
           model: resolvedModel,
           inputText: generationPrompt,
@@ -2601,7 +2556,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           message: 'Final response generated.',
         };
         streamEvents.push(generationCompletedFrame);
-        writeNdjson(res, generationCompletedFrame);
+        writeRuntimeFrame(generationCompletedFrame);
         const finalOutputText = typeof result.outputText === 'string' && result.outputText.trim().length > 0
           ? result.outputText
           : assistantText;
