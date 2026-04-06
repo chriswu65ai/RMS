@@ -45,6 +45,7 @@ export function normalizeFrontmatterForApi(frontmatter: Record<string, unknown> 
 }
 
 export function normalizeTaskInput(values: NewResearchTaskInput): NewResearchTaskInput {
+  // Client-side pre-normalization only; the API remains authoritative and re-normalizes.
   const status = VALID_STATUS.has(values.status) ? values.status : TaskStatus.Ideas;
   const priority = values.priority && VALID_PRIORITY.has(values.priority) ? values.priority : '';
   const completedAt = status === TaskStatus.Completed ? values.date_completed.trim() : '';
