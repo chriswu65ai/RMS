@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runAgentToolOrchestration } from './agentToolOrchestrator.js';
-import { providerRegistry } from './agentProviders.js';
+import { providerRegistry, type AgentProvider } from './agentProviders.js';
 import { searchProviderRegistry } from './searchProviders.js';
 
 type WebSearchSettings = {
@@ -33,6 +33,15 @@ const baseSettings: WebSearchSettings = {
   domain_policy: 'prefer_list',
   source_citation: true,
 };
+
+const providerModels: Record<AgentProvider, string> = {
+  openai: 'gpt-4.1-mini',
+  anthropic: 'claude-3-7-sonnet-latest',
+  ollama: 'llama3.2:latest',
+  minimax: 'MiniMax-M2.5',
+};
+
+const protocolProviders: AgentProvider[] = ['openai', 'anthropic', 'ollama', 'minimax'];
 
 test('runAgentToolOrchestration ignores model overrides for domain policy/list and provider', async () => {
   const originalFirst = providerRegistry.openai.generateToolFirstTurn;
@@ -250,9 +259,141 @@ test('runAgentToolOrchestration fails with explicit protocol mismatch when repai
       apiKey: 'test-key',
       settings: baseSettings,
       preferredSources: [],
-    }), /Protocol mismatch: model emitted pseudo-tool content/i);
+    }), /structured web_search call not returned/i);
   } finally {
     providerRegistry.openai.generateToolFirstTurn = originalFirst;
+  }
+});
+
+test('runAgentToolOrchestration repairs provider-agnostic raw JSON text into structured web_search call', async () => {
+  const originalDdgSearch = searchProviderRegistry.duckduckgo.search;
+  searchProviderRegistry.duckduckgo.search = async () => ([{
+    title: 'Result',
+    url: 'https://trusted.example/repaired-json',
+    snippet: 'Snippet',
+    provider: 'duckduckgo',
+  }]);
+
+  const originalProviders = protocolProviders.map((provider) => ({
+    provider,
+    first: providerRegistry[provider].generateToolFirstTurn,
+    followup: providerRegistry[provider].generateToolFollowupTurn,
+  }));
+
+  try {
+    for (const provider of protocolProviders) {
+      let firstTurnCount = 0;
+      providerRegistry[provider].generateToolFirstTurn = async (request) => {
+        firstTurnCount += 1;
+        if (firstTurnCount === 1) {
+          return {
+            outputText: '{"query":"latest earnings","max_results":3,"source":"news"}',
+            latencyMs: 1,
+            toolCalls: [],
+          };
+        }
+        assert.match(request.inputText, /Protocol repair/i);
+        return {
+          outputText: '',
+          latencyMs: 1,
+          toolCalls: [{ id: `${provider}-json-repair`, name: 'web_search', arguments: { query: `${provider} repaired` } }],
+        };
+      };
+      providerRegistry[provider].generateToolFollowupTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+
+      const result = await runAgentToolOrchestration({
+        provider,
+        model: providerModels[provider],
+        inputText: `Find latest guidance (${provider})`,
+        apiKey: 'test-key',
+        settings: baseSettings,
+        preferredSources: [],
+      });
+      assert.equal(firstTurnCount, 2);
+      assert.equal(result.toolCalls[0]?.arguments.query, `${provider} repaired`);
+    }
+  } finally {
+    for (const original of originalProviders) {
+      providerRegistry[original.provider].generateToolFirstTurn = original.first;
+      providerRegistry[original.provider].generateToolFollowupTurn = original.followup;
+    }
+    searchProviderRegistry.duckduckgo.search = originalDdgSearch;
+  }
+});
+
+test('runAgentToolOrchestration returns stable protocol error for provider-agnostic pseudo-tool output', async () => {
+  const originalProviders = protocolProviders.map((provider) => ({
+    provider,
+    first: providerRegistry[provider].generateToolFirstTurn,
+  }));
+
+  try {
+    for (const provider of protocolProviders) {
+      providerRegistry[provider].generateToolFirstTurn = async () => ({
+        outputText: '<tool_code>open_page("https://example.com")</tool_code>',
+        latencyMs: 1,
+        toolCalls: [],
+      });
+      await assert.rejects(() => runAgentToolOrchestration({
+        provider,
+        model: providerModels[provider],
+        inputText: `Find latest guidance (${provider})`,
+        apiKey: 'test-key',
+        settings: baseSettings,
+        preferredSources: [],
+      }), /structured web_search call not returned/i);
+    }
+  } finally {
+    for (const original of originalProviders) {
+      providerRegistry[original.provider].generateToolFirstTurn = original.first;
+    }
+  }
+});
+
+test('runAgentToolOrchestration accepts provider-agnostic valid structured web_search calls without repair', async () => {
+  const originalDdgSearch = searchProviderRegistry.duckduckgo.search;
+  const originalProviders = protocolProviders.map((provider) => ({
+    provider,
+    first: providerRegistry[provider].generateToolFirstTurn,
+    followup: providerRegistry[provider].generateToolFollowupTurn,
+  }));
+  searchProviderRegistry.duckduckgo.search = async () => ([{
+    title: 'Result',
+    url: 'https://trusted.example/structured',
+    snippet: 'Snippet',
+    provider: 'duckduckgo',
+  }]);
+
+  try {
+    for (const provider of protocolProviders) {
+      let firstTurnCount = 0;
+      providerRegistry[provider].generateToolFirstTurn = async () => {
+        firstTurnCount += 1;
+        return {
+          outputText: '',
+          latencyMs: 1,
+          toolCalls: [{ id: `${provider}-structured`, name: 'web_search', arguments: { query: `${provider} query` } }],
+        };
+      };
+      providerRegistry[provider].generateToolFollowupTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+
+      const result = await runAgentToolOrchestration({
+        provider,
+        model: providerModels[provider],
+        inputText: `Find latest guidance (${provider})`,
+        apiKey: 'test-key',
+        settings: baseSettings,
+        preferredSources: [],
+      });
+      assert.equal(firstTurnCount, 1);
+      assert.equal(result.toolCalls[0]?.arguments.query, `${provider} query`);
+    }
+  } finally {
+    for (const original of originalProviders) {
+      providerRegistry[original.provider].generateToolFirstTurn = original.first;
+      providerRegistry[original.provider].generateToolFollowupTurn = original.followup;
+    }
+    searchProviderRegistry.duckduckgo.search = originalDdgSearch;
   }
 });
 
