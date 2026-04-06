@@ -148,6 +148,13 @@ export const shouldShowThinkingBubble = ({
   isThinkingBubbleClosed: boolean;
 }) => (thinkingStatus !== 'idle' || thinkingEventCount > 0) && !isThinkingBubbleClosed;
 
+export const formatThinkingModelBadge = (provider: string, model: string): string | null => {
+  const trimmedModel = model.trim();
+  if (!trimmedModel) return null;
+  const trimmedProvider = provider.trim();
+  return trimmedProvider ? `${trimmedProvider} · ${trimmedModel}` : trimmedModel;
+};
+
 const streamSourceKey = (source: StreamSource) => (
   source.kind === 'web' ? `web:${source.url}` : `attachment:${source.attachment_id}`
 );
@@ -513,6 +520,7 @@ export function EditorPane() {
   const thinkingStartedAt = thinkingStartedAtByFileId[file.id];
   const elapsedSeconds = thinkingStartedAt && thinkingStatus === 'running' ? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000)) : 0;
   const thinkingStatusUi = getThinkingStatusUi(thinkingStatus);
+  const thinkingModelBadgeLabel = formatThinkingModelBadge(defaultProvider, defaultModel);
   void thinkingClockTick;
   const isGenerateRunning = getGenerateJob(file.id).status === 'running';
 
@@ -1315,7 +1323,14 @@ export function EditorPane() {
             <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-semibold text-indigo-900">Thinking</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <p className="font-semibold text-indigo-900">Thinking</p>
+                    {thinkingModelBadgeLabel && (
+                      <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {thinkingModelBadgeLabel}
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${thinkingStatusUi.badgeClassName}`}>{thinkingStatusUi.label}</span>
                     <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">{thinkingPhase}</span>

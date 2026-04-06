@@ -11,6 +11,7 @@ import {
   createStreamPreviewController,
   deriveLinkLabelFromUrl,
   EDITOR_SHORTCUT_KEYS,
+  formatThinkingModelBadge,
   getTableSizeError,
   getThinkingStatusUi,
   isUrlLikeSelection,
@@ -175,6 +176,19 @@ test('thinking bubble visibility keeps failures visible but hides cancelled when
     shouldShowThinkingBubble({ thinkingStatus: 'idle', thinkingEventCount: 0, isThinkingBubbleClosed: false }),
     false,
   );
+});
+
+test('thinking model badge label includes provider and model when configured', () => {
+  assert.equal(formatThinkingModelBadge('openai', 'gpt-5.4'), 'openai · gpt-5.4');
+  assert.equal(formatThinkingModelBadge('', 'minimax-2.5'), 'minimax-2.5');
+  assert.equal(formatThinkingModelBadge('openai', '   '), null);
+});
+
+test('thinking header renders configured model badge chip next to title', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('const thinkingModelBadgeLabel = formatThinkingModelBadge(defaultProvider, defaultModel);'), true);
+  assert.equal(editorPaneSource.includes('{thinkingModelBadgeLabel && ('), true);
+  assert.equal(editorPaneSource.includes('{thinkingModelBadgeLabel}'), true);
 });
 
 type ScheduledTimer = { id: number; runAt: number; callback: () => void };
