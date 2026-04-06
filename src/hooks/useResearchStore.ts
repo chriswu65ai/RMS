@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { Folder, FrontmatterModel, ResearchNote, SettingsList, Workspace } from '../types/models';
 import { bootstrapWorkspace } from '../lib/dataApi';
 import { splitFrontmatter } from '../lib/frontmatter';
@@ -8,7 +8,13 @@ import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../fe
 import { GenerateUseCase } from '../features/agent/GenerateUseCase';
 import type { StreamSource, ThinkingEvent } from '../lib/agentApi';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
-import { sanitizePersistedGenerateJobsByFileId } from './researchStorePersistence';
+import {
+  createPersistWriteGuard,
+  PERSIST_STORAGE_KEY,
+  sanitizePersistedGenerateJobsByFileId,
+  trimPersistedDraftByFileId,
+  trimPersistedHistoryByFileId,
+} from './researchStorePersistence';
 
 const DEFAULT_SETTINGS: SettingsList = {
   noteTypes: ['Event', 'Earnings', 'Deepdive', 'Summary'],
@@ -204,6 +210,70 @@ const EMPTY_AGENT_SELECTED_MODEL_BY_PROVIDER: AgentSelectedModelByProvider = {
 const generateUseCase = new GenerateUseCase();
 const activeGenerationControllersByFileId = new Map<string, AbortController>();
 const activeGenerationCallbacksByFileId = new Map<string, ActiveGenerateStreamCallbacks>();
+const persistWriteGuard = createPersistWriteGuard();
+
+const updateUnsavedFileIdsForDraftChange = (
+  files: ResearchNote[],
+  unsavedFileIds: string[],
+  fileId: string,
+  nextDraftByFileId: Record<string, DraftEntry>,
+) => {
+  const target = files.find((file) => file.id === fileId);
+  if (!target) return unsavedFileIds;
+  const nextUnsaved = deriveUnsavedFileIds([target], target.id in nextDraftByFileId ? { [target.id]: nextDraftByFileId[target.id] } : {});
+  const hasUnsaved = nextUnsaved.includes(target.id);
+  const alreadyUnsaved = unsavedFileIds.includes(target.id);
+  if (hasUnsaved && !alreadyUnsaved) return [...unsavedFileIds, target.id];
+  if (!hasUnsaved && alreadyUnsaved) return unsavedFileIds.filter((id) => id !== target.id);
+  return unsavedFileIds;
+};
+
+const createGuardedPersistStorage = (): StateStorage => {
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearFlushTimer = () => {
+    if (!flushTimer) return;
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  };
+  const scheduleFlush = () => {
+    if (flushTimer !== null) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const pending = persistWriteGuard.consumePending();
+      if (!pending || typeof window === 'undefined') return;
+      try {
+        window.localStorage.setItem(PERSIST_STORAGE_KEY, pending);
+      } catch (error) {
+        console.warn('Persist flush failed for research state.', error);
+      }
+    }, 150);
+  };
+  return {
+    getItem: (name) => (typeof window === 'undefined' ? null : window.localStorage.getItem(name)),
+    removeItem: (name) => {
+      if (typeof window === 'undefined') return;
+      clearFlushTimer();
+      window.localStorage.removeItem(name);
+    },
+    setItem: (name, value) => {
+      if (typeof window === 'undefined') return;
+      const decision = persistWriteGuard.shouldWriteNow(value);
+      if (!decision.ok) {
+        if (decision.reason === 'size') {
+          console.warn('Skipping research store persist write because payload is too large.');
+          return;
+        }
+        scheduleFlush();
+        return;
+      }
+      try {
+        window.localStorage.setItem(name, value);
+      } catch (error) {
+        console.warn('Persist write failed for research state.', error);
+      }
+    },
+  };
+};
 
 function sanitizeSelection(files: ResearchNote[], selectedFileId: string | null) {
   if (!selectedFileId) return { selectedFileId: null, selectedTicker: null };
@@ -267,7 +337,7 @@ export const useResearchStore = create<Store>()(
         };
         return {
           draftByFileId: nextDraftByFileId,
-          unsavedFileIds: deriveUnsavedFileIds(state.files, nextDraftByFileId),
+          unsavedFileIds: updateUnsavedFileIdsForDraftChange(state.files, state.unsavedFileIds, fileId, nextDraftByFileId),
         };
       }),
       clearDraft: (fileId) => set((state) => {
@@ -277,7 +347,7 @@ export const useResearchStore = create<Store>()(
         return {
           draftByFileId: rest,
           historyByFileId: remainingHistory,
-          unsavedFileIds: deriveUnsavedFileIds(state.files, rest),
+          unsavedFileIds: updateUnsavedFileIdsForDraftChange(state.files, state.unsavedFileIds, fileId, rest),
         };
       }),
       getDraft: (fileId) => get().draftByFileId[fileId] ?? null,
@@ -315,7 +385,7 @@ export const useResearchStore = create<Store>()(
           };
           return {
             draftByFileId: nextDraftByFileId,
-            unsavedFileIds: deriveUnsavedFileIds(state.files, nextDraftByFileId),
+            unsavedFileIds: updateUnsavedFileIdsForDraftChange(state.files, state.unsavedFileIds, fileId, nextDraftByFileId),
             generateJobsByFileId: {
               ...state.generateJobsByFileId,
               [fileId]: { status: 'completed', completedAt: Date.now() },
@@ -531,7 +601,8 @@ export const useResearchStore = create<Store>()(
       },
     }),
     {
-      name: 'rms-app-state',
+      name: PERSIST_STORAGE_KEY,
+      storage: createJSONStorage(createGuardedPersistStorage),
       merge: (persistedState, currentState) => mergePersistedResearchState(persistedState, currentState as Store),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
@@ -549,8 +620,8 @@ export const useResearchStore = create<Store>()(
         metadataPanelCollapsed: state.metadataPanelCollapsed,
         editorTab: state.editorTab,
         selectedTicker: state.selectedTicker,
-        draftByFileId: state.draftByFileId,
-        historyByFileId: state.historyByFileId,
+        draftByFileId: trimPersistedDraftByFileId(state.draftByFileId),
+        historyByFileId: trimPersistedHistoryByFileId(state.historyByFileId),
         generateJobsByFileId: sanitizePersistedGenerateJobsByFileId(state.generateJobsByFileId),
         agentModelsByProvider: state.agentModelsByProvider,
         agentCatalogStatusByProvider: state.agentCatalogStatusByProvider,

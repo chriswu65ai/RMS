@@ -17,6 +17,7 @@ import { ChatPage } from './features/chat/ChatPage';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
 import { formatLocalDateTime } from './lib/time';
+import { buildGlobalSearchIndex, queryGlobalSearchIndex } from './features/search/globalSearch';
 
 const normalizeSector = (value: string) => value.trim().toLowerCase();
 const recommendationLabels: Record<Recommendation, string> = {
@@ -209,6 +210,7 @@ export function App() {
   const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult, stockFoldersCollapsed, setStockFoldersCollapsed } = useResearchStore();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -224,31 +226,16 @@ export function App() {
     if (location.pathname.startsWith('/research')) setLastView('research');
   }, [lastView, location.pathname, navigate, setLastView]);
 
+  useEffect(() => {
+    const timeoutId = setTimeout(() => setDebouncedSearch(search), 120);
+    return () => clearTimeout(timeoutId);
+  }, [search]);
+
+  const globalSearchIndex = useMemo(() => buildGlobalSearchIndex(files), [files]);
+
   const globalResults = useMemo(() => {
-    if (!search.trim()) return [];
-    const q = search.toLowerCase();
-    return files
-      .filter((file) => !file.is_template)
-      .map((file) => {
-        const parsed = splitFrontmatter(file.content).frontmatter;
-        const ticker = parsed.ticker?.toString().trim().toLowerCase() ?? '';
-        const title = parsed.title?.toString().trim().toLowerCase() ?? '';
-        const fileName = file.name.toLowerCase();
-        const content = file.content.toLowerCase();
-        let score = 0;
-        if (ticker === q) score += 150;
-        else if (ticker.includes(q)) score += 90;
-        if (title === q) score += 120;
-        else if (title.includes(q)) score += 80;
-        if (fileName.includes(q)) score += 30;
-        if (content.includes(q)) score += 10;
-        return { file, score };
-      })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
-      .map((item) => item.file);
-  }, [files, search]);
+    return queryGlobalSearchIndex(globalSearchIndex, debouncedSearch, 8);
+  }, [debouncedSearch, globalSearchIndex]);
 
   return (
     <>
