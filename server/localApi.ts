@@ -1727,6 +1727,7 @@ type PendingSlotPhase = 'required' | 'optional' | 'confirm';
 type PendingSlotState = {
   required_fields: string[];
   optional_fields: string[];
+  skipped_optional_fields: string[];
   current_field: string | null;
   collected_values: Record<string, unknown>;
   slot_phase: PendingSlotPhase;
@@ -1905,6 +1906,9 @@ const coercePendingSlotState = (draft: Record<string, unknown> | null): PendingS
   const collectedValues = draft.collected_values && typeof draft.collected_values === 'object' && !Array.isArray(draft.collected_values)
     ? { ...(draft.collected_values as Record<string, unknown>) }
     : {};
+  const skippedOptionalFields = Array.isArray(draft.skipped_optional_fields)
+    ? draft.skipped_optional_fields.filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+    : [];
   const phase = draft.slot_phase === 'required' || draft.slot_phase === 'optional' || draft.slot_phase === 'confirm'
     ? draft.slot_phase
     : 'required';
@@ -1912,6 +1916,7 @@ const coercePendingSlotState = (draft: Record<string, unknown> | null): PendingS
   return {
     required_fields: requiredFields,
     optional_fields: optionalFields,
+    skipped_optional_fields: skippedOptionalFields,
     collected_values: collectedValues,
     current_field: currentField,
     slot_phase: phase,
@@ -1923,10 +1928,12 @@ const recomputePendingSlotState = (draft: Record<string, unknown>, slotState: Pe
     ? { ...(draft.arguments as Record<string, unknown>) }
     : {};
   const collected = { ...slotState.collected_values };
+  const skippedOptional = new Set(slotState.skipped_optional_fields);
   for (const field of [...slotState.required_fields, ...slotState.optional_fields]) {
     const value = mergedArgs[field];
     if (value !== undefined && value !== null && (!(typeof value === 'string') || value.trim().length > 0)) {
       collected[field] = value;
+      skippedOptional.delete(field);
     }
   }
   const missingRequired = slotState.required_fields.filter((field) => {
@@ -1934,6 +1941,7 @@ const recomputePendingSlotState = (draft: Record<string, unknown>, slotState: Pe
     return value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
   });
   const remainingOptional = slotState.optional_fields.filter((field) => {
+    if (skippedOptional.has(field)) return false;
     const value = collected[field];
     return value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
   });
@@ -1942,6 +1950,7 @@ const recomputePendingSlotState = (draft: Record<string, unknown>, slotState: Pe
   return {
     ...slotState,
     collected_values: collected,
+    skipped_optional_fields: Array.from(skippedOptional),
     slot_phase: nextPhase,
     current_field: nextCurrent,
   };
@@ -2943,6 +2952,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               if (editCommand.value) {
                 draftArguments[editCommand.field] = editCommand.value;
                 slotState.collected_values[editCommand.field] = editCommand.value;
+                slotState.skipped_optional_fields = slotState.skipped_optional_fields.filter((field) => field !== editCommand.field);
                 changed = true;
               }
             } else if (slotState.slot_phase !== 'confirm') {
@@ -2966,6 +2976,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 }
                 delete draftArguments[currentField];
                 delete slotState.collected_values[currentField];
+                if (!slotState.skipped_optional_fields.includes(currentField)) {
+                  slotState.skipped_optional_fields.push(currentField);
+                }
                 changed = true;
               } else {
                 const targetField = labeledValue?.field && fields.has(labeledValue.field)
@@ -2977,6 +2990,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 if (targetField && value) {
                   draftArguments[targetField] = value;
                   slotState.collected_values[targetField] = value;
+                  slotState.skipped_optional_fields = slotState.skipped_optional_fields.filter((field) => field !== targetField);
                   changed = true;
                 }
               }
@@ -2984,9 +2998,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
             resolvedPendingDraft.arguments = draftArguments;
             resolvedPendingDraft.collected_values = slotState.collected_values;
+            resolvedPendingDraft.skipped_optional_fields = slotState.skipped_optional_fields;
             const recomputed = recomputePendingSlotState(resolvedPendingDraft, slotState);
             resolvedPendingDraft.current_field = recomputed.current_field;
             resolvedPendingDraft.slot_phase = recomputed.slot_phase;
+            resolvedPendingDraft.skipped_optional_fields = recomputed.skipped_optional_fields;
             resolvedPendingDraft.missing_fields = recomputed.required_fields.filter((field) => !(field in recomputed.collected_values));
             savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
             pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
