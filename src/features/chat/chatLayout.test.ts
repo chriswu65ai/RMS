@@ -20,8 +20,16 @@ test('chat page keeps jump control inside the dedicated overlay container anchor
   const source = readFileSync(path.join(process.cwd(), 'src/features/chat/ChatPage.tsx'), 'utf8');
 
   assert.match(source, /<section className="relative flex h-full min-h-0 flex-col bg-slate-50">/);
-  assert.match(source, /data-testid=\{CHAT_OVERLAY_CONTAINER_TEST_ID\}/);
-  assert.match(source, /className=\{JUMP_TO_LATEST_OVERLAY_CLASS\}/);
+  assert.equal(CHAT_OVERLAY_CONTAINER_TEST_ID, 'chat-overlay-controls');
+  assert.equal(JUMP_TO_LATEST_OVERLAY_CLASS, 'pointer-events-none absolute inset-x-0 bottom-28 z-10 flex justify-center');
+  assert.ok(
+    source.includes('data-testid={CHAT_OVERLAY_CONTAINER_TEST_ID}'),
+    'overlay container should be wired to CHAT_OVERLAY_CONTAINER_TEST_ID',
+  );
+  assert.ok(
+    source.includes('className={JUMP_TO_LATEST_OVERLAY_CLASS}'),
+    'jump overlay should be wired to JUMP_TO_LATEST_OVERLAY_CLASS',
+  );
 
   const overlayCallIndex = source.indexOf('<JumpToLatestOverlay');
   const composerContainerIndex = source.indexOf('className="sticky bottom-0 z-20"');
