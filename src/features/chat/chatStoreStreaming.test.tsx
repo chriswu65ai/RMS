@@ -141,12 +141,20 @@ test('chat store history/export/reset-context helpers call expected endpoints', 
     calls.push(`${method} ${url}`);
     if (url.includes('/api/chat/session/current/messages?')) {
       return jsonResponse({
-        messages: [{
-          id: 'message-1',
-          role: 'assistant',
-          content: 'loaded',
-          created_at: new Date().toISOString(),
-        }],
+        messages: [
+          {
+            id: 'message-1',
+            role: 'assistant',
+            content: 'loaded',
+            created_at: new Date().toISOString(),
+          },
+          {
+            id: 'message-2',
+            role: 'system',
+            content: 'Context reset successfully.',
+            created_at: new Date().toISOString(),
+          },
+        ],
       });
     }
     if (url.startsWith('/api/chat/session/current/history?range=all')) return jsonResponse({ deletedMessages: 2 });
@@ -170,6 +178,10 @@ test('chat store history/export/reset-context helpers call expected endpoints', 
 
     await useChatStore.getState().resetContext();
     assert.equal(useChatStore.getState().messages.some((message) => message.text === 'loaded'), true);
+    assert.equal(
+      useChatStore.getState().messages.some((message) => message.role === 'system' && message.text === 'Context reset successfully.'),
+      true,
+    );
 
     const exportedJson = await useChatStore.getState().exportSession('json') as { messages?: Array<{ id: string }> };
     const exportedMarkdown = await useChatStore.getState().exportSession('markdown');
