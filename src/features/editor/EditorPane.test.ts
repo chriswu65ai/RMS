@@ -17,6 +17,7 @@ import {
   getThinkingStatusUi,
   isUrlLikeSelection,
   mergeSourcesForBubble,
+  normalizeThinkingEvent,
   shouldShowThinkingBubble,
 } from './EditorPane.js';
 
@@ -202,6 +203,21 @@ test('thinking model badge label includes provider and model when configured', (
   assert.equal(formatThinkingModelBadge('openai', 'gpt-5.4'), 'openai · gpt-5.4');
   assert.equal(formatThinkingModelBadge('', 'minimax-2.5'), 'minimax-2.5');
   assert.equal(formatThinkingModelBadge('openai', '   '), null);
+});
+
+test('normalizeThinkingEvent uses reasoning summary/message when available', () => {
+  assert.equal(
+    normalizeThinkingEvent({ type: 'reasoning', summary: 'Comparing contradictory claims', raw: {} }),
+    'Comparing contradictory claims',
+  );
+  assert.equal(
+    normalizeThinkingEvent({ type: 'reasoning', message: 'Condensing sources into key bullets', raw: {} }),
+    'Condensing sources into key bullets',
+  );
+  assert.equal(
+    normalizeThinkingEvent({ type: 'reasoning', raw: {} }),
+    'Reasoning step updated',
+  );
 });
 
 test('thinking header renders configured model badge chip next to title', () => {
