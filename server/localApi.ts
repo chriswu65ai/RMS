@@ -1709,9 +1709,15 @@ type PendingConfirmRequirement = {
   examples?: string[];
 };
 
-const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
+const escapeRegexLiteral = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseConfirmCommand = (inputText: string, confirmPrefix: string): ParsedConfirmCommand => {
   const trimmed = inputText.trim();
-  const match = trimmed.match(/^\/?confirm\b(.*)$/i);
+  const normalizedConfirmPrefix = confirmPrefix.trim();
+  const prefixedPattern = new RegExp(`^${escapeRegexLiteral(normalizedConfirmPrefix)}(?:\\s+|$)(.*)$`, 'i');
+  const plainPattern = /^confirm(?:\s+|$)(.*)$/i;
+  const match = trimmed.match(prefixedPattern)
+    ?? (normalizedConfirmPrefix.toLowerCase() !== 'confirm' ? trimmed.match(plainPattern) : null);
   if (!match) {
     return {
       is_confirm_command: false,
@@ -1719,11 +1725,12 @@ const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
       malformed: false,
     };
   }
+  const usedPlainFallback = !trimmed.match(prefixedPattern);
   const remainder = (match[1] ?? '').trim();
   if (!remainder) {
     return {
       is_confirm_command: true,
-      is_plain_confirm: true,
+      is_plain_confirm: usedPlainFallback,
       malformed: false,
     };
   }
@@ -1731,7 +1738,7 @@ const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
   if (!structured) {
     return {
       is_confirm_command: true,
-      is_plain_confirm: false,
+      is_plain_confirm: usedPlainFallback,
       malformed: true,
     };
   }
@@ -1739,7 +1746,7 @@ const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
   const targetId = structured[2];
   return {
     is_confirm_command: true,
-    is_plain_confirm: false,
+    is_plain_confirm: usedPlainFallback,
     action,
     target_id: targetId,
     malformed: false,
@@ -1756,13 +1763,16 @@ const extractExplicitConfirm = (
   return parsedConfirm.is_confirm_command;
 };
 
-const coercePendingConfirmRequirement = (draft: Record<string, unknown> | null): PendingConfirmRequirement => {
+const coercePendingConfirmRequirement = (
+  draft: Record<string, unknown> | null,
+  confirmPrefix: string,
+): PendingConfirmRequirement => {
   const raw = draft?.confirm_requirement;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return {
       tier: 'B',
       plain_confirm_allowed: true,
-      examples: ['/confirm', 'confirm'],
+      examples: [confirmPrefix, 'confirm'],
     };
   }
   const record = raw as Record<string, unknown>;
@@ -1781,37 +1791,50 @@ const coercePendingConfirmRequirement = (draft: Record<string, unknown> | null):
   };
 };
 
-const buildMalformedConfirmationGuidance = (requirement: PendingConfirmRequirement): string => {
-  const firstExample = requirement.examples?.[0] ?? '/confirm';
+const buildMalformedConfirmationGuidance = (
+  requirement: PendingConfirmRequirement,
+  confirmPrefix: string,
+): string => {
+  const firstExample = requirement.examples?.[0] ?? confirmPrefix;
   if (requirement.tier === 'C') {
     return `I couldn't parse that confirmation. For this Tier C action, reply exactly with ${firstExample}.`;
   }
-  return `I couldn't parse that confirmation. Reply with /confirm or confirm to proceed.`;
+  if (requirement.plain_confirm_allowed === false) {
+    return `I couldn't parse that confirmation. Reply with ${confirmPrefix} to proceed.`;
+  }
+  return `I couldn't parse that confirmation. Reply with ${confirmPrefix} or confirm to proceed.`;
 };
 
 const validatePendingConfirmation = (
   requirement: PendingConfirmRequirement,
   parsedConfirm: ParsedConfirmCommand,
+  confirmPrefix: string,
 ): { ok: true } | { ok: false; message: string } => {
   if (parsedConfirm.malformed) {
-    return { ok: false, message: buildMalformedConfirmationGuidance(requirement) };
+    return { ok: false, message: buildMalformedConfirmationGuidance(requirement, confirmPrefix) };
   }
   if (requirement.tier === 'C') {
     const expectedAction = requirement.action;
     const expectedTargetId = requirement.target_id;
     if (!parsedConfirm.is_confirm_command || parsedConfirm.is_plain_confirm) {
-      const firstExample = requirement.examples?.[0] ?? '/confirm';
+      const firstExample = requirement.examples?.[0] ?? `${confirmPrefix} ${expectedAction ?? 'archive'} ${expectedTargetId ?? '<target-id>'}`;
       return { ok: false, message: `This action is Tier C and needs target-specific confirmation. Reply with ${firstExample}.` };
     }
     if (!expectedAction || !expectedTargetId || parsedConfirm.action !== expectedAction || parsedConfirm.target_id !== expectedTargetId) {
-      const firstExample = requirement.examples?.[0] ?? '/confirm';
+      const firstExample = requirement.examples?.[0] ?? `${confirmPrefix} ${expectedAction ?? 'archive'} ${expectedTargetId ?? '<target-id>'}`;
       return { ok: false, message: `Confirmation target mismatch. To proceed, reply with ${firstExample}.` };
     }
     return { ok: true };
   }
   if (requirement.tier === 'B') {
-    if (!parsedConfirm.is_confirm_command) {
-      return { ok: false, message: 'This action is Tier B. Reply with /confirm or confirm to continue.' };
+    const plainAllowed = requirement.plain_confirm_allowed !== false;
+    if (!parsedConfirm.is_confirm_command || (!plainAllowed && parsedConfirm.is_plain_confirm)) {
+      return {
+        ok: false,
+        message: plainAllowed
+          ? `This action is Tier B. Reply with ${confirmPrefix} or confirm to continue.`
+          : `This action is Tier B. Reply with ${confirmPrefix} to continue.`,
+      };
     }
     return { ok: true };
   }
@@ -1831,14 +1854,19 @@ const buildToolFollowupText = (
   outcome: 'needs_confirmation' | 'needs_disambiguation' | 'rejected',
   narrationBefore: string,
   narrationAfter: string,
+  confirmPrefix: string,
+  plainConfirmAllowed: boolean,
   disambiguationPrompt?: string,
 ): string => {
   const body = [narrationBefore, disambiguationPrompt, narrationAfter].filter(Boolean).join('\n\n');
   if (outcome === 'needs_confirmation') {
+    const guidance = plainConfirmAllowed
+      ? `If this looks right, reply with ${confirmPrefix} (or confirm when allowed in this mode).`
+      : `If this looks right, reply with ${confirmPrefix}.`;
     return [
       'I prepared the requested action and paused before execution.',
       body,
-      'If this looks right, reply with /confirm (or confirm when allowed in this mode).',
+      guidance,
     ].filter(Boolean).join('\n\n');
   }
   if (outcome === 'needs_disambiguation') {
@@ -2551,7 +2579,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         tool_attempts: 0,
       });
       try {
-        const parsedConfirmCommand = parseConfirmCommand(inputText);
+        const parsedConfirmCommand = parseConfirmCommand(inputText, commandPrefixMap.confirm);
         let explicitConfirm = extractExplicitConfirm(parsedConfirmCommand, payload as Record<string, unknown>);
         if (!explicitConfirm && parsedPrefixedCommand?.command === 'confirm') explicitConfirm = true;
         const normalizedInputText = parsedPrefixedCommand?.remainder || inputText;
@@ -2652,7 +2680,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           return true;
         }
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
-        const pendingRequirement = pendingToolDraft?.draft ? coercePendingConfirmRequirement(pendingToolDraft.draft) : null;
+        const pendingRequirement = pendingToolDraft?.draft
+          ? coercePendingConfirmRequirement(pendingToolDraft.draft, commandPrefixMap.confirm)
+          : null;
         if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null && pendingRequirement?.tier !== 'C') {
           explicitConfirm = true;
         }
@@ -2664,7 +2694,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let structuredToolMetadata: ChatToolMetadata | null = null;
         let generationPrompt = contextPayload.prompt;
         if (pendingToolDraft?.draft && actionMode !== 'manual_only' && explicitConfirm) {
-          const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
+          const confirmationValidation = validatePendingConfirmation(
+            pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true, examples: [commandPrefixMap.confirm, 'confirm'] },
+            parsedConfirmCommand,
+            commandPrefixMap.confirm,
+          );
           if (!confirmationValidation.ok) {
             const confirmationMessage = 'message' in confirmationValidation ? confirmationValidation.message : 'Confirmation is required before I can continue.';
             const doneFrame = {
@@ -2773,6 +2807,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 outcome.status,
                 outcome.narration_before,
                 outcome.narration_after,
+                commandPrefixMap.confirm,
+                pendingRequirement?.plain_confirm_allowed !== false,
                 outcome.disambiguation_prompt,
               );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
@@ -2919,13 +2955,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 tool_name: supportedCall.name,
                 outcome: 'needs_confirmation',
                 narration_before: 'I prepared the action request.',
-                narration_after: 'Explicit confirmation is required in current mode. Reply with confirmation to execute.',
+                narration_after: `Explicit confirmation is required in current mode. Reply with ${commandPrefixMap.confirm} to execute.`,
               };
               streamEvents.push(confirmFrame);
               writeRuntimeFrame(confirmFrame);
               const doneFrame = {
                 type: 'done',
-                outputText: 'I prepared the action request. Explicit confirmation is required in current mode. Reply with confirmation to execute.',
+                outputText: `I prepared the action request. Explicit confirmation is required in current mode. Reply with ${commandPrefixMap.confirm} to execute.`,
                 latencyMs: Date.now() - turnStartedAt,
               };
               streamEvents.push(doneFrame);
@@ -3022,6 +3058,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
                 outcome.status,
                 outcome.narration_before,
                 outcome.narration_after,
+                commandPrefixMap.confirm,
+                true,
                 outcome.disambiguation_prompt,
               );
               const doneFrame = { type: 'done', outputText: toolOnlyText, latencyMs: Date.now() - turnStartedAt };
