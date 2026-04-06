@@ -8,6 +8,7 @@ import type { AgentProvider, ModelCatalogReasonCode, ModelListItem } from '../fe
 import { GenerateUseCase } from '../features/agent/GenerateUseCase';
 import type { StreamSource, ThinkingEvent } from '../lib/agentApi';
 import { mergeMetadataListsWithDefaults, normalizeList, normalizeListWithFallback } from './metadataLists';
+import { sanitizePersistedGenerateJobsByFileId } from './researchStorePersistence';
 
 const DEFAULT_SETTINGS: SettingsList = {
   noteTypes: ['Event', 'Earnings', 'Deepdive', 'Summary'],
@@ -217,6 +218,7 @@ const mergePersistedResearchState = (persistedState: unknown, currentState: Stor
     ...merged,
     ...metadata,
     metadataPanelCollapsed: normalizeMetadataPanelCollapsed(merged.metadataPanelCollapsed),
+    generateJobsByFileId: sanitizePersistedGenerateJobsByFileId(merged.generateJobsByFileId),
   };
 };
 
@@ -549,7 +551,7 @@ export const useResearchStore = create<Store>()(
         selectedTicker: state.selectedTicker,
         draftByFileId: state.draftByFileId,
         historyByFileId: state.historyByFileId,
-        generateJobsByFileId: state.generateJobsByFileId,
+        generateJobsByFileId: sanitizePersistedGenerateJobsByFileId(state.generateJobsByFileId),
         agentModelsByProvider: state.agentModelsByProvider,
         agentCatalogStatusByProvider: state.agentCatalogStatusByProvider,
         agentSelectedModelByProvider: state.agentSelectedModelByProvider,
