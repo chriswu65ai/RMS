@@ -1805,6 +1805,56 @@ const coercePendingConfirmRequirement = (
   };
 };
 
+const recomputePendingConfirmRequirement = (
+  draft: Record<string, unknown> | null,
+  confirmPrefix: string,
+): PendingConfirmRequirement => {
+  if (!draft || typeof draft !== 'object') {
+    return {
+      tier: 'B',
+      plain_confirm_allowed: true,
+      examples: [confirmPrefix, 'confirm'],
+    };
+  }
+  const toolName = typeof draft.tool_name === 'string' ? draft.tool_name.trim() : '';
+  const args = draft.arguments && typeof draft.arguments === 'object' && !Array.isArray(draft.arguments)
+    ? draft.arguments as Record<string, unknown>
+    : {};
+
+  if (toolName === 'generate_note') {
+    const noteId = typeof args.note_id === 'string' ? args.note_id.trim() : '';
+    if (noteId) {
+      return {
+        tier: 'C',
+        action: 'overwrite',
+        target_id: noteId,
+        plain_confirm_allowed: false,
+        examples: [`${confirmPrefix} overwrite ${noteId}`],
+      };
+    }
+    return {
+      tier: 'B',
+      plain_confirm_allowed: true,
+      examples: [confirmPrefix, 'confirm'],
+    };
+  }
+
+  if (toolName === 'archive_task') {
+    const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : '';
+    if (taskId) {
+      return {
+        tier: 'C',
+        action: 'archive',
+        target_id: taskId,
+        plain_confirm_allowed: false,
+        examples: [`${confirmPrefix} archive ${taskId}`],
+      };
+    }
+  }
+
+  return coercePendingConfirmRequirement(draft, confirmPrefix);
+};
+
 const buildMalformedConfirmationGuidance = (
   requirement: PendingConfirmRequirement,
   confirmPrefix: string,
@@ -2755,8 +2805,13 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               ...resolvedPendingDraft,
               arguments: draftArguments,
             };
+            const refreshedRequirement = recomputePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
+            resolvedPendingDraft = {
+              ...resolvedPendingDraft,
+              confirm_requirement: refreshedRequirement,
+            };
             savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
-            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
+            pendingRequirement = refreshedRequirement;
             if (!explicitConfirm) {
               const selectedTicker = typeof selected.ticker === 'string' && selected.ticker.trim().length > 0 ? selected.ticker.trim() : null;
               const selectedTitle = typeof selected.title === 'string' && selected.title.trim().length > 0 ? selected.title.trim() : null;
@@ -2814,8 +2869,19 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             ...incomingToolArgs,
           };
           resolvedPendingDraft = { ...resolvedPendingDraft, arguments: mergedArguments };
+          const refreshedRequirement = recomputePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
+          resolvedPendingDraft = {
+            ...resolvedPendingDraft,
+            confirm_requirement: refreshedRequirement,
+          };
+          pendingRequirement = refreshedRequirement;
           savePendingActionDraft(session.id, pendingToolDraft?.action_key ?? 'chat_tool:pending', resolvedPendingDraft, 'pending');
-          const followupText = 'Updated the pending draft with your field corrections. Reply /confirm when ready to execute.';
+          const confirmHint = refreshedRequirement.tier === 'C'
+            ? (refreshedRequirement.examples?.[0] ?? commandPrefixMap.confirm)
+            : `${commandPrefixMap.confirm} or confirm`;
+          const followupText = refreshedRequirement.tier === 'C'
+            ? `Updated the pending draft with your field corrections. This action is Tier C, so reply exactly with ${confirmHint} when ready to execute.`
+            : `Updated the pending draft with your field corrections. Reply with ${confirmHint} when ready to execute.`;
           const doneFrame = { type: 'done', outputText: followupText, latencyMs: Date.now() - turnStartedAt };
           streamEvents.push(doneFrame);
           safeWriteNdjson(res, doneFrame);
