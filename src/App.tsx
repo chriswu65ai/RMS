@@ -17,6 +17,7 @@ import { SettingsLayout } from './features/settings/SettingsLayout';
 import { SettingsGeneralPage } from './features/settings/SettingsGeneralPage';
 import { SettingsAIPage } from './features/settings/SettingsAIPage';
 import { SettingsAttachmentsPage } from './features/settings/SettingsAttachmentsPage';
+import { SettingsSystemLogPage } from './features/settings/SettingsSystemLogPage';
 import { ExpandableSearch } from './components/shared/ExpandableSearch';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
@@ -299,6 +300,7 @@ export function App() {
               <Route path="general" element={<SettingsGeneralPage />} />
               <Route path="ai" element={<SettingsAIPage />} />
               <Route path="attachments" element={<SettingsAttachmentsPage />} />
+              <Route path="system-log" element={<SettingsSystemLogPage />} />
               <Route path="*" element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />
             </Route>
           </Routes>
