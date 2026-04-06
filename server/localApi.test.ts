@@ -1528,7 +1528,7 @@ test('agent generate returns protocol mismatch errors as failed with precise NDJ
   }
 });
 
-test('agent activity log is runtime-only and resets on restart', async () => {
+test('agent activity log writes persist to the sqlite database across API restarts', async () => {
   await callRoute('DELETE', '/api/agent/activity-log');
   const clearResponse = await callRoute('GET', '/api/agent/activity-log?limit=10');
   assert.equal(clearResponse.status, 200);
@@ -1559,10 +1559,11 @@ test('agent activity log is runtime-only and resets on restart', async () => {
 
   const afterRestart = await callRouteAfterRestart('GET', '/api/agent/activity-log?limit=10');
   assert.equal(afterRestart.status, 200);
-  assert.deepEqual(JSON.parse(afterRestart.body), []);
+  const afterRows = JSON.parse(afterRestart.body) as Array<{ status: string }>;
+  assert.equal(afterRows.some((entry) => entry.status === 'success'), true);
 });
 
-test('agent activity log clear endpoint deletes persisted rows and returns an empty follow-up list', async () => {
+test('agent activity log clear endpoint deletes persisted DB rows and follow-up reads stay empty after restart', async () => {
   await callRoute('DELETE', '/api/agent/activity-log');
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'openai',
@@ -1595,6 +1596,10 @@ test('agent activity log clear endpoint deletes persisted rows and returns an em
   const afterClear = await callRoute('GET', '/api/agent/activity-log?limit=10');
   assert.equal(afterClear.status, 200);
   assert.deepEqual(JSON.parse(afterClear.body), []);
+
+  const afterRestart = await callRouteAfterRestart('GET', '/api/agent/activity-log?limit=10');
+  assert.equal(afterRestart.status, 200);
+  assert.deepEqual(JSON.parse(afterRestart.body), []);
 });
 
 test('agent settings normalize invalid web search values to defaults', async () => {

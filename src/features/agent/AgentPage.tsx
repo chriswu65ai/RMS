@@ -90,6 +90,8 @@ const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
 };
 const SOURCE_IMPORTANCE_MIN = 1;
 const SOURCE_IMPORTANCE_MAX = 100;
+const SOURCE_IMPORTANCE_DEFAULT = 50;
+type FeedbackState = { kind: 'success' | 'error'; text: string };
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
 const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));
@@ -410,7 +412,7 @@ export function AgentPage() {
   const [preferredSources, setPreferredSources] = useState<PreferredSource[]>([]);
   const [preferredSourcesFeedback, setPreferredSourcesFeedback] = useState<FeedbackState | null>(null);
   const [newDomain, setNewDomain] = useState('');
-  const [newWeight, setNewWeight] = useState('1');
+  const [newWeight, setNewWeight] = useState(String(SOURCE_IMPORTANCE_DEFAULT));
   const [newEnabled, setNewEnabled] = useState(true);
   const [domainInputError, setDomainInputError] = useState('');
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
@@ -430,6 +432,9 @@ export function AgentPage() {
   const [chatCommandPrefixMap, setChatCommandPrefixMap] = useState<ChatCommandPrefixMap>(DEFAULT_CHAT_COMMAND_PREFIX_MAP);
   const [chatSettingsFeedback, setChatSettingsFeedback] = useState<FeedbackState | null>(null);
   const [chatSettingsValidationError, setChatSettingsValidationError] = useState('');
+  const chatSettingsMessage = chatSettingsFeedback?.text ?? '';
+  const webSearchStatusMessage = webSearchStatusFeedback?.text ?? '';
+  const preferredSourcesMessage = preferredSourcesFeedback?.text ?? '';
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
@@ -1170,7 +1175,7 @@ export function AgentPage() {
                 }
                 setDomainInputError('');
                 try {
-                  const normalizedWeight = clampSourceImportance(Number(newWeight) || 1);
+                  const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);
                   const created = await savePreferredSource({
                     domain: canonicalDomain,
                     weight: normalizedWeight,
@@ -1179,7 +1184,7 @@ export function AgentPage() {
                   setPreferredSources((current) => [...current, created]);
                   setPreferredSourcesFeedback({ kind: 'success', text: `Added ${created.domain}.` });
                   setNewDomain('');
-                  setNewWeight('1');
+                  setNewWeight(String(SOURCE_IMPORTANCE_DEFAULT));
                   setNewEnabled(true);
                 } catch (error) {
                   setPreferredSourcesFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Failed creating preferred source.' });
@@ -1210,7 +1215,7 @@ export function AgentPage() {
                     step={1}
                     value={newWeight}
                     aria-label="Source importance"
-                    style={{ accentColor: getSourceImportanceColor(Number(newWeight) || 1) }}
+                    style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <input
@@ -1225,7 +1230,7 @@ export function AgentPage() {
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <span className="min-w-[10rem] text-xs font-medium text-slate-700">
-                    {getSourceImportanceLabel(Number(newWeight) || 1)} ({clampSourceImportance(Number(newWeight) || 1)})
+                    {getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)} ({clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)})
                   </span>
                 </div>
               </label>
