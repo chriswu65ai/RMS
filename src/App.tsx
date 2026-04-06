@@ -47,8 +47,8 @@ function TopNavigation() {
         <NavLink className={navClass} to="/home">Home</NavLink>
         <NavLink className={navClass} to="/tasks.html">Tasks</NavLink>
         <NavLink className={navClass} to="/research.html">Research</NavLink>
-        <NavLink className={navClass} to="/agent">Agent</NavLink>
         <NavLink className={navClass} to="/chat">Chat</NavLink>
+        <NavLink className={navClass} to="/agent">Agent</NavLink>
         <NavLink className={navClass} to="/settings">Settings</NavLink>
       </nav>
     </div>
