@@ -431,6 +431,14 @@ test('AgentPage web search UI includes recommended action, timeout seconds label
   assert.equal(source.includes('Safe search is not supported by DuckDuckGo adapter.'), true);
 });
 
+test('AgentPage web search save is independent from provider/model draft mismatch and relies on API validation errors', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('defaultProviderMatchesDraft'), false);
+  assert.equal(source.includes('defaultModelMatchesDraft'), false);
+  assert.equal(source.includes('Select an agent before saving web search settings.'), false);
+  assert.equal(source.includes('await saveAgentSettings(buildWebSearchSettingsPayload(settings,'), true);
+});
+
 test('EditorPane thinking stream keeps a max-5 render policy and rotates queue in groups of five', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/editor/EditorPane.tsx'), 'utf-8');
   assert.equal(source.includes('const THINKING_VISIBLE_LINE_LIMIT = 5;'), true);
