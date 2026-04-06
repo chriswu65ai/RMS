@@ -17,6 +17,7 @@ import { SettingsLayout } from './features/settings/SettingsLayout';
 import { SettingsGeneralPage } from './features/settings/SettingsGeneralPage';
 import { SettingsAIPage } from './features/settings/SettingsAIPage';
 import { SettingsAttachmentsPage } from './features/settings/SettingsAttachmentsPage';
+import { ExpandableSearch } from './components/shared/ExpandableSearch';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
 import { formatLocalDateTime } from './lib/time';
@@ -44,11 +45,11 @@ const formatUpdatedDate = (value: string) => {
 
 function TopNavigation() {
   const navClass = ({ isActive }: { isActive: boolean }) =>
-    `block rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`;
+    `block shrink-0 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`;
 
   return (
-    <div className="flex items-center justify-between py-2">
-      <nav className="flex items-center gap-2">
+    <div className="max-w-full py-2">
+      <nav className="scrollbar-hidden flex max-w-full items-center gap-2 overflow-x-auto whitespace-nowrap overscroll-x-contain [scroll-behavior:smooth] [-webkit-overflow-scrolling:touch]">
         <NavLink className={navClass} to="/home">Home</NavLink>
         <NavLink className={navClass} to="/tasks.html">Tasks</NavLink>
         <NavLink className={navClass} to="/research.html">Research</NavLink>
@@ -211,7 +212,6 @@ function StockResearchPage({ openTemplatePicker, folderPanelCollapsed, setFolder
 
 export function App() {
   const { bootstrap, loading, error, search, setSearch, files, lastView, setLastView, transitionFromSearchResult, stockFoldersCollapsed, setStockFoldersCollapsed } = useResearchStore();
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [fileModal, setFileModal] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   const location = useLocation();
@@ -245,10 +245,35 @@ export function App() {
       {loading && <div className="fixed right-4 top-4 rounded bg-slate-900 px-3 py-1 text-xs text-white">Loading…</div>}
       {error && <div className="fixed left-4 top-4 rounded bg-rose-600 px-3 py-1 text-xs text-white">{error}</div>}
       <AppShell
-        mobileSidebarOpen={mobileSidebarOpen}
-        setMobileSidebarOpen={setMobileSidebarOpen}
         topNav={<TopNavigation />}
-        headerRight={<div className="relative ml-auto flex w-full max-w-xl items-center gap-2 md:w-1/3"><input className="input h-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" />{search && <span className="text-xs text-slate-500">{globalResults.length}</span>}{search.trim() && <div className="absolute left-0 right-0 top-11 z-20 max-h-80 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">{globalResults.length === 0 && <PageState kind="empty" message="No matches found" />}{globalResults.map((file) => { const parsed = splitFrontmatter(file.content); const ticker = parsed.frontmatter.ticker?.toString().toUpperCase(); return <button key={file.id} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100" onClick={() => { transitionFromSearchResult(file.id); navigate('/research.html'); }}><span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span><span className="mt-0.5 block text-xs text-slate-500">{file.path}</span></button>; })}</div>}</div>}
+        headerRight={(
+          <ExpandableSearch
+            value={search}
+            onChange={setSearch}
+            placeholder="Search"
+            ariaLabel="Search all research notes"
+            trailingContent={search ? globalResults.length : null}
+          >
+            {globalResults.length === 0 && <PageState kind="empty" message="No matches found" />}
+            {globalResults.map((file) => {
+              const parsed = splitFrontmatter(file.content);
+              const ticker = parsed.frontmatter.ticker?.toString().toUpperCase();
+              return (
+                <button
+                  key={file.id}
+                  className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100"
+                  onClick={() => {
+                    transitionFromSearchResult(file.id);
+                    navigate('/research.html');
+                  }}
+                >
+                  <span className="font-medium">{ticker ? `${ticker} · ` : ''}{parsed.frontmatter.title?.toString() || file.name}</span>
+                  <span className="mt-0.5 block text-xs text-slate-500">{file.path}</span>
+                </button>
+              );
+            })}
+          </ExpandableSearch>
+        )}
         main={(
           <Routes>
             <Route path="/" element={<Navigate to={`/${lastView}.html`} replace />} />
