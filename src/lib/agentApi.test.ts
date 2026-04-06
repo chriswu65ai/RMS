@@ -203,7 +203,7 @@ test('preflightGenerateIngestion posts generate preflight contract', async () =>
       saveMode: 'manual_only',
     });
     assert.equal(result.predicted_truncation, true);
-    assert.equal(seenBody?.preflight_only, true);
+    assert.equal((seenBody as PreflightBody | null)?.preflight_only, true);
   } finally {
     globalThis.fetch = originalFetch;
   }
