@@ -16,6 +16,7 @@ import { normalizeFolderPathSegments } from '../../lib/folderPathSegments';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
+import { applyTickerChangeToTask, findTickerFolderForTicker, resolveDestinationPreviewForTask, type DestinationPreview } from './destinationLogic';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
   { key: TaskStatus.Ideas, label: 'Ideas' },
@@ -44,15 +45,6 @@ const OPEN_LINKED_NOTE_ACTION_LABEL = 'Open linked note';
 const CREATE_NOTE_FROM_TASK_ACTION_LABEL = 'Create note from task';
 
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
-type DestinationPreview = {
-  destinationPath: string;
-  fallbackPath: string;
-  missingFolderName: string;
-  needsFolderCreation: boolean;
-  selectedFolder: Folder | null;
-  ticker: string;
-  tickerFolder: Folder | null;
-};
 
 const blankTask = (): NewResearchTaskInput => ({
   title: '', details: '', ticker: '', note_type: '', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
@@ -102,15 +94,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     () => [...visibleTasks].sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]),
     [visibleTasks],
   );
-  const findTickerFolder = (ticker: string, availableFolders: Folder[]) => {
-    const normalizedTicker = ticker.trim().toUpperCase();
-    if (!normalizedTicker) return null;
-    return availableFolders.find((folder) => {
-      const name = folder.name.trim().toUpperCase();
-      const path = folder.path.trim().toUpperCase();
-      return name === normalizedTicker || path === normalizedTicker || path.endsWith(`/${normalizedTicker}`);
-    }) ?? null;
-  };
+  const findTickerFolder = (ticker: string, availableFolders: Folder[]) => findTickerFolderForTicker(ticker, availableFolders);
   const matchingTemplateForType = (typeValue: string) => {
     const target = typeValue.trim().toLowerCase();
     if (!target) return null;
@@ -121,33 +105,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     }) ?? null;
   };
 
-  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask): DestinationPreview => {
-    const ticker = task.ticker.trim().toUpperCase();
-    const researchLocationPath = (task.research_location_path ?? '').trim();
-    const selectedFolder = task.research_location_folder_id
-      ? (folders.find((folder) => folder.id === task.research_location_folder_id) ?? null)
-      : (researchLocationPath ? (folders.find((folder) => folder.path === researchLocationPath) ?? null) : null);
-    const tickerFolder = findTickerFolder(ticker, folders);
-    const fallbackPath = ticker || 'Root';
-
-    const explicitPath = researchLocationPath;
-    const explicitFolderMissing = Boolean(explicitPath && !selectedFolder);
-
-    const destinationPath = selectedFolder?.path
-      ?? (explicitFolderMissing ? explicitPath : (tickerFolder?.path ?? fallbackPath));
-    const needsFolderCreation = explicitFolderMissing || Boolean(!selectedFolder && ticker && !tickerFolder);
-    const missingFolderName = explicitFolderMissing ? explicitPath : (ticker || '');
-
-    return {
-      fallbackPath,
-      destinationPath,
-      needsFolderCreation,
-      missingFolderName,
-      ticker,
-      selectedFolder,
-      tickerFolder,
-    };
-  };
+  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask): DestinationPreview => resolveDestinationPreviewForTask(task, folders);
 
   const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
     const parts = normalizeFolderPathSegments(path);
@@ -543,23 +501,17 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
               <label className="text-sm md:col-span-2">Title<input ref={initialFocusRef} className="input mt-1" value={modalState.task.title} onChange={(e) => setModalState((prev) => prev ? { ...prev, task: { ...prev.task, title: e.target.value } } : prev)} /></label>
               <label className="text-sm">Ticker *<input className="input mt-1" required value={modalState.task.ticker} onChange={(e) => setModalState((prev) => {
                 if (!prev) return prev;
-                const ticker = e.target.value.toUpperCase();
-                const matchedFolder = findTickerFolder(ticker, folders);
                 return {
                   ...prev,
-                  task: {
-                    ...prev.task,
-                    ticker,
-                    research_location_folder_id: matchedFolder?.id ?? prev.task.research_location_folder_id ?? '',
-                    research_location_path: matchedFolder?.path ?? prev.task.research_location_path ?? '',
-                  },
+                  task: applyTickerChangeToTask(prev.task, e.target.value, folders),
                 };
               })} />
                 {modalDestinationPreview && (
                   <p className={`mt-1 text-xs ${modalDestinationPreview.needsFolderCreation ? 'text-amber-700' : 'text-slate-500'}`}>
                     {modalDestinationPreview.needsFolderCreation
                       ? `Folder "${modalDestinationPreview.missingFolderName}" not found. A new folder will be created on note creation.`
-                      : `Ticker folder preview: ${modalDestinationPreview.fallbackPath}`}
+                      : `Destination path: ${modalDestinationPreview.destinationPath}`}
+                    {modalDestinationPreview.manualDestinationLocked ? ' Manual destination locked.' : ''}
                   </p>
                 )}
               </label>
@@ -586,6 +538,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     {modalDestinationPreview.needsFolderCreation
                       ? `Destination preview: ${modalDestinationPreview.destinationPath} (will be created).`
                       : `Destination preview: ${modalDestinationPreview.destinationPath}`}
+                    {modalDestinationPreview.manualDestinationLocked ? ' Manual destination locked.' : ''}
                   </p>
                 )}
               </label>
