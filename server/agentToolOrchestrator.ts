@@ -63,6 +63,7 @@ export type AgentToolOrchestrationResult = {
   provider: WebSearchProvider;
   citationRequired: boolean;
   consumedInputText: string;
+  toolOutputsBlock: string;
   toolCallsAttempted: number;
   toolCallsSucceeded: number;
   toolFailureReason: string | null;
@@ -373,9 +374,7 @@ export const runAgentToolOrchestration = async ({
     throw new Error('Web search enabled, but no usable sources were returned.');
   }
 
-  const consumedInputText = [
-    inputText,
-    '',
+  const toolOutputsBlock = [
     '<tool_outputs>',
     ...allSources.map((source, index) => `${index + 1}. title="${source.title}" | url=${source.url} | snippet="${source.snippet}"`),
     '</tool_outputs>',
@@ -383,6 +382,7 @@ export const runAgentToolOrchestration = async ({
       ? 'Citation mode is REQUIRED. Every factual claim from tool outputs must include [n] indices matching tool_outputs.'
       : 'Tool outputs are available for grounding. Citation brackets are optional.',
   ].join('\n');
+  const consumedInputText = [inputText, '', toolOutputsBlock].join('\n');
 
   return {
     toolCalls,
@@ -393,6 +393,7 @@ export const runAgentToolOrchestration = async ({
     provider: settings.provider,
     citationRequired: settings.source_citation,
     consumedInputText,
+    toolOutputsBlock,
     toolCallsAttempted,
     toolCallsSucceeded,
     toolFailureReason,
