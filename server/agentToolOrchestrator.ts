@@ -52,6 +52,7 @@ type ToolCallRecord = {
 
 const PSEUDO_TOOL_PATTERN = /open_page|visit|fetch_fetch|<invoke|<tool_code>/i;
 const STRUCTURED_WEB_SEARCH_ALIASES = new Set(['fetch_fetch']);
+const LIKELY_TOOL_ARG_KEYS = new Set(['query', 'max_results', 'top_n', 'source']);
 
 export type AgentToolOrchestrationResult = {
   toolCalls: ToolCallRecord[];
@@ -130,10 +131,30 @@ const normalizeToolArgs = (raw: Record<string, unknown>, settings: WebSearchSett
   };
 };
 
+const parseLikelyToolArgsObject = (outputText: string): Record<string, unknown> | null => {
+  const trimmed = outputText.trim();
+  if (!trimmed || !trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
+
+const hasLikelyToolArgsShape = (outputText: string): boolean => {
+  const parsed = parseLikelyToolArgsObject(outputText);
+  if (!parsed) return false;
+  return Object.keys(parsed).some((key) => LIKELY_TOOL_ARG_KEYS.has(key));
+};
+
 const detectProtocolMismatch = (response: { toolCalls: AgentToolCall[]; outputText: string }) => {
-  const hasStructuredWebSearch = response.toolCalls.some((call) => call.name === 'web_search');
-  if (hasStructuredWebSearch) return false;
-  return PSEUDO_TOOL_PATTERN.test(response.outputText);
+  const hasAnyToolCall = response.toolCalls.length > 0;
+  if (hasAnyToolCall) return false;
+  const outputText = response.outputText.trim();
+  if (!outputText) return false;
+  return PSEUDO_TOOL_PATTERN.test(outputText) || hasLikelyToolArgsShape(outputText);
 };
 
 const buildAliasWebSearchQuery = (rawUrl: string): string | null => {
@@ -261,7 +282,7 @@ export const runAgentToolOrchestration = async ({
     }, apiKey, signal);
     initialResponse = repairedResponse;
     if (!resolveStructuredWebSearchCall(initialResponse.toolCalls)) {
-      throw new Error('Protocol mismatch: model emitted pseudo-tool content but did not return a structured web_search function call after repair.');
+      throw new Error('Protocol mismatch: structured web_search call not returned after repair.');
     }
   }
 
