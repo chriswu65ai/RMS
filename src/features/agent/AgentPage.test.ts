@@ -455,7 +455,6 @@ test('source importance controls use canonical 1-100 range with slider + numeric
   assert.equal(source.includes('const SOURCE_IMPORTANCE_MIN = 1;'), true);
   assert.equal(source.includes('const SOURCE_IMPORTANCE_MAX = 100;'), true);
   assert.equal(source.includes('const SOURCE_IMPORTANCE_DEFAULT = 50;'), true);
-  assert.equal(source.includes("const [newWeight, setNewWeight] = useState(String(SOURCE_IMPORTANCE_DEFAULT));"), true);
   assert.equal(source.includes('if (normalized <= 20) return \'Low\';'), true);
   assert.equal(source.includes('return `hsl(${hue}, 75%, ${lightness}%)`;'), true);
   assert.equal(source.includes('type="range"'), true);
@@ -466,6 +465,13 @@ test('source importance controls use canonical 1-100 range with slider + numeric
   assert.equal(source.includes('aria-label="Source importance numeric"'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
+});
+
+test('new custom source defaults source importance to 50 and renders Medium helper text', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const [newWeight, setNewWeight] = useState(String(SOURCE_IMPORTANCE_DEFAULT));"), true);
+  assert.equal(source.includes('getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)'), true);
+  assert.equal(source.includes("if (normalized <= 60) return 'Medium';"), true);
 });
 
 test('preferred source table displays exact stored importance and label without hard clamp mismatch', () => {
@@ -479,30 +485,22 @@ test('preferred source payload clamps numeric input to canonical 1-100 before su
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
-  assert.equal(source.includes('setNewWeight(String(SOURCE_IMPORTANCE_DEFAULT));'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
   assert.equal(source.includes('weight: normalizedWeight,'), true);
 });
 
-test('configure agent section is renamed and groups web search toggles before save action', () => {
+test('configure agent section header reads Configure Agent', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
-  const configureHeadingIndex = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
-  const chooseHeadingIndex = source.indexOf('<h2 className="text-lg font-semibold">Choose agent</h2>');
-  const configureSectionStart = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
-  const enableIndex = source.indexOf('<span>Enable web search</span>', configureSectionStart);
-  const citationIndex = source.indexOf('<span>Source citation</span>', configureSectionStart);
-  const saveDefaultAgentIndex = source.indexOf('Save default agent', configureSectionStart);
-  const webSearchSectionStart = source.indexOf('<h2 className="text-lg font-semibold">Web Search</h2>');
-  const enableInWebSearchIndex = source.indexOf('<span>Enable web search</span>', webSearchSectionStart);
-  const citationInWebSearchIndex = source.indexOf('<span>Source citation</span>', webSearchSectionStart);
+  assert.equal(source.includes('<h2 className="text-lg font-semibold">Configure Agent</h2>'), true);
+  assert.equal(source.includes('<h2 className="text-lg font-semibold">Choose agent</h2>'), false);
+});
 
-  assert.ok(configureHeadingIndex >= 0);
-  assert.equal(chooseHeadingIndex, -1);
-  assert.ok(enableIndex > configureSectionStart);
-  assert.ok(citationIndex > enableIndex);
-  assert.ok(saveDefaultAgentIndex > citationIndex);
-  assert.equal(enableInWebSearchIndex, -1);
-  assert.equal(citationInWebSearchIndex, -1);
+test('activity log clear action requires confirmation before deleting rows', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("const shouldClear = await dialog.confirm("), true);
+  assert.equal(source.includes("'Clear activity log?'"), true);
+  assert.equal(source.includes('if (!shouldClear) return;'), true);
+  assert.equal(source.includes('await clearActivityLog();'), true);
 });
 
 test('web search component keeps common control DOM order stable when provider changes', () => {

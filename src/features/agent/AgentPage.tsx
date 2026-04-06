@@ -91,6 +91,7 @@ const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
 const SOURCE_IMPORTANCE_MIN = 1;
 const SOURCE_IMPORTANCE_MAX = 100;
 const SOURCE_IMPORTANCE_DEFAULT = 50;
+type FeedbackState = { kind: 'success' | 'error'; text: string };
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
 const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));
@@ -431,6 +432,9 @@ export function AgentPage() {
   const [chatCommandPrefixMap, setChatCommandPrefixMap] = useState<ChatCommandPrefixMap>(DEFAULT_CHAT_COMMAND_PREFIX_MAP);
   const [chatSettingsFeedback, setChatSettingsFeedback] = useState<FeedbackState | null>(null);
   const [chatSettingsValidationError, setChatSettingsValidationError] = useState('');
+  const chatSettingsMessage = chatSettingsFeedback?.text ?? '';
+  const webSearchStatusMessage = webSearchStatusFeedback?.text ?? '';
+  const preferredSourcesMessage = preferredSourcesFeedback?.text ?? '';
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
