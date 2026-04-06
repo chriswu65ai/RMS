@@ -1709,6 +1709,15 @@ type PendingConfirmRequirement = {
   examples?: string[];
 };
 
+type PendingSlotPhase = 'required' | 'optional' | 'confirm';
+type PendingSlotState = {
+  required_fields: string[];
+  optional_fields: string[];
+  current_field: string | null;
+  collected_values: Record<string, unknown>;
+  slot_phase: PendingSlotPhase;
+};
+
 const escapeRegexLiteral = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const parseConfirmCommand = (inputText: string, confirmPrefix: string): ParsedConfirmCommand => {
@@ -1848,6 +1857,93 @@ const parseDisambiguationChoice = (inputText: string): number | null => {
   if (!match) return null;
   const parsed = Number.parseInt(match[1] ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseFieldEditCommand = (inputText: string): { field: string; value?: string } | null => {
+  const trimmed = inputText.trim();
+  const match = trimmed.match(/^edit\s+([a-z][a-z0-9_]*)(?:\s*(?:=|to)\s*(.+))?$/i);
+  if (!match) return null;
+  const field = (match[1] ?? '').trim().toLowerCase();
+  if (!field) return null;
+  const value = typeof match[2] === 'string' ? match[2].trim() : undefined;
+  return value ? { field, value } : { field };
+};
+
+const parseLabeledFieldValue = (inputText: string): { field: string; value: string } | null => {
+  const trimmed = inputText.trim();
+  const match = trimmed.match(/^([a-z][a-z0-9_]*)\s*:\s*(.+)$/i);
+  if (!match) return null;
+  const field = (match[1] ?? '').trim().toLowerCase();
+  const value = (match[2] ?? '').trim();
+  if (!field || !value) return null;
+  return { field, value };
+};
+
+const coercePendingSlotState = (draft: Record<string, unknown> | null): PendingSlotState | null => {
+  if (!draft) return null;
+  const requiredFields = Array.isArray(draft.required_fields)
+    ? draft.required_fields.filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+    : [];
+  const optionalFields = Array.isArray(draft.optional_fields)
+    ? draft.optional_fields.filter((field): field is string => typeof field === 'string' && field.trim().length > 0)
+    : [];
+  if (requiredFields.length === 0 && optionalFields.length === 0) return null;
+  const collectedValues = draft.collected_values && typeof draft.collected_values === 'object' && !Array.isArray(draft.collected_values)
+    ? { ...(draft.collected_values as Record<string, unknown>) }
+    : {};
+  const phase = draft.slot_phase === 'required' || draft.slot_phase === 'optional' || draft.slot_phase === 'confirm'
+    ? draft.slot_phase
+    : 'required';
+  const currentField = typeof draft.current_field === 'string' && draft.current_field.trim().length > 0 ? draft.current_field.trim() : null;
+  return {
+    required_fields: requiredFields,
+    optional_fields: optionalFields,
+    collected_values: collectedValues,
+    current_field: currentField,
+    slot_phase: phase,
+  };
+};
+
+const recomputePendingSlotState = (draft: Record<string, unknown>, slotState: PendingSlotState): PendingSlotState => {
+  const mergedArgs = draft.arguments && typeof draft.arguments === 'object' && !Array.isArray(draft.arguments)
+    ? { ...(draft.arguments as Record<string, unknown>) }
+    : {};
+  const collected = { ...slotState.collected_values };
+  for (const field of [...slotState.required_fields, ...slotState.optional_fields]) {
+    const value = mergedArgs[field];
+    if (value !== undefined && value !== null && (!(typeof value === 'string') || value.trim().length > 0)) {
+      collected[field] = value;
+    }
+  }
+  const missingRequired = slotState.required_fields.filter((field) => {
+    const value = collected[field];
+    return value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
+  });
+  const remainingOptional = slotState.optional_fields.filter((field) => {
+    const value = collected[field];
+    return value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
+  });
+  const nextPhase: PendingSlotPhase = missingRequired.length > 0 ? 'required' : (remainingOptional.length > 0 ? 'optional' : 'confirm');
+  const nextCurrent = missingRequired[0] ?? remainingOptional[0] ?? null;
+  return {
+    ...slotState,
+    collected_values: collected,
+    slot_phase: nextPhase,
+    current_field: nextCurrent,
+  };
+};
+
+const buildPendingSlotSummary = (slotState: PendingSlotState): string => {
+  const lines: string[] = ['Draft summary:'];
+  for (const field of slotState.required_fields) {
+    const value = slotState.collected_values[field];
+    lines.push(`- ${field} (required): ${value === undefined || value === null || value === '' ? '[missing]' : String(value)}`);
+  }
+  for (const field of slotState.optional_fields) {
+    const value = slotState.collected_values[field];
+    lines.push(`- ${field} (optional): ${value === undefined || value === null || value === '' ? '[skipped]' : String(value)}`);
+  }
+  return lines.join('\n');
 };
 
 const buildToolFollowupText = (
@@ -2681,7 +2777,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
         let resolvedPendingDraft = pendingToolDraft?.draft ? { ...pendingToolDraft.draft } : null;
-        let pendingRequirement = resolvedPendingDraft ? coercePendingConfirmRequirement(resolvedPendingDraft) : null;
+        let pendingRequirement = resolvedPendingDraft ? coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm) : null;
         if (resolvedPendingDraft && disambiguationChoice !== null) {
           const ambiguousMatches = Array.isArray(resolvedPendingDraft.ambiguous_matches)
             ? resolvedPendingDraft.ambiguous_matches as Array<Record<string, unknown>>
@@ -2728,7 +2824,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               arguments: draftArguments,
             };
             savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
-            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft);
+            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
             if (!explicitConfirm) {
               const selectedTicker = typeof selected.ticker === 'string' && selected.ticker.trim().length > 0 ? selected.ticker.trim() : null;
               const selectedTitle = typeof selected.title === 'string' && selected.title.trim().length > 0 ? selected.title.trim() : null;
@@ -2777,6 +2873,155 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             }
           }
         }
+        if (resolvedPendingDraft && !explicitConfirm) {
+          const slotState = coercePendingSlotState(resolvedPendingDraft);
+          if (slotState) {
+            const fields = new Set([...slotState.required_fields, ...slotState.optional_fields]);
+            const editCommand = parseFieldEditCommand(normalizedInputText);
+            const labeledValue = parseLabeledFieldValue(normalizedInputText);
+            const isSkipCommand = /^skip$/i.test(normalizedInputText.trim());
+            const currentField = slotState.current_field;
+            let changed = false;
+
+            const draftArguments = resolvedPendingDraft.arguments && typeof resolvedPendingDraft.arguments === 'object' && !Array.isArray(resolvedPendingDraft.arguments)
+              ? { ...(resolvedPendingDraft.arguments as Record<string, unknown>) }
+              : {};
+
+            if (editCommand) {
+              if (!fields.has(editCommand.field)) {
+                const doneFrame = { type: 'done', outputText: `I can't edit "${editCommand.field}" for this draft.`, latencyMs: Date.now() - turnStartedAt };
+                streamEvents.push(doneFrame);
+                safeWriteNdjson(res, doneFrame);
+                persisted = true;
+                persistChatTurnAtomic({
+                  sessionId: session.id,
+                  userContent: inputText,
+                  assistantContent: doneFrame.outputText,
+                  provider: preferred,
+                  model: resolvedModel,
+                  stream: { events: streamEvents, status: 'done' },
+                  metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+                });
+                res.end();
+                return true;
+              }
+              slotState.current_field = editCommand.field;
+              slotState.slot_phase = slotState.required_fields.includes(editCommand.field) ? 'required' : 'optional';
+              if (editCommand.value) {
+                draftArguments[editCommand.field] = editCommand.value;
+                slotState.collected_values[editCommand.field] = editCommand.value;
+                changed = true;
+              }
+            } else if (slotState.slot_phase !== 'confirm') {
+              if (isSkipCommand) {
+                if (slotState.slot_phase !== 'optional' || !currentField) {
+                  const doneFrame = { type: 'done', outputText: 'You can only use "skip" during optional-field collection.', latencyMs: Date.now() - turnStartedAt };
+                  streamEvents.push(doneFrame);
+                  safeWriteNdjson(res, doneFrame);
+                  persisted = true;
+                  persistChatTurnAtomic({
+                    sessionId: session.id,
+                    userContent: inputText,
+                    assistantContent: doneFrame.outputText,
+                    provider: preferred,
+                    model: resolvedModel,
+                    stream: { events: streamEvents, status: 'done' },
+                    metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+                  });
+                  res.end();
+                  return true;
+                }
+                delete draftArguments[currentField];
+                delete slotState.collected_values[currentField];
+                changed = true;
+              } else {
+                const targetField = labeledValue?.field && fields.has(labeledValue.field)
+                  ? labeledValue.field
+                  : currentField;
+                const value = labeledValue?.field && fields.has(labeledValue.field)
+                  ? labeledValue.value
+                  : normalizedInputText.trim();
+                if (targetField && value) {
+                  draftArguments[targetField] = value;
+                  slotState.collected_values[targetField] = value;
+                  changed = true;
+                }
+              }
+            }
+
+            resolvedPendingDraft.arguments = draftArguments;
+            resolvedPendingDraft.collected_values = slotState.collected_values;
+            const recomputed = recomputePendingSlotState(resolvedPendingDraft, slotState);
+            resolvedPendingDraft.current_field = recomputed.current_field;
+            resolvedPendingDraft.slot_phase = recomputed.slot_phase;
+            resolvedPendingDraft.missing_fields = recomputed.required_fields.filter((field) => !(field in recomputed.collected_values));
+            savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
+            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
+
+            if (changed && slotState.slot_phase !== recomputed.slot_phase) {
+              const stageFrame = {
+                type: 'status',
+                stage: recomputed.slot_phase === 'optional' ? 'pending_action_optional_fields' : 'pending_action_confirmation',
+                pending_action_id: pendingToolDraft.id,
+              };
+              streamEvents.push(stageFrame);
+              writeRuntimeFrame(stageFrame);
+            }
+            if (recomputed.slot_phase === 'required' && recomputed.current_field) {
+              const stageFrame = { type: 'status', stage: 'pending_action_required_fields', pending_action_id: pendingToolDraft.id, current_field: recomputed.current_field };
+              streamEvents.push(stageFrame);
+              writeRuntimeFrame(stageFrame);
+              const outputText = `Required field "${recomputed.current_field}" is next. Reply with a value (or use "edit <field>").`;
+              const doneFrame = { type: 'done', outputText, latencyMs: Date.now() - turnStartedAt };
+              streamEvents.push(doneFrame);
+              safeWriteNdjson(res, doneFrame);
+              persistChatTurnAtomic({
+                sessionId: session.id, userContent: inputText, assistantContent: outputText, provider: preferred, model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+            if (recomputed.slot_phase === 'optional' && recomputed.current_field) {
+              const stageFrame = { type: 'status', stage: 'pending_action_optional_fields', pending_action_id: pendingToolDraft.id, current_field: recomputed.current_field };
+              streamEvents.push(stageFrame);
+              writeRuntimeFrame(stageFrame);
+              const outputText = `Required fields complete. Optional field "${recomputed.current_field}" is next. Reply with a value or "skip".`;
+              const doneFrame = { type: 'done', outputText, latencyMs: Date.now() - turnStartedAt };
+              streamEvents.push(doneFrame);
+              safeWriteNdjson(res, doneFrame);
+              persistChatTurnAtomic({
+                sessionId: session.id, userContent: inputText, assistantContent: outputText, provider: preferred, model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+            const stageFrame = { type: 'status', stage: 'pending_action_confirmation', pending_action_id: pendingToolDraft.id };
+            streamEvents.push(stageFrame);
+            writeRuntimeFrame(stageFrame);
+            const summaryText = [
+              'All required fields are collected. Please review before execution.',
+              buildPendingSlotSummary(recomputed),
+              `Reply with ${commandPrefixMap.confirm} to execute, or "edit <field>" to make changes.`,
+            ].join('\n\n');
+            const doneFrame = { type: 'done', outputText: summaryText, latencyMs: Date.now() - turnStartedAt };
+            streamEvents.push(doneFrame);
+            safeWriteNdjson(res, doneFrame);
+            persistChatTurnAtomic({
+              sessionId: session.id, userContent: inputText, assistantContent: summaryText, provider: preferred, model: resolvedModel,
+              stream: { events: streamEvents, status: 'done' },
+              metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+            });
+            persisted = true;
+            res.end();
+            return true;
+          }
+        }
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
         let toolNarrationBefore = '';
@@ -2785,7 +3030,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let structuredToolMetadata: ChatToolMetadata | null = null;
         let generationPrompt = contextPayload.prompt;
         if (resolvedPendingDraft && actionMode !== 'manual_only' && explicitConfirm) {
-          const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
+          const confirmationValidation = validatePendingConfirmation(
+            pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true },
+            parsedConfirmCommand,
+            commandPrefixMap.confirm,
+          );
           if (!confirmationValidation.ok) {
             const confirmationMessage = 'message' in confirmationValidation ? confirmationValidation.message : 'Confirmation is required before I can continue.';
             const doneFrame = {

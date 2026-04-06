@@ -105,6 +105,8 @@ type PendingConfirmRequirement = {
   examples: string[];
 };
 
+type SlotPhase = 'required' | 'optional' | 'confirm';
+
 const CREATE_TASK_SCHEMA: AgentToolDefinition = {
   name: 'create_task',
   description: 'Create a research task. Required fields: ticker, title, and note_type.',
@@ -203,6 +205,34 @@ export const CHAT_TOOLS: AgentToolDefinition[] = [
 const trimString = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
 const toUpperTicker = (value: unknown): string => trimString(value).toUpperCase();
+const isFilledValue = (value: unknown): boolean => {
+  if (typeof value === 'string') return value.trim().length > 0;
+  return value !== undefined && value !== null;
+};
+
+const CREATE_TASK_REQUIRED_FIELDS: Array<keyof CreateTaskArgs> = ['ticker', 'title', 'note_type'];
+const CREATE_TASK_OPTIONAL_FIELDS: Array<keyof CreateTaskArgs> = ['details', 'assignee', 'priority', 'deadline', 'status'];
+
+const buildCreateTaskPendingDraft = (argumentsRecord: CreateTaskArgs): Record<string, unknown> => {
+  const collectedValues = Object.fromEntries(
+    [...CREATE_TASK_REQUIRED_FIELDS, ...CREATE_TASK_OPTIONAL_FIELDS]
+      .filter((field) => isFilledValue(argumentsRecord[field]))
+      .map((field) => [field, argumentsRecord[field] as unknown]),
+  );
+  const missingRequired = CREATE_TASK_REQUIRED_FIELDS.filter((field) => !isFilledValue(argumentsRecord[field]));
+  const remainingOptional = CREATE_TASK_OPTIONAL_FIELDS.filter((field) => !isFilledValue(argumentsRecord[field]));
+  const currentField = missingRequired[0] ?? remainingOptional[0] ?? null;
+  const slotPhase: SlotPhase = missingRequired.length > 0 ? 'required' : (remainingOptional.length > 0 ? 'optional' : 'confirm');
+  return {
+    arguments: argumentsRecord,
+    required_fields: CREATE_TASK_REQUIRED_FIELDS,
+    optional_fields: CREATE_TASK_OPTIONAL_FIELDS,
+    current_field: currentField,
+    collected_values: collectedValues,
+    slot_phase: slotPhase,
+    missing_fields: missingRequired,
+  };
+};
 
 const actionKeyFor = (toolName: string): string => `chat_tool:${toolName}`;
 
@@ -267,7 +297,7 @@ export const runChatToolOrchestration = async (
         ? args.status
         : undefined,
     };
-    const missing = ['ticker', 'title', 'note_type'].filter((field) => !normalized[field as keyof CreateTaskArgs]);
+    const missing = CREATE_TASK_REQUIRED_FIELDS.filter((field) => !isFilledValue(normalized[field]));
     if (missing.length > 0) {
       if (!askWhenInfoMissing) {
         return {
@@ -277,12 +307,25 @@ export const runChatToolOrchestration = async (
           missing_fields: missing,
         };
       }
-      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { arguments: normalized, missing_fields: missing });
+      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, buildCreateTaskPendingDraft(normalized));
+      const currentField = missing[0];
       return {
         status: 'needs_confirmation',
-        narration_before: 'I prepared a create_task draft but I am missing required fields.',
-        narration_after: `Draft saved. Please provide: ${missing.join(', ')}. Then explicitly confirm to execute.`,
+        narration_before: 'I prepared a create_task draft and entered required-field collection.',
+        narration_after: `Please provide ${currentField} first. I will collect required fields one at a time before optional fields and final confirmation.`,
         missing_fields: missing,
+      };
+    }
+    if (!explicitConfirm) {
+      const pendingDraft = buildCreateTaskPendingDraft(normalized);
+      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, pendingDraft);
+      const currentField = typeof pendingDraft.current_field === 'string' ? pendingDraft.current_field : null;
+      return {
+        status: 'needs_confirmation',
+        narration_before: 'I prepared a create_task draft.',
+        narration_after: currentField
+          ? `Required fields are complete. Entering optional-field phase. Next optional field: ${currentField}. Reply with a value or say "skip".`
+          : 'All fields are populated. Review the summary and explicitly confirm to execute create_task.',
       };
     }
     const narrationBefore = `I will create task ${normalized.ticker} — ${normalized.title}.`;
