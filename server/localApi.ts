@@ -1504,11 +1504,43 @@ const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 's
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-const normalizeEndpointUrl = (value: unknown, fallback: string): string => {
+const hasSupportedEndpointProtocol = (protocol: string): boolean => protocol === 'http:' || protocol === 'https:';
+const normalizeEndpointPath = (pathname: string, options?: { stripSearxngSearchPath?: boolean }): string => {
+  if (options?.stripSearxngSearchPath && /^\/search\/?$/i.test(pathname)) return '';
+  if (pathname === '/') return '';
+  return pathname.replace(/\/+$/, '');
+};
+const tryNormalizeEndpointUrl = (value: string, options?: { stripSearxngSearchPath?: boolean }): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!hasSupportedEndpointProtocol(parsed.protocol) || !parsed.hostname) return null;
+    const normalizedPath = normalizeEndpointPath(parsed.pathname, options);
+    return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+  } catch {
+    return null;
+  }
+};
+const normalizeEndpointUrl = (value: unknown, fallback: string, options?: { stripSearxngSearchPath?: boolean }): string => {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
   if (!trimmed) return fallback;
-  return trimmed.replace(/\/+$/, '') || fallback;
+  return tryNormalizeEndpointUrl(trimmed, options) ?? trimmed;
+};
+const validateRequiredEndpointUrl = (
+  value: unknown,
+  label: string,
+  options?: { stripSearxngSearchPath?: boolean },
+): { ok: true; normalized: string } | { ok: false; message: string } => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { ok: false, message: `${label} is required.` };
+  }
+  const normalized = tryNormalizeEndpointUrl(value, options);
+  if (!normalized) {
+    return { ok: false, message: `${label} must be a valid http:// or https:// URL with a hostname.` };
+  }
+  return { ok: true, normalized };
 };
 
 const normalizeDomain = (value: unknown): string => {
@@ -2022,7 +2054,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       source_citation: typeof webSearch?.source_citation === 'boolean' ? webSearch.source_citation : false,
       provider_config: {
         searxng: {
-          base_url: normalizeEndpointUrl(searxngConfig?.base_url, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT),
+          base_url: normalizeEndpointUrl(searxngConfig?.base_url, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT, { stripSearxngSearchPath: true }),
           use_json_api: typeof searxngConfig?.use_json_api === 'boolean'
             ? searxngConfig.use_json_api
             : WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
@@ -2030,6 +2062,34 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       },
     },
   };
+};
+
+const validateAgentSettingsUrlFields = (payload: Record<string, unknown>): { ok: true } | { ok: false; message: string } => {
+  const generationParams = payload.generation_params;
+  if (!generationParams || typeof generationParams !== 'object') return { ok: true };
+  const next = generationParams as Record<string, unknown>;
+
+  const localConnection = next.local_connection;
+  if (localConnection && typeof localConnection === 'object') {
+    const result = validateRequiredEndpointUrl((localConnection as Record<string, unknown>).base_url, 'Interface URL');
+    if (!result.ok) return result;
+  }
+
+  const webSearch = next.web_search;
+  if (!webSearch || typeof webSearch !== 'object') return { ok: true };
+  const webSearchRecord = webSearch as Record<string, unknown>;
+  if (webSearchRecord.provider !== 'searxng') return { ok: true };
+  const providerConfig = webSearchRecord.provider_config;
+  if (!providerConfig || typeof providerConfig !== 'object') return { ok: true };
+  const searxng = (providerConfig as Record<string, unknown>).searxng;
+  if (!searxng || typeof searxng !== 'object') return { ok: true };
+  const result = validateRequiredEndpointUrl(
+    (searxng as Record<string, unknown>).base_url,
+    'SearXNG base URL',
+    { stripSearxngSearchPath: true },
+  );
+  if (!result.ok) return result;
+  return { ok: true };
 };
 
 const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider; default_model: string; generation_params?: AgentGenerationParams }): OllamaRuntimeConfig => {
@@ -3191,6 +3251,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const provider = payload.default_provider;
       if (!isAgentProvider(provider)) {
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
+        return true;
+      }
+      const urlValidation = validateAgentSettingsUrlFields(payload);
+      if (!urlValidation.ok) {
+        writeJson(res, 400, { error: { message: 'message' in urlValidation ? urlValidation.message : 'Invalid URL.' } });
         return true;
       }
       let defaultModel = String(payload.default_model ?? '').trim();

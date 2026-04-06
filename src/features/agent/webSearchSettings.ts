@@ -53,7 +53,7 @@ export const buildWebSearchSettingsPayload = (
   const providerConfig = draft.provider === 'searxng'
     ? {
       searxng: {
-        base_url: normalizeEndpointUrl(draft.searxngBaseUrl, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT),
+        base_url: normalizeEndpointUrl(draft.searxngBaseUrl, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT, { stripSearxngSearchPath: true }),
         use_json_api: !draft.searxngUseHtmlMode,
       },
     }

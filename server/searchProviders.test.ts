@@ -251,6 +251,37 @@ test('searxng json adapter sanitizes accidental full /search URL and keeps a sin
   }
 });
 
+test('searxng json adapter canonicalizes a base URL with trailing slash to a single /search endpoint', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    return new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    await searchProviderRegistry.searxng.search('trailing slash', {
+      providerConfig: {
+        searxng: {
+          base_url: 'http://localhost:8080/',
+          use_json_api: true,
+        },
+      },
+    });
+
+    assert.equal(requestedUrls.length, 1);
+    const requestUrl = new URL(requestedUrls[0] ?? '');
+    assert.equal(requestUrl.origin, 'http://localhost:8080');
+    assert.equal(requestUrl.pathname, '/search');
+    assert.equal(requestUrl.toString().match(/\/search/g)?.length ?? 0, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('searxng html adapter sanitizes accidental full /search URL and omits format=json', async () => {
   const originalFetch = globalThis.fetch;
   let fetchAcceptHeader = '';
