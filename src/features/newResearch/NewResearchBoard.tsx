@@ -41,6 +41,15 @@ const OPEN_LINKED_NOTE_ACTION_LABEL = 'Open linked note';
 const CREATE_NOTE_FROM_TASK_ACTION_LABEL = 'Create note from task';
 
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
+type DestinationPreview = {
+  destinationPath: string;
+  fallbackPath: string;
+  missingFolderName: string;
+  needsFolderCreation: boolean;
+  selectedFolder: Folder | null;
+  ticker: string;
+  tickerFolder: Folder | null;
+};
 
 const blankTask = (): NewResearchTaskInput => ({
   title: '', details: '', ticker: '', note_type: '', assignee: '', priority: '', deadline: '', status: TaskStatus.Ideas,
@@ -107,7 +116,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     }) ?? null;
   };
 
-  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask) => {
+  const resolveDestinationPreview = (task: NewResearchTaskInput | NewResearchTask): DestinationPreview => {
     const ticker = task.ticker.trim().toUpperCase();
     const researchLocationPath = (task.research_location_path ?? '').trim();
     const selectedFolder = task.research_location_folder_id
@@ -125,12 +134,10 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     const missingFolderName = explicitFolderMissing ? explicitPath : (ticker || '');
 
     return {
-      selectedPath: selectedFolder?.path || explicitPath || 'Auto (ticker/default)',
       fallbackPath,
       destinationPath,
       needsFolderCreation,
       missingFolderName,
-      explicitFolderMissing,
       ticker,
       selectedFolder,
       tickerFolder,
