@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { buildSaveDefaultsPayload, getMirroredOllamaDraftModel, resolveOllamaFallbackSelectedModel } from './ollamaModelSync.js';
+import { WebSearchControls } from './AgentPage.js';
 import {
   buildWebSearchSettingsPayload,
   convertTimeoutMsToSeconds,
@@ -15,6 +18,8 @@ import {
   WEB_SEARCH_PROVIDER_OPTIONS,
 } from './webSearchSettings.js';
 import { validateEndpointUrl } from './urlNormalization.js';
+
+const noop = () => {};
 
 test('top model selection mirrors into ollama runtime draft when provider is ollama', () => {
   assert.equal(getMirroredOllamaDraftModel('ollama', 'qwen2.5:14b', 'llama3.2:latest'), 'qwen2.5:14b');
@@ -447,13 +452,64 @@ test('preferred source payload keeps weight numeric after slider inputs', () => 
 test('web search controls render in expected order with checkbox row grouped at the bottom', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   const enableIndex = source.indexOf('<span>Enable web search</span>');
-  const settingsGridIndex = source.indexOf('md:grid-cols-3');
+  const settingsGridIndex = source.indexOf('grid-cols-1 md:grid-cols-2 xl:grid-cols-3');
   const checkboxRowIndex = source.indexOf('flex flex-wrap items-center gap-x-6 gap-y-3');
   const safeSearchIndex = source.indexOf('<span>Safe search</span>');
   assert.ok(enableIndex >= 0);
   assert.ok(settingsGridIndex > enableIndex);
   assert.ok(checkboxRowIndex > settingsGridIndex);
   assert.ok(safeSearchIndex > checkboxRowIndex);
+});
+
+test('web search component keeps common control DOM order stable when provider changes', () => {
+  const renderControls = (provider: 'duckduckgo' | 'searxng') => renderToStaticMarkup(createElement(WebSearchControls, {
+    webSearchEnabled: true,
+    setWebSearchEnabled: noop,
+    webSearchProvider: provider,
+    setWebSearchProvider: noop,
+    webSearchMode: 'single',
+    setWebSearchMode: noop,
+    webSearchModeHelperText: 'helper',
+    applyModeRecommendedPreset: noop,
+    webSearchMaxResults: '5',
+    setWebSearchMaxResults: noop,
+    setWebSearchMaxResultsOverridden: noop,
+    webSearchTimeoutSeconds: '8',
+    setWebSearchTimeoutSeconds: noop,
+    setWebSearchTimeoutOverridden: noop,
+    webSearchRecency: 'any',
+    setWebSearchRecency: noop,
+    webSearchDomainPolicy: 'open_web',
+    setWebSearchDomainPolicy: noop,
+    domainPolicyHelperText: 'domain helper',
+    webSearchSafeSearch: true,
+    setWebSearchSafeSearch: noop,
+    webSearchSourceCitation: true,
+    setWebSearchSourceCitation: noop,
+    webSearchProviderCapabilities: provider === 'searxng' ? WEB_SEARCH_PROVIDER_CAPABILITIES.searxng : WEB_SEARCH_PROVIDER_CAPABILITIES.duckduckgo,
+    webSearchSearxngBaseUrl: 'http://localhost:8080',
+    setWebSearchSearxngBaseUrl: noop,
+    searxngBaseUrlValidationError: '',
+    webSearchSearxngUseHtmlMode: false,
+    setWebSearchSearxngUseHtmlMode: noop,
+    setWebSearchStatusMessage: noop,
+  }));
+
+  const duckHtml = renderControls('duckduckgo');
+  const searxngHtml = renderControls('searxng');
+  const commonControlLabels = ['Provider', 'Mode', 'Max results', 'Timeout (seconds)', 'Recency', 'Domain policy'];
+  for (const html of [duckHtml, searxngHtml]) {
+    let lastIndex = -1;
+    for (const label of commonControlLabels) {
+      const nextIndex = html.indexOf(label);
+      assert.ok(nextIndex > lastIndex, `Expected ${label} after previous control`);
+      lastIndex = nextIndex;
+    }
+  }
+  assert.equal(duckHtml.includes('No extra settings for this provider.'), true);
+  assert.equal(duckHtml.includes('HTML instead of JSON API'), false);
+  assert.equal(searxngHtml.includes('SearXNG base URL'), true);
+  assert.equal(searxngHtml.includes('HTML instead of JSON API'), true);
 });
 
 test('AgentPage web search UI includes recommended action, timeout seconds label, helper copy, and provider capability notices', () => {
@@ -464,6 +520,13 @@ test('AgentPage web search UI includes recommended action, timeout seconds label
   assert.equal(source.includes('Maximum wait time per provider request; timed-out passes may return no web evidence.'), true);
   assert.equal(source.includes('Not supported by DuckDuckGo adapter.'), true);
   assert.equal(source.includes('Safe search is not supported by DuckDuckGo adapter.'), true);
+});
+
+test('web search layout includes responsive grid and reserved provider panel height to avoid abrupt field jumps', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('grid-cols-1 md:grid-cols-2 xl:grid-cols-3'), true);
+  assert.equal(source.includes('min-h-[7rem] md:min-h-[6rem]'), true);
+  assert.equal(source.includes('Provider-specific settings'), true);
 });
 
 test('EditorPane thinking stream keeps a max-5 render policy and rotates queue in groups of five', () => {
