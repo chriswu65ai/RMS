@@ -181,3 +181,31 @@ test('chat store history/export/reset-context helpers call expected endpoints', 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('chat store handles clarification-only turns without creating tool traces', async () => {
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/api/chat/session/current/messages?')) return jsonResponse({ messages: [] });
+    if (url === '/api/chat/session/current/messages') {
+      return ndjsonResponse([
+        { type: 'intent_routing', route: 'ambiguous', reason: 'needs_disambiguation' },
+        { type: 'done', outputText: 'Do you want to run an action or just discuss this?' },
+      ]);
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  try {
+    useChatStore.setState({ messages: [], running: false, lastError: null });
+    await useChatStore.getState().sendMessage('can you help with my tasks?');
+    const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
+    assert.equal(useChatStore.getState().running, false);
+    assert.equal(assistant?.status, 'idle');
+    assert.equal(assistant?.text, 'Do you want to run an action or just discuss this?');
+    assert.equal(assistant?.traces.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
