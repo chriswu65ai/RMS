@@ -152,6 +152,28 @@ export const shouldShowThinkingBubble = ({
   thinkingEventCount: number;
   isThinkingBubbleClosed: boolean;
 }) => (thinkingStatus !== 'idle' || thinkingEventCount > 0) && !isThinkingBubbleClosed;
+
+const streamSourceKey = (source: StreamSource) => (
+  source.kind === 'web' ? `web:${source.url}` : `attachment:${source.attachment_id}`
+);
+
+export const mergeSourcesForBubble = (existing: StreamSource[], incoming: StreamSource[]): StreamSource[] => {
+  if (incoming.length === 0) return existing;
+  const merged: StreamSource[] = [];
+  const seen = new Set<string>();
+
+  const pushUnique = (source: StreamSource) => {
+    const key = streamSourceKey(source);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(source);
+  };
+
+  incoming.forEach(pushUnique);
+  existing.forEach(pushUnique);
+  return merged;
+};
+
 export const applyTextToEditorState = (
   state: EditorState,
   nextText: string,
@@ -1127,7 +1149,10 @@ export function EditorPane() {
           streamPreviewController.onChunk(nextOutputText);
         },
         onSources: (sources) => {
-          setGeneratedSourcesByFileId((current) => ({ ...current, [targetFileId]: sources }));
+          setGeneratedSourcesByFileId((current) => ({
+            ...current,
+            [targetFileId]: mergeSourcesForBubble(current[targetFileId] ?? [], sources),
+          }));
           setSourcesBubbleClosedByFileId((current) => ({ ...current, [targetFileId]: false }));
         },
         onSearchWarning: (message) => {
@@ -1342,7 +1367,10 @@ export function EditorPane() {
           {generatedSources.length > 0 && !isSourcesBubbleClosed && (
             <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
               <div className="flex items-start justify-between gap-2">
-                <p className="font-semibold text-slate-900">Sources</p>
+                <div>
+                  <p className="font-semibold text-slate-900">Available / retrieved sources</p>
+                  <p className="text-[11px] text-slate-500">Shown as context used during drafting; final markdown Sources list remains citation-driven.</p>
+                </div>
                 <button
                   type="button"
                   className="rounded border border-slate-300 p-0.5 text-slate-500 transition-colors hover:text-slate-700"

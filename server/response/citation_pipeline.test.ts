@@ -177,12 +177,13 @@ test('citation mode ON does not leave valid inline citation without matching app
   assert.doesNotMatch(result.outputText, /\[2\] \[Beta\]/);
 });
 
-test('citation mode ON only appends cited attachments when mixed web and attachment sources are present', async () => {
+test('citation mode ON final Sources section is cited-only across mixed web and attachments', async () => {
   const result = await processResponseCitations({
     outputText: 'Web [1] and attachment [attachment:doc-2].',
     sourceCitationEnabled: true,
     sources: [
       { kind: 'web', title: 'Alpha', url: 'https://example.com/a', snippet: '', provider: 'duckduckgo' },
+      { kind: 'web', title: 'Beta', url: 'https://example.com/b', snippet: '', provider: 'duckduckgo' },
       { kind: 'attachment', attachment_id: 'doc-1', label: 'one.pdf' },
       { kind: 'attachment', attachment_id: 'doc-2', label: 'two.pdf' },
     ],
@@ -190,5 +191,6 @@ test('citation mode ON only appends cited attachments when mixed web and attachm
 
   assert.match(result.outputText, /\[1\] \[Alpha\]\(https:\/\/example\.com\/a\)/);
   assert.match(result.outputText, /\[a\] two\.pdf/);
+  assert.doesNotMatch(result.outputText, /\[2\] \[Beta\]\(https:\/\/example\.com\/b\)/);
   assert.doesNotMatch(result.outputText, /\[b\] one\.pdf/);
 });
