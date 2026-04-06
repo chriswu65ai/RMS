@@ -2504,6 +2504,47 @@ test('research task create rejects duplicate linked note with conflict', async (
   assert.equal(secondCreatePayload.error?.message, 'That note is already linked to another task. Task↔note links must stay one-to-one.');
 });
 
+test('research task patch unlink clears linked_note_path when path is omitted', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Linked task',
+    ticker: 'ACME',
+    linked_note_file_id: 'note-unlink-1',
+    linked_note_path: '/notes/note-unlink-1.md',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string; linked_note_file_id: string; linked_note_path: string };
+  assert.equal(createdTask.linked_note_file_id, 'note-unlink-1');
+  assert.equal(createdTask.linked_note_path, '/notes/note-unlink-1.md');
+
+  const unlinkResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    linked_note_file_id: '',
+  });
+  assert.equal(unlinkResponse.status, 200);
+  const unlinkedTask = JSON.parse(unlinkResponse.body) as { linked_note_file_id: string; linked_note_path: string };
+  assert.equal(unlinkedTask.linked_note_file_id, '');
+  assert.equal(unlinkedTask.linked_note_path, '');
+});
+
+test('research task patch relink sets linked note id and path', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Relink task',
+    ticker: 'ACME',
+    linked_note_file_id: 'note-relink-1',
+    linked_note_path: '/notes/note-relink-1.md',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { id: string };
+
+  const relinkResponse = await callRoute('PATCH', `/api/research-tasks/${createdTask.id}`, {
+    linked_note_file_id: 'note-relink-2',
+    linked_note_path: '/notes/note-relink-2.md',
+  });
+  assert.equal(relinkResponse.status, 200);
+  const relinkedTask = JSON.parse(relinkResponse.body) as { linked_note_file_id: string; linked_note_path: string };
+  assert.equal(relinkedTask.linked_note_file_id, 'note-relink-2');
+  assert.equal(relinkedTask.linked_note_path, '/notes/note-relink-2.md');
+});
+
 test('research task status transitions normalize date_completed correctly', async () => {
   const createResponse = await callRoute('POST', '/api/research-tasks', {
     title: 'Status transition normalization',
