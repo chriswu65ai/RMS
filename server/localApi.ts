@@ -237,6 +237,9 @@ type ChatSettingsRow = {
 
 type ChatPurgeRange = '24h' | '7d' | 'all';
 type CanonicalChatActionMode = 'assist' | 'confirm_required' | 'manual_only';
+type ChatCommandName = 'task' | 'note' | 'confirm' | 'cancel' | 'help';
+type ChatCommandPrefixMode = 'on' | 'off';
+type ChatCommandPrefixMap = Record<ChatCommandName, string>;
 
 const dbPath = process.env.SQLITE_PATH ?? path.resolve(process.cwd(), 'data/researchmanager.db');
 mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -381,6 +384,14 @@ const getOrCreatePrimaryChatSession = (userId: string, title = 'Primary chat'): 
 const DEFAULT_CHAT_USER_ID = 'local-user';
 const DEFAULT_CHAT_SETTINGS_POLICY = DEFAULT_CHAT_CONTEXT_POLICY;
 const DEFAULT_CHAT_ACTION_MODE: CanonicalChatActionMode = 'assist';
+const DEFAULT_CHAT_COMMAND_PREFIX_MODE: ChatCommandPrefixMode = 'off';
+const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
+  task: '/task',
+  note: '/note',
+  confirm: '/confirm',
+  cancel: '/cancel',
+  help: '/help',
+};
 const LEGACY_CHAT_ACTION_MODE_MAP: Record<string, CanonicalChatActionMode> = {
   assist: 'assist',
   act: 'confirm_required',
@@ -411,14 +422,35 @@ const resolveChatActionMode = (rawMode: unknown): { mode: CanonicalChatActionMod
 
 const normalizeChatSettingsPolicy = (
   policy: Record<string, unknown> | null | undefined,
-): { policy: Record<string, unknown>; actionMode: CanonicalChatActionMode; normalizedFrom: string | null; warningCode?: 'unknown_chat_action_mode' } => {
+): {
+  policy: Record<string, unknown>;
+  actionMode: CanonicalChatActionMode;
+  normalizedFrom: string | null;
+  commandPrefixMode: ChatCommandPrefixMode;
+  commandPrefixMap: ChatCommandPrefixMap;
+  warningCode?: 'unknown_chat_action_mode';
+} => {
   const nextPolicy = { ...(policy ?? {}) };
   const resolved = resolveChatActionMode(nextPolicy.action_mode);
   nextPolicy.action_mode = resolved.mode;
+  const rawPrefixMode = nextPolicy.command_prefix_mode;
+  const normalizedPrefixMode: ChatCommandPrefixMode = rawPrefixMode === true || rawPrefixMode === 'on' ? 'on' : 'off';
+  const rawPrefixMap = asObjectRecord(nextPolicy.command_prefix_map) ?? {};
+  const normalizedPrefixMap: ChatCommandPrefixMap = {
+    task: typeof rawPrefixMap.task === 'string' && rawPrefixMap.task.trim() ? rawPrefixMap.task.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.task,
+    note: typeof rawPrefixMap.note === 'string' && rawPrefixMap.note.trim() ? rawPrefixMap.note.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.note,
+    confirm: typeof rawPrefixMap.confirm === 'string' && rawPrefixMap.confirm.trim() ? rawPrefixMap.confirm.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.confirm,
+    cancel: typeof rawPrefixMap.cancel === 'string' && rawPrefixMap.cancel.trim() ? rawPrefixMap.cancel.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.cancel,
+    help: typeof rawPrefixMap.help === 'string' && rawPrefixMap.help.trim() ? rawPrefixMap.help.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.help,
+  };
+  nextPolicy.command_prefix_mode = normalizedPrefixMode;
+  nextPolicy.command_prefix_map = normalizedPrefixMap;
   return {
     policy: nextPolicy,
     actionMode: resolved.mode,
     normalizedFrom: resolved.normalizedFrom,
+    commandPrefixMode: normalizedPrefixMode,
+    commandPrefixMap: normalizedPrefixMap,
     warningCode: resolved.warningCode,
   };
 };
@@ -433,7 +465,12 @@ const getOrCreateChatSettings = (userId: string): ChatSettingsRow => {
     values (
       ${sqlEscape(id)},
       ${sqlEscape(userId)},
-      ${sqlEscape(JSON.stringify({ ...DEFAULT_CHAT_SETTINGS_POLICY, action_mode: DEFAULT_CHAT_ACTION_MODE }))},
+      ${sqlEscape(JSON.stringify({
+        ...DEFAULT_CHAT_SETTINGS_POLICY,
+        action_mode: DEFAULT_CHAT_ACTION_MODE,
+        command_prefix_mode: DEFAULT_CHAT_COMMAND_PREFIX_MODE,
+        command_prefix_map: DEFAULT_CHAT_COMMAND_PREFIX_MAP,
+      }))},
       null,
       ${sqlEscape(now)},
       ${sqlEscape(now)}
@@ -1296,6 +1333,34 @@ const invokeProviderGenerate = (
   },
 ) => providerRegistry[provider].generate(request, apiKey, signal, options);
 
+const parsePrefixedChatCommand = (
+  inputText: string,
+  prefixMap: ChatCommandPrefixMap,
+): { command: ChatCommandName; remainder: string } | null => {
+  const trimmed = inputText.trim();
+  if (!trimmed) return null;
+  const ordered = (Object.keys(prefixMap) as ChatCommandName[])
+    .map((name) => ({ name, prefix: prefixMap[name].trim() }))
+    .filter((entry) => entry.prefix.length > 0)
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const entry of ordered) {
+    if (!trimmed.toLowerCase().startsWith(entry.prefix.toLowerCase())) continue;
+    const remainder = trimmed.slice(entry.prefix.length).trim();
+    return { command: entry.name, remainder };
+  }
+  return null;
+};
+
+const looksLikeNaturalLanguageToolRequest = (inputText: string): boolean => (
+  /\b(create|update|archive|list|show|generate|draft)\b/i.test(inputText)
+  && /\b(task|tasks|note|notes)\b/i.test(inputText)
+);
+
+const buildPrefixGuidanceMessage = (prefixMap: ChatCommandPrefixMap): string => [
+  'Command prefix mode is enabled, so I can only execute tools through explicit commands.',
+  `Try ${prefixMap.task} create task for NVDA, ${prefixMap.note} summarize task AAPL, ${prefixMap.confirm} to approve, or ${prefixMap.help} for the full list.`,
+].join(' ');
+
 const extractExplicitConfirm = (inputText: string, payload: Record<string, unknown>): boolean => {
   if (typeof payload.explicit_confirm === 'boolean') return payload.explicit_confirm;
   return /\b(confirm|approved?|yes,?\s+do\s+it)\b/i.test(inputText);
@@ -1629,6 +1694,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const policy = coerceChatContextPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
       const normalizedPolicy = normalizeChatSettingsPolicy(parseJsonOrNull<Record<string, unknown>>(settingsRow.policy_json));
       const actionMode = normalizedPolicy.actionMode;
+      const commandPrefixMode = normalizedPolicy.commandPrefixMode;
+      const commandPrefixMap = normalizedPolicy.commandPrefixMap;
+      const parsedPrefixedCommand = parsePrefixedChatCommand(inputText, commandPrefixMap);
       if (normalizedPolicy.warningCode) {
         emitStructuredLog('chat.action_mode.warning', {
           code: normalizedPolicy.warningCode,
@@ -1682,8 +1750,72 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       });
       try {
         let explicitConfirm = extractExplicitConfirm(inputText, payload as Record<string, unknown>);
+        if (!explicitConfirm && parsedPrefixedCommand?.command === 'confirm') explicitConfirm = true;
+        const normalizedInputText = parsedPrefixedCommand?.remainder || inputText;
+        const isPrefixModeOn = commandPrefixMode === 'on';
+        const shouldBlockNlToolExecution = isPrefixModeOn && !parsedPrefixedCommand && looksLikeNaturalLanguageToolRequest(inputText);
+        if (isPrefixModeOn && parsedPrefixedCommand?.command === 'help') {
+          const helpText = [
+            'Command prefix mode is enabled.',
+            `Active commands: ${Object.entries(commandPrefixMap).map(([name, prefix]) => `${prefix} (${name})`).join(', ')}.`,
+            `Examples: ${commandPrefixMap.task} create task for AAPL | ${commandPrefixMap.note} draft earnings note for AAPL | ${commandPrefixMap.confirm} | ${commandPrefixMap.cancel}.`,
+          ].join(' ');
+          const doneFrame = { type: 'done', outputText: helpText, latencyMs: Date.now() - turnStartedAt };
+          streamEvents.push(doneFrame);
+          writeNdjson(res, doneFrame);
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: helpText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: 'done' },
+            metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+          });
+          persisted = true;
+          res.end();
+          return true;
+        }
+        if (isPrefixModeOn && parsedPrefixedCommand?.command === 'cancel') {
+          const pendingDraft = loadLatestPendingChatToolDraft(session.id);
+          if (pendingDraft) savePendingActionDraft(session.id, pendingDraft.action_key, pendingDraft.draft ?? {}, 'cancelled');
+          const cancelledText = pendingDraft ? 'Okay — cancelled the pending action draft.' : 'There is no pending action draft to cancel.';
+          const doneFrame = { type: 'done', outputText: cancelledText, latencyMs: Date.now() - turnStartedAt };
+          streamEvents.push(doneFrame);
+          writeNdjson(res, doneFrame);
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: cancelledText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: 'done' },
+            metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta },
+          });
+          persisted = true;
+          res.end();
+          return true;
+        }
+        if (shouldBlockNlToolExecution) {
+          const guidanceText = buildPrefixGuidanceMessage(commandPrefixMap);
+          const doneFrame = { type: 'done', outputText: guidanceText, latencyMs: Date.now() - turnStartedAt };
+          streamEvents.push(doneFrame);
+          writeNdjson(res, doneFrame);
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: guidanceText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: 'done' },
+            metadata: { usage: null, costEstimate: null, completedAt: new Date().toISOString(), correlation: { turn_id: turnCorrelationId, session_id: session.id }, context: contextPayload.meta, command_prefix_mode: 'blocked_nl_tool_execution' },
+          });
+          persisted = true;
+          res.end();
+          return true;
+        }
         const pendingToolDraft = loadLatestPendingChatToolDraft(session.id);
-        const disambiguationChoice = parseDisambiguationChoice(inputText);
+        const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
         if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null) {
           explicitConfirm = true;
         }
@@ -1816,14 +1948,21 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               `Tool result JSON: ${JSON.stringify(outcome.result ?? {})}`,
             ].filter(Boolean).join('\n');
           }
-        } else if (actionMode !== 'manual_only' && supportsToolCalling(preferred, resolvedModel)) {
+        } else if (
+          actionMode !== 'manual_only'
+          && supportsToolCalling(preferred, resolvedModel)
+          && (!isPrefixModeOn || Boolean(parsedPrefixedCommand))
+        ) {
           try {
             const planningStart = { type: 'tool_planning_started', tool_count: CHAT_TOOLS.length };
             streamEvents.push(planningStart);
             writeNdjson(res, planningStart);
             const planning = await providerRegistry[preferred].generateToolFirstTurn({
               model: resolvedModel,
-              inputText: contextPayload.prompt,
+              inputText: [
+                parsedPrefixedCommand ? `[PREFIX_COMMAND]\n${parsedPrefixedCommand.command}` : '',
+                contextPayload.prompt.replace(inputText, normalizedInputText),
+              ].filter(Boolean).join('\n\n'),
               tools: CHAT_TOOLS as unknown as AgentToolDefinition[],
               generationParams: {
                 ...(payload.generation_params as { temperature?: number; maxTokens?: number } | undefined),

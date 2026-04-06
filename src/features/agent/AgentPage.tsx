@@ -14,6 +14,8 @@ import {
   savePreferredSource,
   savePreferredSourceById,
   type ChatActionMode,
+  type ChatCommandName,
+  type ChatCommandPrefixMap,
   type ChatProfileSource,
 } from '../../lib/agentApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
@@ -76,6 +78,14 @@ const CHAT_ACTION_MODE_OPTIONS: Array<{ value: ChatActionMode; label: string; he
   { value: 'assist', label: 'Assist (recommend only)', helper: 'Draft and explain actions without autonomously executing risky changes.' },
   { value: 'act', label: 'Act (take action)', helper: 'Proceed with tool actions when enough context is available.' },
 ];
+const CHAT_COMMAND_NAMES: ChatCommandName[] = ['task', 'note', 'confirm', 'cancel', 'help'];
+const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
+  task: '/task',
+  note: '/note',
+  confirm: '/confirm',
+  cancel: '/cancel',
+  help: '/help',
+};
 const SOURCE_IMPORTANCE_LABELS: Record<number, string> = {
   1: 'Low',
   2: 'Medium-low',
@@ -174,6 +184,8 @@ export function AgentPage() {
   const [chatProfileSource, setChatProfileSource] = useState<ChatProfileSource>('built_in');
   const [chatProfileFilePath, setChatProfileFilePath] = useState('');
   const [chatReloadProfileEveryMessage, setChatReloadProfileEveryMessage] = useState(false);
+  const [chatCommandPrefixMode, setChatCommandPrefixMode] = useState(false);
+  const [chatCommandPrefixMap, setChatCommandPrefixMap] = useState<ChatCommandPrefixMap>(DEFAULT_CHAT_COMMAND_PREFIX_MAP);
   const [chatSettingsMessage, setChatSettingsMessage] = useState('');
   const [chatSettingsValidationError, setChatSettingsValidationError] = useState('');
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
@@ -289,6 +301,17 @@ export function AgentPage() {
         setChatProfileSource(chatPolicy.profile_source === 'file' || chatPolicy.profile_source === 'merged' ? chatPolicy.profile_source : 'built_in');
         setChatProfileFilePath(typeof chatPolicy.profile_file_path === 'string' ? chatPolicy.profile_file_path : '');
         setChatReloadProfileEveryMessage(chatPolicy.reload_profile_every_message ?? false);
+        setChatCommandPrefixMode(chatPolicy.command_prefix_mode === true || chatPolicy.command_prefix_mode === 'on');
+        const configuredPrefixMap = chatPolicy.command_prefix_map && typeof chatPolicy.command_prefix_map === 'object'
+          ? chatPolicy.command_prefix_map as Partial<ChatCommandPrefixMap>
+          : {};
+        setChatCommandPrefixMap({
+          task: typeof configuredPrefixMap.task === 'string' && configuredPrefixMap.task.trim() ? configuredPrefixMap.task.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.task,
+          note: typeof configuredPrefixMap.note === 'string' && configuredPrefixMap.note.trim() ? configuredPrefixMap.note.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.note,
+          confirm: typeof configuredPrefixMap.confirm === 'string' && configuredPrefixMap.confirm.trim() ? configuredPrefixMap.confirm.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.confirm,
+          cancel: typeof configuredPrefixMap.cancel === 'string' && configuredPrefixMap.cancel.trim() ? configuredPrefixMap.cancel.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.cancel,
+          help: typeof configuredPrefixMap.help === 'string' && configuredPrefixMap.help.trim() ? configuredPrefixMap.help.trim() : DEFAULT_CHAT_COMMAND_PREFIX_MAP.help,
+        });
 
         const hasCachedModelsForProvider = (modelsByProvider[settings.default_provider] ?? []).length > 0;
         const shouldRefreshOnMount = !hasCachedModelsForProvider || !settings.default_model.trim()
@@ -322,6 +345,13 @@ export function AgentPage() {
     return matched?.helper ?? '';
   }, [webSearchMode]);
   const webSearchProviderCapabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchProvider];
+  const activeCommandExamples = useMemo(() => [
+    `${chatCommandPrefixMap.task} create task for NVDA`,
+    `${chatCommandPrefixMap.note} summarize AAPL research`,
+    `${chatCommandPrefixMap.confirm} to execute a pending action`,
+    `${chatCommandPrefixMap.cancel} to cancel pending action`,
+    `${chatCommandPrefixMap.help} to list commands`,
+  ], [chatCommandPrefixMap]);
   const applyModeRecommendedPreset = (mode: WebSearchMode, force = false) => {
     const preset = getRecommendedPresetForMode(mode);
     if (force || !webSearchMaxResultsOverridden) {
@@ -552,6 +582,44 @@ export function AgentPage() {
                 />
                 <span>Reload profile every message (immediate per-turn)</span>
               </label>
+              <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                <input
+                  className={CHECKBOX_INPUT_CLASS}
+                  type="checkbox"
+                  checked={chatCommandPrefixMode}
+                  onChange={(event) => {
+                    setChatCommandPrefixMode(event.target.checked);
+                    setChatSettingsMessage('');
+                  }}
+                />
+                <span>Enable command prefix mode for tool execution</span>
+              </label>
+            </div>
+            <div className="mt-4">
+              <p className="mb-2 text-sm font-medium text-slate-700">Command prefixes</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                {CHAT_COMMAND_NAMES.map((commandName) => (
+                  <label key={commandName} className="space-y-1 text-sm">
+                    <span className="text-slate-600">{commandName}</span>
+                    <input
+                      className="input"
+                      type="text"
+                      value={chatCommandPrefixMap[commandName]}
+                      onChange={(event) => {
+                        const nextPrefix = event.target.value;
+                        setChatCommandPrefixMap((current) => ({ ...current, [commandName]: nextPrefix }));
+                        setChatSettingsMessage('');
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Active commands: {CHAT_COMMAND_NAMES.map((commandName) => `${chatCommandPrefixMap[commandName]} (${commandName})`).join(', ')}
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-500">
+                {activeCommandExamples.map((example) => <li key={example}>{example}</li>)}
+              </ul>
             </div>
             <div className="mt-2 min-h-[1.25rem]">
               {chatSettingsValidationError ? <p className="text-xs text-rose-700">{chatSettingsValidationError}</p> : null}
@@ -580,6 +648,8 @@ export function AgentPage() {
                         profile_source: chatProfileSource,
                         profile_file_path: normalizedPath,
                         reload_profile_every_message: chatReloadProfileEveryMessage,
+                        command_prefix_mode: chatCommandPrefixMode ? 'on' : 'off',
+                        command_prefix_map: chatCommandPrefixMap,
                       },
                     });
                     if (chatReloadProfileEveryMessage) {

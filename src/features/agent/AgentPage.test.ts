@@ -333,6 +333,21 @@ test('AgentPage does not render a generic warning/error paragraph below the Acti
   assert.equal(source.includes('setActivityLogFeedbackMessage'), true);
 });
 
+test('AgentPage chat settings expose command prefix mode, editable command map, and active examples', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('Enable command prefix mode for tool execution'), true);
+  assert.equal(source.includes('Command prefixes'), true);
+  assert.equal(source.includes("const CHAT_COMMAND_NAMES: ChatCommandName[] = ['task', 'note', 'confirm', 'cancel', 'help'];"), true);
+  assert.equal(source.includes('Active commands:'), true);
+  assert.equal(source.includes('setChatCommandPrefixMap((current) => ({ ...current, [commandName]: nextPrefix }));'), true);
+});
+
+test('AgentPage save chat settings payload includes command prefix mode and command prefix map', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes("command_prefix_mode: chatCommandPrefixMode ? 'on' : 'off'"), true);
+  assert.equal(source.includes('command_prefix_map: chatCommandPrefixMap,'), true);
+});
+
 test('preferred source domain placeholder and validation copy use google.com examples', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('placeholder="google.com"'), true);
