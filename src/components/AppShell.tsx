@@ -8,7 +8,7 @@ type Props = {
 
 export function AppShell({ headerRight, topNav, main }: Props) {
   return (
-    <div className="flex h-screen max-w-full flex-col overflow-x-hidden bg-slate-50">
+    <div className="app-shell-viewport flex max-w-full flex-col overflow-x-hidden bg-slate-50">
       <header className="h-14 shrink-0 border-b border-slate-200 bg-white px-4">
         <div className="flex h-full w-full items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">

@@ -95,3 +95,9 @@ button { @apply transition; }
   min-width: var(--touch-target-size);
   min-height: var(--touch-target-size);
 }
+
+.app-shell-viewport {
+  min-height: 100vh;
+  min-height: 100svh;
+  height: 100dvh;
+}
