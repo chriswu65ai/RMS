@@ -430,3 +430,26 @@ test('EditorPane closes thinking bubble immediately on cancelled/failed runs and
   assert.ok(closeStateMatches.length >= 2);
   assert.equal(source.includes("const isThinkingBubbleClosed = thinkingBubbleClosedByFileId[file.id] ?? false;"), true);
 });
+
+test('EditorPane generate action still calls startGenerate and preserves citation/search callbacks for note generation', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/editor/EditorPane.tsx'), 'utf-8');
+  assert.equal(source.includes('const outputText = await startGenerate(targetFileId, {'), true);
+  assert.equal(source.includes('onSources: (sources) => {'), true);
+  assert.equal(source.includes('setGeneratedSourcesByFileId((current) => ({ ...current, [targetFileId]: sources }));'), true);
+  assert.equal(source.includes('onSearchWarning: (message) => {'), true);
+  assert.equal(source.includes('setSearchWarningMessage(message);'), true);
+});
+
+test('startGenerate pipeline still targets /api/agent/generate with manual note-generation trigger and citation forwarding', () => {
+  const storeSource = readFileSync(path.resolve(process.cwd(), 'src/hooks/useResearchStore.ts'), 'utf-8');
+  const generateUseCaseSource = readFileSync(path.resolve(process.cwd(), 'src/features/agent/GenerateUseCase.ts'), 'utf-8');
+  const apiSource = readFileSync(path.resolve(process.cwd(), 'src/lib/agentApi.ts'), 'utf-8');
+
+  assert.equal(storeSource.includes('onSources: (sources) => activeGenerationCallbacksByFileId.get(fileId)?.onSources?.(sources),'), true);
+  assert.equal(generateUseCaseSource.includes('triggerSource: TriggerSource.Manual,'), true);
+  assert.equal(generateUseCaseSource.includes('saveMode: SaveMode.ManualOnly,'), true);
+  assert.equal(generateUseCaseSource.includes('onSources: params.onSources,'), true);
+  assert.equal(apiSource.includes("const response = await fetch('/api/agent/generate', {"), true);
+  assert.equal(apiSource.includes("if (payload.type === 'sources') {"), true);
+  assert.equal(apiSource.includes('params.onSources?.(Array.isArray(payload.sources) ? payload.sources : []);'), true);
+});
