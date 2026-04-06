@@ -463,14 +463,16 @@ test('source importance controls use canonical 1-100 range with slider + numeric
   assert.equal(source.includes('step={1}'), true);
   assert.equal(source.includes('type="number"'), true);
   assert.equal(source.includes('aria-label="Source importance numeric"'), true);
-  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}'), true);
+  assert.equal(source.includes('const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
+  assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(normalizedNewWeight) }}'), true);
   assert.equal(source.includes('style={{ accentColor: getSourceImportanceColor(Number(editingWeight) || 1) }}'), true);
 });
 
 test('new custom source defaults source importance to 50 and renders Medium helper text', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes("const [newWeight, setNewWeight] = useState(String(SOURCE_IMPORTANCE_DEFAULT));"), true);
-  assert.equal(source.includes('getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)'), true);
+  assert.equal(source.includes('getSourceImportanceLabel(normalizedNewWeight)'), true);
+  assert.equal(source.includes('({normalizedNewWeight})'), true);
   assert.equal(source.includes("if (normalized <= 60) return 'Medium';"), true);
 });
 
@@ -484,9 +486,9 @@ test('preferred source table displays exact stored importance and label without 
 test('preferred source payload clamps numeric input to canonical 1-100 before submit/edit', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));'), true);
-  assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
+  assert.equal(source.includes('const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);'), true);
   assert.equal(source.includes('const normalizedWeight = clampSourceImportance(Number(editingWeight) || 1);'), true);
-  assert.equal(source.includes('weight: normalizedWeight,'), true);
+  assert.equal(source.includes('weight: normalizedNewWeight,'), true);
 });
 
 test('configure agent section header reads Configure Agent', () => {

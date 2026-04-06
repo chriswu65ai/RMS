@@ -406,6 +406,7 @@ export function AgentPage() {
   const chatSettingsMessage = chatSettingsFeedback?.text ?? '';
   const webSearchStatusMessage = webSearchStatusFeedback?.text ?? '';
   const preferredSourcesMessage = preferredSourcesFeedback?.text ?? '';
+  const normalizedNewWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);
   const selectedProviderModel = selectedModelByProvider[provider] ?? '';
   const models = modelsByProvider[provider] ?? [];
   const modelState = {
@@ -1146,10 +1147,9 @@ export function AgentPage() {
                 }
                 setDomainInputError('');
                 try {
-                  const normalizedWeight = clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT);
                   const created = await savePreferredSource({
                     domain: canonicalDomain,
-                    weight: normalizedWeight,
+                    weight: normalizedNewWeight,
                     enabled: newEnabled,
                   });
                   setPreferredSources((current) => [...current, created]);
@@ -1186,7 +1186,7 @@ export function AgentPage() {
                     step={1}
                     value={newWeight}
                     aria-label="Source importance"
-                    style={{ accentColor: getSourceImportanceColor(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT) }}
+                    style={{ accentColor: getSourceImportanceColor(normalizedNewWeight) }}
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <input
@@ -1201,7 +1201,7 @@ export function AgentPage() {
                     onChange={(event) => setNewWeight(event.target.value)}
                   />
                   <span className="min-w-[10rem] text-xs font-medium text-slate-700">
-                    {getSourceImportanceLabel(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)} ({clampSourceImportance(Number(newWeight) || SOURCE_IMPORTANCE_DEFAULT)})
+                    {getSourceImportanceLabel(normalizedNewWeight)} ({normalizedNewWeight})
                   </span>
                 </div>
               </label>
