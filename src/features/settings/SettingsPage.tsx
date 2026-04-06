@@ -102,10 +102,18 @@ export function SettingsPage() {
 
       let importedCount = 0;
       let skippedCount = 0;
+      let rejectedCount = 0;
 
       for (const entry of importedEntries) {
         const cleanPath = entry.path.replace(/^\/+/, '').replace(/\\/g, '/');
-        const pathParts = cleanPath.split('/').filter(Boolean);
+        const pathParts = cleanPath
+          .split('/')
+          .map((segment) => segment.trim())
+          .filter(Boolean);
+        if (pathParts.some((segment) => segment === '.' || segment === '..')) {
+          rejectedCount += 1;
+          continue;
+        }
         const fileNameWithExt = pathParts[pathParts.length - 1] ?? 'untitled.md';
         const folderPathFromImport = pathParts.slice(0, -1).join('/');
         const targetFolder = folderPathFromImport
@@ -136,7 +144,12 @@ export function SettingsPage() {
       }
 
       await refresh();
-      await dialog.alert('Import complete', `Imported ${importedCount} file${importedCount === 1 ? '' : 's'}${skippedCount > 0 ? ` (${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped)` : ''}.`);
+      const duplicateSummary = `${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped`;
+      const rejectedSummary = `${rejectedCount} invalid path entr${rejectedCount === 1 ? 'y' : 'ies'} rejected`;
+      await dialog.alert(
+        'Import complete',
+        `Imported ${importedCount} file${importedCount === 1 ? '' : 's'} (${duplicateSummary}, ${rejectedSummary}).`,
+      );
     } catch (error) {
       await dialog.alert('Import failed', error instanceof Error ? error.message : 'Unknown import error');
     } finally {
