@@ -4030,6 +4030,72 @@ test('Tier B pending actions accept /confirm and confirm', async () => {
   }
 });
 
+test('Tier B disambiguation choice updates pending draft but does not execute until explicit confirm', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  await callRoute('POST', '/api/research-tasks', {
+    ticker: 'MSFT',
+    title: 'Microsoft alpha',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  await callRoute('POST', '/api/research-tasks', {
+    ticker: 'MSFT',
+    title: 'Microsoft beta',
+    note_type: 'Research',
+    status: 'ideas',
+  });
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-b-disambiguation',
+        name: 'update_task',
+        arguments: { task_ref: 'msft', status: 'researching' },
+      }],
+    });
+    const first = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'set microsoft task to researching',
+      explicit_confirm: true,
+    });
+    const firstFrames = first.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(firstFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'needs_disambiguation'), true);
+
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+    const choose = await callRoute('POST', '/api/chat/session/current/messages', { content: '1' });
+    const chooseFrames = choose.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; outputText?: string });
+    assert.equal(chooseFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), false);
+    const chooseDone = chooseFrames.find((frame) => frame.type === 'done');
+    assert.match(chooseDone?.outputText ?? '', /updated the pending draft/i);
+    assert.match(chooseDone?.outputText ?? '', /\/confirm or confirm/i);
+
+    const beforeConfirm = await callRoute('GET', '/api/research-tasks');
+    const beforeConfirmTasks = JSON.parse(beforeConfirm.body) as Array<{ ticker: string; status: string }>;
+    assert.equal(beforeConfirmTasks.filter((task) => task.ticker === 'MSFT' && task.status === 'researching').length, 0);
+
+    const confirm = await callRoute('POST', '/api/chat/session/current/messages', { content: 'confirm' });
+    const confirmFrames = confirm.body.trim().split('\n').map((line) => JSON.parse(line) as {
+      type?: string;
+      outcome?: string;
+      resumed_from_pending?: boolean;
+    });
+    assert.equal(confirmFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('Tier C pending archive requires target-specific structured confirmation and handles malformed forms', async () => {
   await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
   await callRoute('PUT', '/api/agent/settings', {

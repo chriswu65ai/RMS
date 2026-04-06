@@ -2680,11 +2680,102 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           return true;
         }
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
-        const pendingRequirement = pendingToolDraft?.draft
-          ? coercePendingConfirmRequirement(pendingToolDraft.draft, commandPrefixMap.confirm)
-          : null;
-        if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null && pendingRequirement?.tier !== 'C') {
-          explicitConfirm = true;
+        let resolvedPendingDraft = pendingToolDraft?.draft ? { ...pendingToolDraft.draft } : null;
+        let pendingRequirement = resolvedPendingDraft ? coercePendingConfirmRequirement(resolvedPendingDraft) : null;
+        if (resolvedPendingDraft && disambiguationChoice !== null) {
+          const ambiguousMatches = Array.isArray(resolvedPendingDraft.ambiguous_matches)
+            ? resolvedPendingDraft.ambiguous_matches as Array<Record<string, unknown>>
+            : [];
+          if (ambiguousMatches.length > 0) {
+            const selected = ambiguousMatches[disambiguationChoice - 1];
+            if (!selected || typeof selected.id !== 'string' || !selected.id) {
+              const followupText = `I couldn't match option ${disambiguationChoice}. Reply with one of the listed numbers.`;
+              const doneFrame = {
+                type: 'done',
+                outputText: followupText,
+                latencyMs: Date.now() - turnStartedAt,
+              };
+              streamEvents.push(doneFrame);
+              safeWriteNdjson(res, doneFrame);
+              persistChatTurnAtomic({
+                sessionId: session.id,
+                userContent: inputText,
+                assistantContent: followupText,
+                provider: preferred,
+                model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: {
+                  usage: null,
+                  costEstimate: null,
+                  completedAt: new Date().toISOString(),
+                  correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                  context: contextPayload.meta,
+                },
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+            const draftArguments = resolvedPendingDraft.arguments && typeof resolvedPendingDraft.arguments === 'object'
+              ? { ...(resolvedPendingDraft.arguments as Record<string, unknown>) }
+              : {};
+            draftArguments.task_id = selected.id;
+            if (!payload.tool_arguments || typeof payload.tool_arguments !== 'object' || !('task_ref' in (payload.tool_arguments as Record<string, unknown>))) {
+              delete draftArguments.task_ref;
+            }
+            resolvedPendingDraft = {
+              ...resolvedPendingDraft,
+              arguments: draftArguments,
+            };
+            savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
+            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft);
+            if (!explicitConfirm) {
+              const selectedTicker = typeof selected.ticker === 'string' && selected.ticker.trim().length > 0 ? selected.ticker.trim() : null;
+              const selectedTitle = typeof selected.title === 'string' && selected.title.trim().length > 0 ? selected.title.trim() : null;
+              const selectedDescriptor = [selectedTicker, selectedTitle].filter(Boolean).join(' — ');
+              const confirmHint = pendingRequirement?.tier === 'C'
+                ? (pendingRequirement.examples?.[0] ?? '/confirm')
+                : '/confirm or confirm';
+              const confirmationInstruction = pendingRequirement?.tier === 'C'
+                ? `I updated the pending draft. This action is Tier C, so reply exactly with ${confirmHint} to execute.`
+                : `I updated the pending draft. Reply with ${confirmHint} to execute.`;
+              const followupText = [
+                selectedDescriptor
+                  ? `Got it — selected option ${disambiguationChoice}: ${selectedDescriptor} (${selected.id}).`
+                  : `Got it — selected option ${disambiguationChoice} (${selected.id}).`,
+                confirmationInstruction,
+              ].join(' ');
+              const doneFrame = {
+                type: 'done',
+                outputText: followupText,
+                latencyMs: Date.now() - turnStartedAt,
+              };
+              streamEvents.push(doneFrame);
+              safeWriteNdjson(res, doneFrame);
+              persistChatTurnAtomic({
+                sessionId: session.id,
+                userContent: inputText,
+                assistantContent: followupText,
+                provider: preferred,
+                model: resolvedModel,
+                stream: { events: streamEvents, status: 'done' },
+                metadata: {
+                  usage: null,
+                  costEstimate: null,
+                  completedAt: new Date().toISOString(),
+                  correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                  context: contextPayload.meta,
+                  pending_action: {
+                    disambiguation_choice: disambiguationChoice,
+                    resolved_task_id: selected.id,
+                  },
+                },
+              });
+              persisted = true;
+              res.end();
+              return true;
+            }
+          }
         }
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
@@ -2693,12 +2784,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let toolMetadata: Record<string, unknown> | null = null;
         let structuredToolMetadata: ChatToolMetadata | null = null;
         let generationPrompt = contextPayload.prompt;
-        if (pendingToolDraft?.draft && actionMode !== 'manual_only' && explicitConfirm) {
-          const confirmationValidation = validatePendingConfirmation(
-            pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true, examples: [commandPrefixMap.confirm, 'confirm'] },
-            parsedConfirmCommand,
-            commandPrefixMap.confirm,
-          );
+        if (resolvedPendingDraft && actionMode !== 'manual_only' && explicitConfirm) {
+          const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
           if (!confirmationValidation.ok) {
             const confirmationMessage = 'message' in confirmationValidation ? confirmationValidation.message : 'Confirmation is required before I can continue.';
             const doneFrame = {
@@ -2732,17 +2819,17 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             res.end();
             return true;
           }
-          const draftToolName = typeof pendingToolDraft.draft.tool_name === 'string' ? pendingToolDraft.draft.tool_name : '';
-          const draftArguments = pendingToolDraft.draft.arguments && typeof pendingToolDraft.draft.arguments === 'object'
-            ? { ...(pendingToolDraft.draft.arguments as Record<string, unknown>) }
+          const draftToolName = typeof resolvedPendingDraft.tool_name === 'string' ? resolvedPendingDraft.tool_name : '';
+          const draftArguments = resolvedPendingDraft.arguments && typeof resolvedPendingDraft.arguments === 'object'
+            ? { ...(resolvedPendingDraft.arguments as Record<string, unknown>) }
             : {};
           const payloadToolArguments = payload.tool_arguments && typeof payload.tool_arguments === 'object'
             ? (payload.tool_arguments as Record<string, unknown>)
             : null;
           const mergedArguments = payloadToolArguments ? { ...draftArguments, ...payloadToolArguments } : draftArguments;
           if (disambiguationChoice !== null) {
-            const ambiguousMatches = Array.isArray(pendingToolDraft.draft.ambiguous_matches)
-              ? pendingToolDraft.draft.ambiguous_matches as Array<Record<string, unknown>>
+            const ambiguousMatches = Array.isArray(resolvedPendingDraft.ambiguous_matches)
+              ? resolvedPendingDraft.ambiguous_matches as Array<Record<string, unknown>>
               : [];
             const selected = ambiguousMatches[disambiguationChoice - 1];
             if (selected?.id && typeof selected.id === 'string') {
@@ -2773,7 +2860,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             });
             if (outcome.status === 'executed') {
               toolCallsSucceeded = 1;
-              savePendingActionDraft(session.id, pendingToolDraft.action_key, pendingToolDraft.draft, 'confirmed');
+              savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'confirmed');
             }
             toolNarrationBefore = outcome.narration_before;
             toolNarrationAfter = outcome.narration_after;
