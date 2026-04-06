@@ -6,12 +6,13 @@ import { createFile, deleteFile, listAttachmentCounts, updateFile } from '../../
 import { toLocalDateInputValue, useResearchStore } from '../../hooks/useResearchStore';
 import { useDialog } from '../../components/ui/DialogProvider';
 import type { FrontmatterModel } from '../../types/models';
+import { resolveEffectiveNoteState } from './effectiveNoteState';
 
 const TYPE_FILTER_ALL = '__ALL_TYPED__';
 const TYPE_FILTER_NONE = '__NO_TYPE__';
 
 export function FileList({ openTemplatePicker }: { openTemplatePicker: () => void }) {
-  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, unsavedFileIds } = useResearchStore();
+  const { files, folders, selectedFolderId, selectedTag, selectedFileId, selectFile, workspace, refresh, search, unsavedFileIds, draftByFileId } = useResearchStore();
   const dialog = useDialog();
   const [moveFileId, setMoveFileId] = useState<string | null>(null);
   const [moveFolderId, setMoveFolderId] = useState<string>('');
@@ -24,8 +25,8 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     const viewingTemplateFolder = selectedFolderPath.includes('template');
 
     const filtered = files.filter((file) => {
-      const parsed = splitFrontmatter(file.content);
-      const isTemplateNote = file.is_template || parsed.frontmatter.template === true;
+      const effective = resolveEffectiveNoteState(file, draftByFileId);
+      const isTemplateNote = file.is_template || effective.frontmatter.template === true;
       const showingAllNotes = selectedFolderId === null;
       const canShowTemplate = showingAllNotes || viewingTemplateFolder;
       if (!canShowTemplate && isTemplateNote) return false;
@@ -34,7 +35,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
 
       if (selectedTag) {
         if (isTemplateNote) return false;
-        const noteType = parsed.frontmatter.type?.toString().trim() ?? '';
+        const noteType = effective.frontmatter.type?.toString().trim() ?? '';
 
         if (selectedTag === TYPE_FILTER_ALL && !noteType) return false;
         if (selectedTag === TYPE_FILTER_NONE && noteType) return false;
@@ -43,7 +44,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
 
       if (!search) return true;
       const q = search.toLowerCase();
-      return file.name.toLowerCase().includes(q) || file.content.toLowerCase().includes(q);
+      return file.name.toLowerCase().includes(q) || composeMarkdown(effective.frontmatter, effective.body).toLowerCase().includes(q);
     });
 
     const parseDateFromFileName = (fileName: string) => {
@@ -59,13 +60,13 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
     const starred: typeof filtered = [];
     const regular: typeof filtered = [];
     filtered.forEach((file) => {
-      const { frontmatter } = splitFrontmatter(file.content);
-      if (frontmatter.starred) starred.push(file);
+      const effective = resolveEffectiveNoteState(file, draftByFileId);
+      if (effective.frontmatter.starred) starred.push(file);
       else regular.push(file);
     });
 
     return [...starred.sort(byNewestDate), ...regular.sort(byNewestDate)];
-  }, [files, folders, search, selectedFolderId, selectedTag]);
+  }, [draftByFileId, files, folders, search, selectedFolderId, selectedTag]);
 
   const moveFile = useMemo(() => files.find((f) => f.id === moveFileId) ?? null, [files, moveFileId]);
   const visibleNoteIds = useMemo(() => visible.map((file) => file.id), [visible]);
@@ -177,7 +178,8 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
       <div className="scrollbar-hidden overflow-y-auto p-2">
         {visible.length === 0 && <p className="p-3 text-center text-sm text-slate-500">No files</p>}
         {visible.map((file) => {
-          const { frontmatter } = splitFrontmatter(file.content);
+          const effective = resolveEffectiveNoteState(file, draftByFileId);
+          const frontmatter = effective.frontmatter;
           return (
             <div key={file.id} className="group mb-1 flex items-center gap-2">
               <button
@@ -206,7 +208,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   onClick={async () => {
                     const parsed = splitFrontmatter(file.content);
                     const nextFrontmatter: FrontmatterModel = { ...parsed.frontmatter };
-                    const nextStarred = !parsed.frontmatter.starred;
+                    const nextStarred = !frontmatter.starred;
                     if (nextStarred) nextFrontmatter.starred = true;
                     else delete nextFrontmatter.starred;
                     await updateFile(file.id, { content: composeMarkdown(nextFrontmatter, parsed.body), frontmatter_json: nextFrontmatter, is_template: !!nextFrontmatter.template });
