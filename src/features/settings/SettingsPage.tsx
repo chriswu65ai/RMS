@@ -147,8 +147,8 @@ export function SettingsPage() {
           <div className="w-full rounded-xl border border-slate-200 bg-white p-5">
             <div className="grid gap-4 md:grid-cols-3">
               <section className="space-y-3">
-                <p className="text-sm text-slate-600">Note type</p>
-                <input className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
+                <label className="text-sm text-slate-600" htmlFor="settings-note-types">Note type</label>
+                <input id="settings-note-types" className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
                   const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
                   setNoteTypes(next);
                   setNoteTypesInput(next.join(', '));
@@ -156,8 +156,8 @@ export function SettingsPage() {
               </section>
 
               <section className="space-y-3">
-                <p className="text-sm text-slate-600">Assignees</p>
-                <input className="input" value={assigneesInput} onChange={(event) => setAssigneesInput(event.target.value)} onBlur={() => {
+                <label className="text-sm text-slate-600" htmlFor="settings-assignees">Assignees</label>
+                <input id="settings-assignees" className="input" value={assigneesInput} onChange={(event) => setAssigneesInput(event.target.value)} onBlur={() => {
                   const next = assigneesInput.split(',').map((value) => value.trim()).filter(Boolean);
                   setAssignees(next);
                   setAssigneesInput(next.join(', '));
@@ -165,8 +165,8 @@ export function SettingsPage() {
               </section>
 
               <section className="space-y-3">
-                <p className="text-sm text-slate-600">Sectors</p>
-                <input className="input" value={sectorsInput} onChange={(event) => setSectorsInput(event.target.value)} onBlur={() => {
+                <label className="text-sm text-slate-600" htmlFor="settings-sectors">Sectors</label>
+                <input id="settings-sectors" className="input" value={sectorsInput} onChange={(event) => setSectorsInput(event.target.value)} onBlur={() => {
                   const next = sectorsInput.split(',').map((value) => value.trim()).filter(Boolean);
                   setSectors(next);
                   setSectorsInput(next.join(', '));
