@@ -95,6 +95,15 @@ type GenerateNoteArgs = {
 };
 
 type SupportedArgs = CreateTaskArgs | UpdateTaskArgs | ArchiveTaskArgs | ListByStatusArgs | GenerateNoteArgs;
+type RiskTier = 'A' | 'B' | 'C';
+
+type PendingConfirmRequirement = {
+  tier: RiskTier;
+  action?: 'archive' | 'overwrite';
+  target_id?: string;
+  plain_confirm_allowed: boolean;
+  examples: string[];
+};
 
 const CREATE_TASK_SCHEMA: AgentToolDefinition = {
   name: 'create_task',
@@ -217,11 +226,17 @@ const saveDraftAndRequireConfirm = async (
   sessionId: string,
   toolName: string,
   draft: Record<string, unknown>,
+  confirmRequirement: PendingConfirmRequirement = {
+    tier: 'B',
+    plain_confirm_allowed: true,
+    examples: ['/confirm', 'confirm'],
+  },
 ): Promise<void> => {
   await adapter.savePendingActionDraft(sessionId, actionKeyFor(toolName), {
     tool_name: toolName,
     ...draft,
     requires_explicit_confirm: true,
+    confirm_requirement: confirmRequirement,
   }, 'pending');
 };
 
@@ -366,11 +381,17 @@ export const runChatToolOrchestration = async (
         };
       }
       if (!explicitConfirm) {
-        await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask.id, archived: true });
+        await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, { task_id: resolvedTask.id, archived: true }, {
+          tier: 'C',
+          action: 'archive',
+          target_id: resolvedTask.id,
+          plain_confirm_allowed: false,
+          examples: [`/confirm archive ${resolvedTask.id}`],
+        });
         return {
           status: 'needs_confirmation',
           narration_before: `I resolved task ${resolvedTask.ticker} — ${resolvedTask.title}.`,
-          narration_after: 'Draft saved. Please explicitly confirm before I archive it.',
+          narration_after: `Draft saved. To continue, reply: /confirm archive ${resolvedTask.id}.`,
         };
       }
       const narrationBefore = `I will archive task ${resolvedTask.ticker} — ${resolvedTask.title}.`;
@@ -403,11 +424,33 @@ export const runChatToolOrchestration = async (
       };
     }
     if (!explicitConfirm && (!normalizedGenerate.task_id || matches.length > 0)) {
-      await saveDraftAndRequireConfirm(adapter, sessionId, toolCall.name, normalizedGenerate as unknown as Record<string, unknown>);
+      const isOverwrite = Boolean(normalizedGenerate.note_id);
+      const confirmRequirement: PendingConfirmRequirement = isOverwrite
+        ? {
+          tier: 'C',
+          action: 'overwrite',
+          target_id: normalizedGenerate.note_id,
+          plain_confirm_allowed: false,
+          examples: [`/confirm overwrite ${normalizedGenerate.note_id}`],
+        }
+        : {
+          tier: 'B',
+          plain_confirm_allowed: true,
+          examples: ['/confirm', 'confirm'],
+        };
+      await saveDraftAndRequireConfirm(
+        adapter,
+        sessionId,
+        toolCall.name,
+        normalizedGenerate as unknown as Record<string, unknown>,
+        confirmRequirement,
+      );
       return {
         status: 'needs_confirmation',
         narration_before: 'I prepared a generate_note draft.',
-        narration_after: 'Draft saved. Please explicitly confirm before I create/update the note.',
+        narration_after: isOverwrite
+          ? `Draft saved. To continue, reply: /confirm overwrite ${normalizedGenerate.note_id}.`
+          : 'Draft saved. Reply /confirm (or confirm) when ready.',
       };
     }
     const narrationBefore = normalizedGenerate.task_id

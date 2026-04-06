@@ -1394,9 +1394,127 @@ const buildPrefixGuidanceMessage = (prefixMap: ChatCommandPrefixMap): string => 
   `Try ${prefixMap.task} create task for NVDA, ${prefixMap.note} summarize task AAPL, ${prefixMap.confirm} to approve, or ${prefixMap.help} for the full list.`,
 ].join(' ');
 
-const extractExplicitConfirm = (inputText: string, payload: Record<string, unknown>): boolean => {
+type ParsedConfirmCommand = {
+  is_confirm_command: boolean;
+  is_plain_confirm: boolean;
+  action?: 'archive' | 'overwrite';
+  target_id?: string;
+  malformed: boolean;
+};
+
+type PendingConfirmRequirement = {
+  tier: 'A' | 'B' | 'C';
+  action?: 'archive' | 'overwrite';
+  target_id?: string;
+  plain_confirm_allowed?: boolean;
+  examples?: string[];
+};
+
+const parseConfirmCommand = (inputText: string): ParsedConfirmCommand => {
+  const trimmed = inputText.trim();
+  const match = trimmed.match(/^\/?confirm\b(.*)$/i);
+  if (!match) {
+    return {
+      is_confirm_command: false,
+      is_plain_confirm: false,
+      malformed: false,
+    };
+  }
+  const remainder = (match[1] ?? '').trim();
+  if (!remainder) {
+    return {
+      is_confirm_command: true,
+      is_plain_confirm: true,
+      malformed: false,
+    };
+  }
+  const structured = remainder.match(/^(archive|overwrite)\s+(\S+)$/i);
+  if (!structured) {
+    return {
+      is_confirm_command: true,
+      is_plain_confirm: false,
+      malformed: true,
+    };
+  }
+  const action = structured[1]?.toLowerCase() as 'archive' | 'overwrite';
+  const targetId = structured[2];
+  return {
+    is_confirm_command: true,
+    is_plain_confirm: false,
+    action,
+    target_id: targetId,
+    malformed: false,
+  };
+};
+
+const extractExplicitConfirm = (
+  parsedConfirm: ParsedConfirmCommand,
+  payload: Record<string, unknown>,
+): boolean => {
   if (typeof payload.explicit_confirm === 'boolean') return payload.explicit_confirm;
-  return /\b(confirm|approved?|yes,?\s+do\s+it)\b/i.test(inputText);
+  return parsedConfirm.is_confirm_command;
+};
+
+const coercePendingConfirmRequirement = (draft: Record<string, unknown> | null): PendingConfirmRequirement => {
+  const raw = draft?.confirm_requirement;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      tier: 'B',
+      plain_confirm_allowed: true,
+      examples: ['/confirm', 'confirm'],
+    };
+  }
+  const record = raw as Record<string, unknown>;
+  const tier = record.tier === 'A' || record.tier === 'B' || record.tier === 'C' ? record.tier : 'B';
+  const action = record.action === 'archive' || record.action === 'overwrite' ? record.action : undefined;
+  const targetId = typeof record.target_id === 'string' && record.target_id.trim() ? record.target_id.trim() : undefined;
+  const examples = Array.isArray(record.examples)
+    ? record.examples.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+  return {
+    tier,
+    action,
+    target_id: targetId,
+    plain_confirm_allowed: typeof record.plain_confirm_allowed === 'boolean' ? record.plain_confirm_allowed : tier !== 'C',
+    examples: examples.length ? examples : undefined,
+  };
+};
+
+const buildMalformedConfirmationGuidance = (requirement: PendingConfirmRequirement): string => {
+  const firstExample = requirement.examples?.[0] ?? '/confirm';
+  if (requirement.tier === 'C') {
+    return `I couldn't parse that confirmation. For this Tier C action, reply exactly with ${firstExample}.`;
+  }
+  return `I couldn't parse that confirmation. Reply with /confirm or confirm to proceed.`;
+};
+
+const validatePendingConfirmation = (
+  requirement: PendingConfirmRequirement,
+  parsedConfirm: ParsedConfirmCommand,
+): { ok: true } | { ok: false; message: string } => {
+  if (parsedConfirm.malformed) {
+    return { ok: false, message: buildMalformedConfirmationGuidance(requirement) };
+  }
+  if (requirement.tier === 'C') {
+    const expectedAction = requirement.action;
+    const expectedTargetId = requirement.target_id;
+    if (!parsedConfirm.is_confirm_command || parsedConfirm.is_plain_confirm) {
+      const firstExample = requirement.examples?.[0] ?? '/confirm';
+      return { ok: false, message: `This action is Tier C and needs target-specific confirmation. Reply with ${firstExample}.` };
+    }
+    if (!expectedAction || !expectedTargetId || parsedConfirm.action !== expectedAction || parsedConfirm.target_id !== expectedTargetId) {
+      const firstExample = requirement.examples?.[0] ?? '/confirm';
+      return { ok: false, message: `Confirmation target mismatch. To proceed, reply with ${firstExample}.` };
+    }
+    return { ok: true };
+  }
+  if (requirement.tier === 'B') {
+    if (!parsedConfirm.is_confirm_command) {
+      return { ok: false, message: 'This action is Tier B. Reply with /confirm or confirm to continue.' };
+    }
+    return { ok: true };
+  }
+  return { ok: true };
 };
 
 const parseDisambiguationChoice = (inputText: string): number | null => {
@@ -1782,7 +1900,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         tool_attempts: 0,
       });
       try {
-        let explicitConfirm = extractExplicitConfirm(inputText, payload as Record<string, unknown>);
+        const parsedConfirmCommand = parseConfirmCommand(inputText);
+        let explicitConfirm = extractExplicitConfirm(parsedConfirmCommand, payload as Record<string, unknown>);
         if (!explicitConfirm && parsedPrefixedCommand?.command === 'confirm') explicitConfirm = true;
         const normalizedInputText = parsedPrefixedCommand?.remainder || inputText;
         const isPrefixModeOn = commandPrefixMode === 'on';
@@ -1850,7 +1969,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }
         const pendingToolDraft = loadLatestPendingChatToolDraft(session.id);
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
-        if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null) {
+        const pendingRequirement = pendingToolDraft?.draft ? coercePendingConfirmRequirement(pendingToolDraft.draft) : null;
+        if (!explicitConfirm && pendingToolDraft?.draft && disambiguationChoice !== null && pendingRequirement?.tier !== 'C') {
           explicitConfirm = true;
         }
         let toolCallsAttempted = 0;
@@ -1860,6 +1980,40 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let toolMetadata: Record<string, unknown> | null = null;
         let generationPrompt = contextPayload.prompt;
         if (pendingToolDraft?.draft && actionMode !== 'manual_only' && explicitConfirm) {
+          const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
+          if (!confirmationValidation.ok) {
+            const confirmationMessage = 'message' in confirmationValidation ? confirmationValidation.message : 'Confirmation is required before I can continue.';
+            const doneFrame = {
+              type: 'done',
+              outputText: confirmationMessage,
+              latencyMs: Date.now() - turnStartedAt,
+            };
+            streamEvents.push(doneFrame);
+            writeNdjson(res, doneFrame);
+            persistChatTurnAtomic({
+              sessionId: session.id,
+              userContent: inputText,
+              assistantContent: confirmationMessage,
+              provider: preferred,
+              model: resolvedModel,
+              stream: { events: streamEvents, status: 'done' },
+              metadata: {
+                usage: null,
+                costEstimate: null,
+                completedAt: new Date().toISOString(),
+                correlation: { turn_id: turnCorrelationId, session_id: session.id },
+                context: contextPayload.meta,
+                confirmation_validation: {
+                  ok: false,
+                  tier: (pendingRequirement ?? { tier: 'B' as const }).tier,
+                  expected: pendingRequirement?.examples?.[0] ?? null,
+                },
+              },
+            });
+            persisted = true;
+            res.end();
+            return true;
+          }
           const draftToolName = typeof pendingToolDraft.draft.tool_name === 'string' ? pendingToolDraft.draft.tool_name : '';
           const draftArguments = pendingToolDraft.draft.arguments && typeof pendingToolDraft.draft.arguments === 'object'
             ? { ...(pendingToolDraft.draft.arguments as Record<string, unknown>) }

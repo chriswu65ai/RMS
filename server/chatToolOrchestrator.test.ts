@@ -139,7 +139,15 @@ test('chat tool orchestration enforces archive-only behavior and list-by-status 
     explicitConfirm: false,
   });
   assert.equal(archiveNeedsConfirm.status, 'needs_confirmation');
+  assert.match(archiveNeedsConfirm.narration_after, /\/confirm archive task-2/);
   assert.equal(calls.updateTask.length, 0);
+  assert.deepEqual(calls.drafts.at(-1)?.draft.confirm_requirement, {
+    tier: 'C',
+    action: 'archive',
+    target_id: 'task-2',
+    plain_confirm_allowed: false,
+    examples: ['/confirm archive task-2'],
+  });
 
   const archiveConfirmed = await runChatToolOrchestration(adapter, {
     sessionId: 'session-archive',
@@ -212,6 +220,31 @@ test('chat tool orchestration supports generate_note create and update modes', a
     { instruction: 'Create new overview note', taskId: undefined, noteId: undefined, title: 'Overview' },
     { instruction: 'Refresh numbers', taskId: 'task-2', noteId: 'note-2', title: undefined },
   ]);
+});
+
+test('chat tool orchestration marks note overwrite drafts as Tier C confirmation', async () => {
+  const { adapter, calls } = makeAdapter();
+
+  const needsConfirm = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-note-overwrite',
+    toolCall: {
+      id: 'tool-note-overwrite',
+      name: 'generate_note',
+      arguments: { instruction: 'Rewrite with latest numbers', note_id: 'note-77', title: 'Q2 note' },
+    },
+    explicitConfirm: false,
+  });
+
+  assert.equal(needsConfirm.status, 'needs_confirmation');
+  assert.match(needsConfirm.narration_after, /\/confirm overwrite note-77/);
+  assert.equal(calls.generateNote.length, 0);
+  assert.deepEqual(calls.drafts.at(-1)?.draft.confirm_requirement, {
+    tier: 'C',
+    action: 'overwrite',
+    target_id: 'note-77',
+    plain_confirm_allowed: false,
+    examples: ['/confirm overwrite note-77'],
+  });
 });
 
 test('chat tool orchestration saves missing fields for create_task and allows explicit disambiguation selection follow-up', async () => {
