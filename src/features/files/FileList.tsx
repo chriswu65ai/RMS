@@ -1,4 +1,4 @@
-import { FilePlus2, Paperclip, Pencil, Star, Trash2 } from 'lucide-react';
+import { Circle, FilePlus2, Paperclip, Pencil, Star, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { composeMarkdown, splitFrontmatter } from '../../lib/frontmatter';
 import { getFileTitleIndicators } from './unsavedIndicators';
@@ -195,7 +195,7 @@ export function FileList({ openTemplatePicker }: { openTemplatePicker: () => voi
                   {getFileTitleIndicators({ isStarred: frontmatter.starred === true, isUnsaved: unsavedFileIds.includes(file.id) }).map((indicator) => (
                     indicator === 'starred'
                       ? <span key={`${file.id}-starred`} title="Starred note" aria-label="Starred note"><Star size={12} className="text-amber-500" fill="currentColor" /></span>
-                      : <span key={`${file.id}-unsaved`} className="text-xs font-bold leading-none text-red-500" aria-label="Unsaved changes" title="Unsaved note(s)">!</span>
+                      : <span key={`${file.id}-unsaved`} className="inline-flex items-center text-red-500" aria-label="Unsaved changes" title="Unsaved note(s)"><Circle size={8} className="fill-current" /></span>
                   ))}
                 </p>
                 <p className="line-clamp-1 text-xs text-slate-500">{file.path.split('/').filter(Boolean).join('/') || file.name}</p>

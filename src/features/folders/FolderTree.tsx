@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileText, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Circle, FileText, FolderPlus, PanelLeftClose, PanelLeftOpen, Pencil, Tag, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { createFolder, deleteFolder, renameFolder } from '../../lib/dataApi';
 import { useResearchStore } from '../../hooks/useResearchStore';
@@ -157,7 +157,7 @@ export function FolderTree({
                 {!isTemplatesFolder && <span className="text-xs opacity-70"> ({count})</span>}
               </span>
               {foldersWithUnsaved.has(folder.id) && (
-                <span className="text-xs font-bold leading-none text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes">!</span>
+                <span className="inline-flex items-center text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes"><Circle size={8} className="fill-current" /></span>
               )}
             </span>
           </button>
@@ -242,7 +242,7 @@ export function FolderTree({
         <span className="flex flex-1 items-center justify-between gap-2">
           <span>All notes</span>
           {hasAnyUnsavedNotes && (
-            <span className="text-xs font-bold leading-none text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes">!</span>
+            <span className="inline-flex items-center text-red-500" title="Unsaved note(s)" aria-label="Unsaved changes"><Circle size={8} className="fill-current" /></span>
           )}
         </span>
       </button>
