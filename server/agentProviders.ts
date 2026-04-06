@@ -100,6 +100,74 @@ export interface ProviderAdapter {
   listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult>;
 }
 
+export type ProviderTimeoutSettings = {
+  generateMs: number;
+  toolFirstTurnMs: number;
+  toolFollowupMs: number;
+  listModelsMs: number;
+};
+
+const DEFAULT_PROVIDER_TIMEOUT_SETTINGS: ProviderTimeoutSettings = {
+  generateMs: 45_000,
+  toolFirstTurnMs: 45_000,
+  toolFollowupMs: 45_000,
+  listModelsMs: 15_000,
+};
+
+let providerTimeoutSettings: ProviderTimeoutSettings = { ...DEFAULT_PROVIDER_TIMEOUT_SETTINGS };
+
+const sanitizeTimeoutMs = (value: unknown, fallback: number): number => (
+  typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback
+);
+
+export const setProviderTimeoutSettings = (next?: Partial<ProviderTimeoutSettings> | null) => {
+  providerTimeoutSettings = {
+    generateMs: sanitizeTimeoutMs(next?.generateMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.generateMs),
+    toolFirstTurnMs: sanitizeTimeoutMs(next?.toolFirstTurnMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.toolFirstTurnMs),
+    toolFollowupMs: sanitizeTimeoutMs(next?.toolFollowupMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.toolFollowupMs),
+    listModelsMs: sanitizeTimeoutMs(next?.listModelsMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.listModelsMs),
+  };
+};
+
+const getProviderTimeoutSettings = (): ProviderTimeoutSettings => ({ ...providerTimeoutSettings });
+
+const isAbortLikeError = (error: unknown): boolean => (
+  error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+);
+
+const runWithDeadline = async <T>(
+  parentSignal: AbortSignal | undefined,
+  timeoutMs: number,
+  operationLabel: string,
+  fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onParentAbort = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      onParentAbort();
+    } else {
+      parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+  }
+  try {
+    return await fn(controller.signal);
+  } catch (error) {
+    if (timedOut || (isAbortLikeError(error) && !parentSignal?.aborted)) {
+      throw new Error(`${operationLabel} timed out after ${timeoutMs}ms. Try again or increase provider timeout settings.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+  }
+};
+
 const estimateTokens = (text: string) => Math.max(1, Math.round(text.length / 4));
 
 // Keep both known MiniMax endpoints for regional routing.
@@ -394,35 +462,37 @@ class MinimaxAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const startedAt = Date.now();
-    let response: Response | null = null;
-    for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
-      try {
-        const candidate = await fetch(`${baseUrl}/v1/text/chatcompletion_v2`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: request.model,
-            messages: [{ role: 'user', content: request.inputText }],
-            temperature: request.generationParams?.temperature ?? 0.2,
-            max_tokens: request.generationParams?.maxTokens,
-            stream: true,
-          }),
-          signal,
-        });
-        if (candidate.ok) {
-          response = candidate;
-          break;
+    const { generateMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+      const startedAt = Date.now();
+      let response: Response | null = null;
+      for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
+        try {
+          const candidate = await fetch(`${baseUrl}/v1/text/chatcompletion_v2`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: request.model,
+              messages: [{ role: 'user', content: request.inputText }],
+              temperature: request.generationParams?.temperature ?? 0.2,
+              max_tokens: request.generationParams?.maxTokens,
+              stream: true,
+            }),
+            signal: deadlineSignal,
+          });
+          if (candidate.ok) {
+            response = candidate;
+            break;
+          }
+        } catch {
+          // try next regional endpoint
         }
-      } catch {
-        // try next regional endpoint
       }
-    }
 
-    if (!response?.ok) throw new Error('MiniMax generate failed.');
+      if (!response?.ok) throw new Error('MiniMax generate failed.');
 
     const chunks: string[] = [];
     let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
@@ -504,58 +574,63 @@ class MinimaxAdapter implements ProviderAdapter {
     }
     const outputText = chunks.join('').trim();
     if (!outputText.trim()) throw new Error('MiniMax returned empty output.');
-    return {
-      outputText,
-      usage: {
-        inputTokens: usage?.prompt_tokens,
-        outputTokens: usage?.completion_tokens,
-        totalTokens: usage?.total_tokens,
-      },
-      latencyMs: Date.now() - startedAt,
-    };
+      return {
+        outputText,
+        usage: {
+          inputTokens: usage?.prompt_tokens,
+          outputTokens: usage?.completion_tokens,
+          totalTokens: usage?.total_tokens,
+        },
+        latencyMs: Date.now() - startedAt,
+      };
+    });
   }
 
   async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    const baseRequestBody = {
-      model: request.model,
-      messages: [{ role: 'user', content: request.inputText }],
-      tools: request.tools.map((tool) => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.input_schema,
-        },
-      })),
-      tool_choice: MinimaxAdapter.FORCED_WEB_SEARCH_TOOL_CHOICE,
-      temperature: request.generationParams?.temperature ?? 0.2,
-      max_tokens: request.generationParams?.maxTokens,
-      stream: false,
-    } as const;
+    const { toolFirstTurnMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFirstTurnMs, 'Provider tool first-turn request', async (deadlineSignal) => {
+      const baseRequestBody = {
+        model: request.model,
+        messages: [{ role: 'user', content: request.inputText }],
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.input_schema,
+          },
+        })),
+        tool_choice: MinimaxAdapter.FORCED_WEB_SEARCH_TOOL_CHOICE,
+        temperature: request.generationParams?.temperature ?? 0.2,
+        max_tokens: request.generationParams?.maxTokens,
+        stream: false,
+      } as const;
 
-    const firstAttempt = await this.callToolChat(baseRequestBody, apiKey, signal);
-    if (firstAttempt.toolCalls.some((call) => call.name === 'web_search')) return firstAttempt;
-    if (firstAttempt.toolCalls.length === 0) {
-      const syntheticCall = coerceTextToWebSearchToolCall(firstAttempt.outputText);
-      if (syntheticCall) {
-        return {
-          ...firstAttempt,
-          toolCalls: [{ id: 'minimax-tool-coerced-1', ...syntheticCall }],
-        };
+      const firstAttempt = await this.callToolChat(baseRequestBody, apiKey, deadlineSignal);
+      if (firstAttempt.toolCalls.some((call) => call.name === 'web_search')) return firstAttempt;
+      if (firstAttempt.toolCalls.length === 0) {
+        const syntheticCall = coerceTextToWebSearchToolCall(firstAttempt.outputText);
+        if (syntheticCall) {
+          return {
+            ...firstAttempt,
+            toolCalls: [{ id: 'minimax-tool-coerced-1', ...syntheticCall }],
+          };
+        }
       }
-    }
 
-    return this.callToolChat({
-      ...baseRequestBody,
-      messages: [{
-        role: 'user',
-        content: `${request.inputText}\n\n${MinimaxAdapter.WEB_SEARCH_RETRY_SUFFIX}`,
-      }],
-    }, apiKey, signal);
+      return this.callToolChat({
+        ...baseRequestBody,
+        messages: [{
+          role: 'user',
+          content: `${request.inputText}\n\n${MinimaxAdapter.WEB_SEARCH_RETRY_SUFFIX}`,
+        }],
+      }, apiKey, deadlineSignal);
+    });
   }
 
   async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callToolChat({
+    const { toolFollowupMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFollowupMs, 'Provider tool follow-up request', async (deadlineSignal) => this.callToolChat({
       model: request.model,
       messages: [
         { role: 'user', content: request.inputText },
@@ -588,21 +663,23 @@ class MinimaxAdapter implements ProviderAdapter {
       temperature: request.generationParams?.temperature ?? 0.2,
       max_tokens: request.generationParams?.maxTokens,
       stream: false,
-    }, apiKey, signal);
+    }, apiKey, deadlineSignal));
   }
 
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
-    const paths = ['/v1/models', '/v1/text/models'];
-    let unsupportedOnly = true;
+    const { listModelsMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, listModelsMs, 'Provider model listing request', async (deadlineSignal) => {
+      const paths = ['/v1/models', '/v1/text/models'];
+      let unsupportedOnly = true;
 
-    for (const path of paths) {
-      for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
-        try {
-          const response = await fetch(`${baseUrl}${path}`, {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${apiKey}` },
-            signal,
-          });
+      for (const path of paths) {
+        for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
+          try {
+            const response = await fetch(`${baseUrl}${path}`, {
+              method: 'GET',
+              headers: { Authorization: `Bearer ${apiKey}` },
+              signal: deadlineSignal,
+            });
 
           if (!response.ok) {
             const reason = toReasonCodeFromStatus(response.status);
@@ -642,19 +719,20 @@ class MinimaxAdapter implements ProviderAdapter {
             catalogStatus: 'live',
             reasonCode: 'ok',
           });
-        } catch {
-          unsupportedOnly = false;
+          } catch {
+            unsupportedOnly = false;
+          }
         }
       }
-    }
 
-    return asDiscoveryResult({
-      provider: 'minimax',
-      discoveredModels: [],
-      fallbackModels: options.fallbackModels,
-      preferredModel: options.preferredModel,
-      catalogStatus: unsupportedOnly ? 'unsupported' : 'failed',
-      reasonCode: unsupportedOnly ? 'unsupported_endpoint' : 'network_error',
+      return asDiscoveryResult({
+        provider: 'minimax',
+        discoveredModels: [],
+        fallbackModels: options.fallbackModels,
+        preferredModel: options.preferredModel,
+        catalogStatus: unsupportedOnly ? 'unsupported' : 'failed',
+        reasonCode: unsupportedOnly ? 'unsupported_endpoint' : 'network_error',
+      });
     });
   }
 }
@@ -702,18 +780,22 @@ class OpenAIAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const result = await this.callChatCompletions({
-      model: request.model,
-      messages: [{ role: 'user', content: request.inputText }],
-      temperature: request.generationParams?.temperature,
-      max_tokens: request.generationParams?.maxTokens,
-    }, apiKey, signal, callbacks);
-    if (!result.outputText) throw new Error('OpenAI returned empty output.');
-    return result;
+    const { generateMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+      const result = await this.callChatCompletions({
+        model: request.model,
+        messages: [{ role: 'user', content: request.inputText }],
+        temperature: request.generationParams?.temperature,
+        max_tokens: request.generationParams?.maxTokens,
+      }, apiKey, deadlineSignal, callbacks);
+      if (!result.outputText) throw new Error('OpenAI returned empty output.');
+      return result;
+    });
   }
 
   async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callChatCompletions({
+    const { toolFirstTurnMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFirstTurnMs, 'Provider tool first-turn request', async (deadlineSignal) => this.callChatCompletions({
       model: request.model,
       messages: [{ role: 'user', content: request.inputText }],
       tools: request.tools.map((tool) => ({
@@ -727,11 +809,12 @@ class OpenAIAdapter implements ProviderAdapter {
       tool_choice: 'auto',
       temperature: request.generationParams?.temperature,
       max_tokens: request.generationParams?.maxTokens,
-    }, apiKey, signal);
+    }, apiKey, deadlineSignal));
   }
 
   async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callChatCompletions({
+    const { toolFollowupMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFollowupMs, 'Provider tool follow-up request', async (deadlineSignal) => this.callChatCompletions({
       model: request.model,
       messages: [
         { role: 'user', content: request.inputText },
@@ -763,15 +846,17 @@ class OpenAIAdapter implements ProviderAdapter {
       tool_choice: 'auto',
       temperature: request.generationParams?.temperature,
       max_tokens: request.generationParams?.maxTokens,
-    }, apiKey, signal);
+    }, apiKey, deadlineSignal));
   }
 
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
-    try {
-      const response = await fetch('https://api.openai.com/v1/models', {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal,
-      });
+    const { listModelsMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, listModelsMs, 'Provider model listing request', async (deadlineSignal) => {
+      try {
+        const response = await fetch('https://api.openai.com/v1/models', {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: deadlineSignal,
+        });
       if (!response.ok) {
         return asDiscoveryResult({
           provider: 'openai',
@@ -806,16 +891,17 @@ class OpenAIAdapter implements ProviderAdapter {
         catalogStatus: 'live',
         reasonCode: 'ok',
       });
-    } catch {
-      return asDiscoveryResult({
-        provider: 'openai',
-        discoveredModels: [],
-        fallbackModels: options.fallbackModels,
-        preferredModel: options.preferredModel,
-        catalogStatus: 'failed',
-        reasonCode: 'network_error',
-      });
-    }
+      } catch {
+        return asDiscoveryResult({
+          provider: 'openai',
+          discoveredModels: [],
+          fallbackModels: options.fallbackModels,
+          preferredModel: options.preferredModel,
+          catalogStatus: 'failed',
+          reasonCode: 'network_error',
+        });
+      }
+    });
   }
 }
 
@@ -874,18 +960,22 @@ class AnthropicAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const result = await this.callMessages({
-      model: request.model,
-      max_tokens: request.generationParams?.maxTokens ?? 1024,
-      temperature: request.generationParams?.temperature,
-      messages: [{ role: 'user', content: request.inputText }],
-    }, apiKey, signal, callbacks);
-    if (!result.outputText) throw new Error('Anthropic returned empty output.');
-    return result;
+    const { generateMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+      const result = await this.callMessages({
+        model: request.model,
+        max_tokens: request.generationParams?.maxTokens ?? 1024,
+        temperature: request.generationParams?.temperature,
+        messages: [{ role: 'user', content: request.inputText }],
+      }, apiKey, deadlineSignal, callbacks);
+      if (!result.outputText) throw new Error('Anthropic returned empty output.');
+      return result;
+    });
   }
 
   async generateToolFirstTurn(request: AgentToolTurnRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callMessages({
+    const { toolFirstTurnMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFirstTurnMs, 'Provider tool first-turn request', async (deadlineSignal) => this.callMessages({
       model: request.model,
       max_tokens: request.generationParams?.maxTokens ?? 1024,
       temperature: request.generationParams?.temperature,
@@ -895,11 +985,12 @@ class AnthropicAdapter implements ProviderAdapter {
         description: tool.description,
         input_schema: tool.input_schema,
       })),
-    }, apiKey, signal);
+    }, apiKey, deadlineSignal));
   }
 
   async generateToolFollowupTurn(request: AgentToolContinueRequest, apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    return this.callMessages({
+    const { toolFollowupMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFollowupMs, 'Provider tool follow-up request', async (deadlineSignal) => this.callMessages({
       model: request.model,
       max_tokens: request.generationParams?.maxTokens ?? 1024,
       temperature: request.generationParams?.temperature,
@@ -928,19 +1019,21 @@ class AnthropicAdapter implements ProviderAdapter {
         description: tool.description,
         input_schema: tool.input_schema,
       })),
-    }, apiKey, signal);
+    }, apiKey, deadlineSignal));
   }
 
   async listModels(apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/models', {
-        method: 'GET',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        signal,
-      });
+    const { listModelsMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, listModelsMs, 'Provider model listing request', async (deadlineSignal) => {
+      try {
+        const response = await fetch('https://api.anthropic.com/v1/models', {
+          method: 'GET',
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          signal: deadlineSignal,
+        });
       if (!response.ok) {
         const reason = toReasonCodeFromStatus(response.status);
         return asDiscoveryResult({
@@ -974,16 +1067,17 @@ class AnthropicAdapter implements ProviderAdapter {
         catalogStatus: 'live',
         reasonCode: 'ok',
       });
-    } catch {
-      return asDiscoveryResult({
-        provider: 'anthropic',
-        discoveredModels: [],
-        fallbackModels: options.fallbackModels,
-        preferredModel: options.preferredModel,
-        catalogStatus: 'failed',
-        reasonCode: 'network_error',
-      });
-    }
+      } catch {
+        return asDiscoveryResult({
+          provider: 'anthropic',
+          discoveredModels: [],
+          fallbackModels: options.fallbackModels,
+          preferredModel: options.preferredModel,
+          catalogStatus: 'failed',
+          reasonCode: 'network_error',
+        });
+      }
+    });
   }
 }
 
@@ -1043,27 +1137,29 @@ class OllamaAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const startedAt = Date.now();
-    const baseUrl = normalizeOllamaBaseUrl((request.generationParams as { baseUrl?: string } | undefined)?.baseUrl);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: request.model,
-          prompt: request.inputText,
-          stream: true,
-          options: {
-            temperature: request.generationParams?.temperature,
-            num_predict: request.generationParams?.maxTokens,
-          },
-        }),
-        signal,
-      });
-    } catch {
-      throw new Error(`Ollama unavailable/unreachable at ${baseUrl}.`);
-    }
+    const { generateMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+      const startedAt = Date.now();
+      const baseUrl = normalizeOllamaBaseUrl((request.generationParams as { baseUrl?: string } | undefined)?.baseUrl);
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: request.model,
+            prompt: request.inputText,
+            stream: true,
+            options: {
+              temperature: request.generationParams?.temperature,
+              num_predict: request.generationParams?.maxTokens,
+            },
+          }),
+          signal: deadlineSignal,
+        });
+      } catch {
+        throw new Error(`Ollama unavailable/unreachable at ${baseUrl}.`);
+      }
 
     if (!response.ok) {
       const status = response.status;
@@ -1113,85 +1209,94 @@ class OllamaAdapter implements ProviderAdapter {
     }
     outputText = outputText.trim();
     if (!outputText) throw new Error('Ollama returned empty output.');
-    return {
-      outputText,
-      usage: estimateUsage(request.inputText, outputText),
-      latencyMs: Date.now() - startedAt,
-    };
+      return {
+        outputText,
+        usage: estimateUsage(request.inputText, outputText),
+        latencyMs: Date.now() - startedAt,
+      };
+    });
   }
 
   async generateToolFirstTurn(request: AgentToolTurnRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
-    return this.callChat({
-      model: request.model,
-      stream: false,
-      messages: [{ role: 'user', content: request.inputText }],
-      tools: request.tools.map((tool) => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.input_schema,
+    const { toolFirstTurnMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFirstTurnMs, 'Provider tool first-turn request', async (deadlineSignal) => {
+      const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
+      return this.callChat({
+        model: request.model,
+        stream: false,
+        messages: [{ role: 'user', content: request.inputText }],
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.input_schema,
+          },
+        })),
+        options: {
+          temperature: request.generationParams?.temperature,
+          num_predict: request.generationParams?.maxTokens,
         },
-      })),
-      options: {
-        temperature: request.generationParams?.temperature,
-        num_predict: request.generationParams?.maxTokens,
-      },
-    }, baseUrl, signal);
+      }, baseUrl, deadlineSignal);
+    });
   }
 
   async generateToolFollowupTurn(request: AgentToolContinueRequest, _apiKey: string, signal?: AbortSignal): Promise<AgentToolTurnResponse> {
-    const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
-    return this.callChat({
-      model: request.model,
-      stream: false,
-      messages: [
-        { role: 'user', content: request.inputText },
-        {
-          role: 'assistant',
-          content: '',
-          tool_calls: request.toolCalls.map((call) => ({
-            function: {
-              name: call.name,
-              arguments: call.arguments,
-            },
+    const { toolFollowupMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, toolFollowupMs, 'Provider tool follow-up request', async (deadlineSignal) => {
+      const baseUrl = normalizeOllamaBaseUrl(request.generationParams?.baseUrl);
+      return this.callChat({
+        model: request.model,
+        stream: false,
+        messages: [
+          { role: 'user', content: request.inputText },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: request.toolCalls.map((call) => ({
+              function: {
+                name: call.name,
+                arguments: call.arguments,
+              },
+            })),
+          },
+          ...request.toolResults.map((result) => ({
+            role: 'tool',
+            content: result.result,
           })),
-        },
-        ...request.toolResults.map((result) => ({
-          role: 'tool',
-          content: result.result,
+        ],
+        tools: request.tools.map((tool) => ({
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.input_schema,
+          },
         })),
-      ],
-      tools: request.tools.map((tool) => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.input_schema,
+        options: {
+          temperature: request.generationParams?.temperature,
+          num_predict: request.generationParams?.maxTokens,
         },
-      })),
-      options: {
-        temperature: request.generationParams?.temperature,
-        num_predict: request.generationParams?.maxTokens,
-      },
-    }, baseUrl, signal);
+      }, baseUrl, deadlineSignal);
+    });
   }
 
   async listModels(_apiKey: string, options: { fallbackModels: ModelListEntry[]; preferredModel?: string; baseUrl?: string }, signal?: AbortSignal): Promise<ListModelsResult> {
-    const baseUrl = normalizeOllamaBaseUrl(options.baseUrl);
-    try {
-      const response = await fetch(`${baseUrl}/api/tags`, { method: 'GET', signal });
-      if (!response.ok) {
-        return asDiscoveryResult({
-          provider: 'ollama',
-          discoveredModels: [],
-          fallbackModels: options.fallbackModels,
-          preferredModel: options.preferredModel,
-          catalogStatus: 'failed',
-          reasonCode: 'ollama_unreachable',
-        });
-      }
+    const { listModelsMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, listModelsMs, 'Provider model listing request', async (deadlineSignal) => {
+      const baseUrl = normalizeOllamaBaseUrl(options.baseUrl);
+      try {
+        const response = await fetch(`${baseUrl}/api/tags`, { method: 'GET', signal: deadlineSignal });
+        if (!response.ok) {
+          return asDiscoveryResult({
+            provider: 'ollama',
+            discoveredModels: [],
+            fallbackModels: options.fallbackModels,
+            preferredModel: options.preferredModel,
+            catalogStatus: 'failed',
+            reasonCode: 'ollama_unreachable',
+          });
+        }
       const payload = await response.json() as { models?: Array<{ name?: string; model?: string }> };
       const discovered = uniqueModels((payload.models ?? [])
         .map((entry) => {
@@ -1217,16 +1322,17 @@ class OllamaAdapter implements ProviderAdapter {
         catalogStatus: 'live',
         reasonCode: 'ok',
       });
-    } catch {
-      return asDiscoveryResult({
-        provider: 'ollama',
-        discoveredModels: [],
-        fallbackModels: options.fallbackModels,
-        preferredModel: options.preferredModel,
-        catalogStatus: 'failed',
-        reasonCode: 'ollama_unreachable',
-      });
-    }
+      } catch {
+        return asDiscoveryResult({
+          provider: 'ollama',
+          discoveredModels: [],
+          fallbackModels: options.fallbackModels,
+          preferredModel: options.preferredModel,
+          catalogStatus: 'failed',
+          reasonCode: 'ollama_unreachable',
+        });
+      }
+    });
   }
 }
 
