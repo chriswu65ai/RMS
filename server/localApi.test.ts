@@ -178,6 +178,48 @@ test('saving ollama defaults keeps default_model and local_connection.model in s
   assert.equal(payload.generation_params?.local_connection?.model, 'llama3.2:latest');
 });
 
+test('put agent settings rejects invalid URL fields with a 400 response', async () => {
+  const invalidInterfaceResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: '/xxx',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  assert.equal(invalidInterfaceResponse.status, 400);
+  assert.match(invalidInterfaceResponse.body, /Interface URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+
+  const invalidSearxngResponse = await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      web_search: {
+        enabled: true,
+        provider: 'searxng',
+        mode: 'single',
+        max_results: 6,
+        timeout_ms: 10000,
+        safe_search: false,
+        recency: 'any',
+        domain_policy: 'open_web',
+        source_citation: false,
+        provider_config: {
+          searxng: {
+            base_url: '/xxx',
+            use_json_api: true,
+          },
+        },
+      },
+    },
+  });
+  assert.equal(invalidSearxngResponse.status, 400);
+  assert.match(invalidSearxngResponse.body, /SearXNG base URL must be a valid http:\/\/ or https:\/\/ URL with a hostname\./);
+});
+
 test('saving ollama defaults persists switched model as a single source of truth', async () => {
   const firstSave = await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
@@ -558,6 +600,78 @@ test('generate prepends parsed attachment context under token cap', async () => 
   } finally {
     providerRegistry.minimax.generate = originalGenerate;
   }
+});
+
+test('agent generate preflight predicts truncation and returns diagnostics payload', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const largeBody = 'A'.repeat(10_000);
+  const multipart = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'large.txt',
+    mime_type: 'text/plain',
+  }, {
+    name: 'large.txt',
+    mimeType: 'text/plain',
+    content: Buffer.from(largeBody, 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', multipart.body, multipart.headers);
+
+  const preflight = await callRoute('POST', '/api/agent/generate', {
+    provider: 'minimax',
+    model: 'mini',
+    note_id: noteId,
+    input_text: 'hello',
+    preflight_only: true,
+  });
+  assert.equal(preflight.status, 200);
+  const payload = JSON.parse(preflight.body) as {
+    predicted_truncation: boolean;
+    diagnostics: { total_eligible_attachments: number; partially_included_attachments: number; excluded_attachments: number };
+  };
+  assert.equal(payload.predicted_truncation, true);
+  assert.equal(payload.diagnostics.total_eligible_attachments >= 1, true);
+  assert.equal((payload.diagnostics.partially_included_attachments + payload.diagnostics.excluded_attachments) >= 1, true);
+});
+
+test('agent generate stream emits ingestion diagnostics frame with per-file reasons', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string }; files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+
+  const pendingAttachment = buildMultipartUpload({
+    workspace_id: bootstrapPayload.workspace.id,
+    link_type: 'note',
+    link_id: noteId,
+    original_name: 'pending.pdf',
+    mime_type: 'application/pdf',
+  }, {
+    name: 'pending.pdf',
+    mimeType: 'application/pdf',
+    content: Buffer.from('%PDF-1.7 fake', 'utf8'),
+  });
+  await callRoute('POST', '/api/attachments/upload', pendingAttachment.body, pendingAttachment.headers);
+
+  const response = await callRoute('POST', '/api/agent/generate', {
+    provider: 'minimax',
+    model: 'mini',
+    note_id: noteId,
+    input_text: 'hello',
+  });
+  assert.equal(response.status, 200);
+  const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as {
+    type?: string;
+    diagnostics?: { files?: Array<{ reason?: string }> };
+  });
+  const diagnosticsFrame = frames.find((frame) => frame.type === 'ingestion_diagnostics');
+  assert.equal(Boolean(diagnosticsFrame), true);
+  assert.equal((diagnosticsFrame?.diagnostics?.files ?? []).some((file) => file.reason === 'parse_pending'), true);
 });
 
 test('agent generate keeps attachment context in final provider input on web-search success path', async () => {

@@ -260,6 +260,12 @@ export async function unlinkAttachment(attachmentId: string, linkType: Attachmen
   }));
 }
 
+export async function deleteAttachmentFromWorkspace(attachmentId: string): Promise<ApiResult> {
+  return runAttachmentRequest<ApiResult>('hard_delete', () => fetch(`/api/attachments/${attachmentId}/hard`, {
+    method: 'DELETE',
+  }));
+}
+
 export async function linkAttachment(attachmentId: string, linkType: AttachmentLinkType, linkId: string): Promise<ApiResult> {
   return runAttachmentRequest<ApiResult>('link', () => fetch(`/api/attachments/${attachmentId}/link`, {
     method: 'POST',
@@ -267,6 +273,10 @@ export async function linkAttachment(attachmentId: string, linkType: AttachmentL
     body: JSON.stringify({ link_type: linkType, link_id: linkId }),
   }));
 }
+
+export const getAttachmentOpenUrl = (attachmentId: string) => `/api/attachments/${encodeURIComponent(attachmentId)}/file`;
+
+export const getAttachmentDownloadUrl = (attachmentId: string) => `/api/attachments/${encodeURIComponent(attachmentId)}/file?download=1`;
 
 export async function getAttachmentSettings(): Promise<AttachmentStorageSettings> {
   const response = await fetch('/api/attachments/settings');

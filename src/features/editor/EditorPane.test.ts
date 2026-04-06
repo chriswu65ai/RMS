@@ -15,6 +15,7 @@ import {
   getThinkingPhaseLabel,
   getTableSizeError,
   getThinkingStatusUi,
+  hasIngestionTruncationOrExclusion,
   isUrlLikeSelection,
   mergeSourcesForBubble,
   normalizeThinkingEvent,
@@ -234,6 +235,28 @@ test('thinking badge renders mapped phase label instead of raw enum token', () =
   assert.equal(editorPaneSource.includes('{thinkingPhase}'), false);
 });
 
+test('metadata and task attachment views expose matching open/download actions', () => {
+  const metadataPanelSource = readFileSync(new URL('../metadata/MetadataPanel.tsx', import.meta.url), 'utf8');
+  const taskBoardSource = readFileSync(new URL('../newResearch/NewResearchBoard.tsx', import.meta.url), 'utf8');
+  assert.equal(metadataPanelSource.includes('>Open</a>'), true);
+  assert.equal(metadataPanelSource.includes('>Download</a>'), true);
+  assert.equal(taskBoardSource.includes('>Open</a>'), true);
+  assert.equal(taskBoardSource.includes('>Download</a>'), true);
+});
+
+test('attachment status badge copy stays plain-language and consistent', () => {
+  const attachmentUxSource = readFileSync(new URL('../metadata/attachmentUx.ts', import.meta.url), 'utf8');
+  assert.equal(attachmentUxSource.includes('Not ingested: pending parse'), true);
+  assert.equal(attachmentUxSource.includes('Not ingested: unsupported type'), true);
+  assert.equal(attachmentUxSource.includes('Not ingested: budget exceeded'), true);
+});
+
+test('scoped attachment delete dialog offers link-only and workspace delete options', () => {
+  const dialogSource = readFileSync(new URL('../../components/attachments/AttachmentDeleteDialog.tsx', import.meta.url), 'utf8');
+  assert.equal(dialogSource.includes('Remove from this {contextLabel} only'), true);
+  assert.equal(dialogSource.includes('Delete from workspace (all notes and tasks)'), true);
+});
+
 type ScheduledTimer = { id: number; runAt: number; callback: () => void };
 
 const createTimerHarness = () => {
@@ -356,6 +379,34 @@ test('sources bubble header uses simplified Sources label without explanatory su
     editorPaneSource.includes('Shown as context used during drafting; final markdown Sources list remains citation-driven.'),
     false,
   );
+});
+
+test('ingestion diagnostics warning helper only activates on truncation/exclusion', () => {
+  assert.equal(hasIngestionTruncationOrExclusion({
+    total_eligible_attachments: 2,
+    fully_included_attachments: 2,
+    partially_included_attachments: 0,
+    excluded_attachments: 0,
+    token_budget: 1500,
+    tokens_consumed: 800,
+    files: [],
+  }), false);
+  assert.equal(hasIngestionTruncationOrExclusion({
+    total_eligible_attachments: 2,
+    fully_included_attachments: 1,
+    partially_included_attachments: 1,
+    excluded_attachments: 0,
+    token_budget: 1500,
+    tokens_consumed: 1500,
+    files: [],
+  }), true);
+});
+
+test('editor warning area includes preflight continue flow and diagnostics details toggle', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('Some attachments may be truncated or excluded based on token budget.'), true);
+  assert.equal(editorPaneSource.includes('Continue'), true);
+  assert.equal(editorPaneSource.includes('Show details'), true);
 });
 
 test('malformed or interrupted chunk sequence errors are tolerated and future updates still apply', () => {

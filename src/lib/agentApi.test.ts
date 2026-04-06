@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateText, getChatSettings, listModels, reloadChatProfile, saveChatSettings } from './agentApi.js';
+import { generateText, getChatSettings, listModels, preflightGenerateIngestion, reloadChatProfile, saveChatSettings } from './agentApi.js';
 
 const encoder = new TextEncoder();
 
@@ -130,6 +130,79 @@ test('generateText surfaces search_warning events', async () => {
 
     assert.equal(result.outputText, 'ok');
     assert.deepEqual(warnings, ['provider unavailable']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('generateText forwards ingestion diagnostics frames', async () => {
+  const originalFetch = globalThis.fetch;
+  const seen: Array<{ excluded: number; partial: number }> = [];
+
+  globalThis.fetch = async () => makeNdjsonResponse([
+    JSON.stringify({
+      type: 'ingestion_diagnostics',
+      diagnostics: {
+        total_eligible_attachments: 3,
+        fully_included_attachments: 1,
+        partially_included_attachments: 1,
+        excluded_attachments: 1,
+        token_budget: 1500,
+        tokens_consumed: 1500,
+        files: [],
+      },
+    }),
+    JSON.stringify({ type: 'done', outputText: 'ok' }),
+  ]);
+
+  try {
+    await generateText({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-2',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+      onIngestionDiagnostics: (diagnostics) => seen.push({
+        excluded: diagnostics.excluded_attachments,
+        partial: diagnostics.partially_included_attachments,
+      }),
+    });
+    assert.deepEqual(seen, [{ excluded: 1, partial: 1 }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('preflightGenerateIngestion posts generate preflight contract', async () => {
+  const originalFetch = globalThis.fetch;
+  let seenBody: Record<string, unknown> | null = null;
+  globalThis.fetch = async (_input, init) => {
+    seenBody = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : null;
+    return new Response(JSON.stringify({
+      predicted_truncation: true,
+      diagnostics: {
+        total_eligible_attachments: 1,
+        fully_included_attachments: 0,
+        partially_included_attachments: 1,
+        excluded_attachments: 0,
+        token_budget: 1500,
+        tokens_consumed: 1500,
+        files: [],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    const result = await preflightGenerateIngestion({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      noteId: 'note-preflight',
+      inputText: 'hello',
+      triggerSource: 'manual',
+      saveMode: 'manual_only',
+    });
+    assert.equal(result.predicted_truncation, true);
+    assert.equal(seenBody?.preflight_only, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

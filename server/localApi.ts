@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
@@ -270,6 +270,35 @@ const MAX_LINKS_PER_ENTITY = 5;
 const DEFAULT_ATTACHMENT_QUOTA_MB = 500;
 const DEFAULT_ATTACHMENT_RETENTION_DAYS = 30;
 const ATTACHMENT_CONTEXT_TOKEN_BUDGET = 1_500;
+
+type IngestionDiagnosticReason =
+  | 'included_full'
+  | 'budget_exceeded'
+  | 'parse_pending'
+  | 'parse_failed'
+  | 'unsupported_type'
+  | 'deleted'
+  | 'missing';
+
+type IngestionDiagnosticFile = {
+  attachment_id: string;
+  filename: string;
+  reason: IngestionDiagnosticReason;
+  included_tokens: number;
+  estimated_tokens: number;
+  fully_included: boolean;
+  partially_included: boolean;
+};
+
+type AttachmentIngestionDiagnostics = {
+  total_eligible_attachments: number;
+  fully_included_attachments: number;
+  partially_included_attachments: number;
+  excluded_attachments: number;
+  token_budget: number;
+  tokens_consumed: number;
+  files: IngestionDiagnosticFile[];
+};
 const DEFAULT_PENDING_ACTION_TTL_MS = 30 * 60 * 1000;
 const pendingActionTtlMs = (() => {
   const rawMinutes = Number(process.env.PENDING_ACTION_TTL_MINUTES ?? '30');
@@ -1504,11 +1533,43 @@ const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 's
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-const normalizeEndpointUrl = (value: unknown, fallback: string): string => {
+const hasSupportedEndpointProtocol = (protocol: string): boolean => protocol === 'http:' || protocol === 'https:';
+const normalizeEndpointPath = (pathname: string, options?: { stripSearxngSearchPath?: boolean }): string => {
+  if (options?.stripSearxngSearchPath && /^\/search\/?$/i.test(pathname)) return '';
+  if (pathname === '/') return '';
+  return pathname.replace(/\/+$/, '');
+};
+const tryNormalizeEndpointUrl = (value: string, options?: { stripSearxngSearchPath?: boolean }): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!hasSupportedEndpointProtocol(parsed.protocol) || !parsed.hostname) return null;
+    const normalizedPath = normalizeEndpointPath(parsed.pathname, options);
+    return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+  } catch {
+    return null;
+  }
+};
+const normalizeEndpointUrl = (value: unknown, fallback: string, options?: { stripSearxngSearchPath?: boolean }): string => {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
   if (!trimmed) return fallback;
-  return trimmed.replace(/\/+$/, '') || fallback;
+  return tryNormalizeEndpointUrl(trimmed, options) ?? trimmed;
+};
+const validateRequiredEndpointUrl = (
+  value: unknown,
+  label: string,
+  options?: { stripSearxngSearchPath?: boolean },
+): { ok: true; normalized: string } | { ok: false; message: string } => {
+  if (typeof value !== 'string' || !value.trim()) {
+    return { ok: false, message: `${label} is required.` };
+  }
+  const normalized = tryNormalizeEndpointUrl(value, options);
+  if (!normalized) {
+    return { ok: false, message: `${label} must be a valid http:// or https:// URL with a hostname.` };
+  }
+  return { ok: true, normalized };
 };
 
 const normalizeDomain = (value: unknown): string => {
@@ -2022,7 +2083,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       source_citation: typeof webSearch?.source_citation === 'boolean' ? webSearch.source_citation : false,
       provider_config: {
         searxng: {
-          base_url: normalizeEndpointUrl(searxngConfig?.base_url, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT),
+          base_url: normalizeEndpointUrl(searxngConfig?.base_url, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT, { stripSearxngSearchPath: true }),
           use_json_api: typeof searxngConfig?.use_json_api === 'boolean'
             ? searxngConfig.use_json_api
             : WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT,
@@ -2030,6 +2091,34 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
       },
     },
   };
+};
+
+const validateAgentSettingsUrlFields = (payload: Record<string, unknown>): { ok: true } | { ok: false; message: string } => {
+  const generationParams = payload.generation_params;
+  if (!generationParams || typeof generationParams !== 'object') return { ok: true };
+  const next = generationParams as Record<string, unknown>;
+
+  const localConnection = next.local_connection;
+  if (localConnection && typeof localConnection === 'object') {
+    const result = validateRequiredEndpointUrl((localConnection as Record<string, unknown>).base_url, 'Interface URL');
+    if (!result.ok) return result;
+  }
+
+  const webSearch = next.web_search;
+  if (!webSearch || typeof webSearch !== 'object') return { ok: true };
+  const webSearchRecord = webSearch as Record<string, unknown>;
+  if (webSearchRecord.provider !== 'searxng') return { ok: true };
+  const providerConfig = webSearchRecord.provider_config;
+  if (!providerConfig || typeof providerConfig !== 'object') return { ok: true };
+  const searxng = (providerConfig as Record<string, unknown>).searxng;
+  if (!searxng || typeof searxng !== 'object') return { ok: true };
+  const result = validateRequiredEndpointUrl(
+    (searxng as Record<string, unknown>).base_url,
+    'SearXNG base URL',
+    { stripSearxngSearchPath: true },
+  );
+  if (!result.ok) return result;
+  return { ok: true };
 };
 
 const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider; default_model: string; generation_params?: AgentGenerationParams }): OllamaRuntimeConfig => {
@@ -2163,10 +2252,19 @@ const runAttachmentCleanup = () => {
 const resolvePromptAttachmentsForGeneration = async (input: {
   contextTaskId?: string;
   contextNoteId?: string;
-}): Promise<{ attachmentContextBlock: string; attachmentSources: GenerationSource[] }> => {
+}): Promise<{ attachmentContextBlock: string; attachmentSources: GenerationSource[]; diagnostics: AttachmentIngestionDiagnostics }> => {
   const noteContextIds = new Set<string>();
   const contextTaskId = input.contextTaskId?.trim() ?? '';
   const contextNoteId = input.contextNoteId?.trim() ?? '';
+  const diagnostics: AttachmentIngestionDiagnostics = {
+    total_eligible_attachments: 0,
+    fully_included_attachments: 0,
+    partially_included_attachments: 0,
+    excluded_attachments: 0,
+    token_budget: ATTACHMENT_CONTEXT_TOKEN_BUDGET,
+    tokens_consumed: 0,
+    files: [],
+  };
 
   if (contextTaskId) {
     const task = (await queryJsonAsync<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(
@@ -2175,38 +2273,128 @@ const resolvePromptAttachmentsForGeneration = async (input: {
     if (task?.linked_note_file_id) noteContextIds.add(task.linked_note_file_id);
   }
   if (contextNoteId) noteContextIds.add(contextNoteId);
-  if (noteContextIds.size === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+  if (noteContextIds.size === 0) return { attachmentContextBlock: '', attachmentSources: [], diagnostics };
 
   const noteIdsSql = Array.from(noteContextIds).map((id) => sqlEscape(id)).join(', ');
   const noteAttachments = await queryJsonAsync<Pick<AttachmentLinkRow, 'attachment_id'>>(
     `select attachment_id from attachment_links where link_type = 'note' and link_id in (${noteIdsSql})`,
   );
   const attachmentIds = Array.from(new Set(noteAttachments.map((row) => row.attachment_id).filter(Boolean)));
-  if (attachmentIds.length === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+  diagnostics.total_eligible_attachments = attachmentIds.length;
+  if (attachmentIds.length === 0) return { attachmentContextBlock: '', attachmentSources: [], diagnostics };
 
   const idsSql = attachmentIds.map((id) => sqlEscape(id)).join(', ');
-  const candidates = await queryJsonAsync<AttachmentRow>(
-    `select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`,
+  const allAttachments = await queryJsonAsync<AttachmentRow>(
+    `select * from attachments where id in (${idsSql}) order by created_at asc`,
   );
-  if (candidates.length === 0) return { attachmentContextBlock: '', attachmentSources: [] };
+  const attachmentById = new Map(allAttachments.map((attachment) => [attachment.id, attachment]));
+  attachmentIds.forEach((attachmentId) => {
+    const attachment = attachmentById.get(attachmentId);
+    if (!attachment) {
+      diagnostics.files.push({
+        attachment_id: attachmentId,
+        filename: attachmentId,
+        reason: 'missing',
+        included_tokens: 0,
+        estimated_tokens: 0,
+        fully_included: false,
+        partially_included: false,
+      });
+      return;
+    }
+    if (attachment.deleted_at) {
+      diagnostics.files.push({
+        attachment_id: attachment.id,
+        filename: attachment.original_name,
+        reason: 'deleted',
+        included_tokens: 0,
+        estimated_tokens: Math.max(0, Number(attachment.estimated_tokens ?? 0)),
+        fully_included: false,
+        partially_included: false,
+      });
+      return;
+    }
+    if (attachment.parse_status === 'pending') {
+      diagnostics.files.push({
+        attachment_id: attachment.id,
+        filename: attachment.original_name,
+        reason: 'parse_pending',
+        included_tokens: 0,
+        estimated_tokens: Math.max(0, Number(attachment.estimated_tokens ?? 0)),
+        fully_included: false,
+        partially_included: false,
+      });
+      return;
+    }
+    if (attachment.parse_status === 'failed') {
+      diagnostics.files.push({
+        attachment_id: attachment.id,
+        filename: attachment.original_name,
+        reason: attachment.extension ? 'unsupported_type' : 'parse_failed',
+        included_tokens: 0,
+        estimated_tokens: Math.max(0, Number(attachment.estimated_tokens ?? 0)),
+        fully_included: false,
+        partially_included: false,
+      });
+      return;
+    }
+  });
+  const candidates = allAttachments.filter((attachment) => (
+    !attachment.deleted_at
+    && attachment.parse_status === 'parsed'
+    && typeof attachment.parsed_text === 'string'
+    && attachment.parsed_text.trim().length > 0
+  ));
+  if (candidates.length === 0) {
+    diagnostics.excluded_attachments = diagnostics.files.length;
+    return { attachmentContextBlock: '', attachmentSources: [], diagnostics };
+  }
 
   let consumed = 0;
   const contextLines: string[] = ['[ATTACHMENT_CONTEXT_BEGIN]'];
   const attachmentSources: GenerationSource[] = [];
   candidates.forEach((attachment, index) => {
-    if (!attachment.parsed_text || consumed >= ATTACHMENT_CONTEXT_TOKEN_BUDGET) return;
+    if (!attachment.parsed_text) return;
+    if (consumed >= ATTACHMENT_CONTEXT_TOKEN_BUDGET) {
+      diagnostics.files.push({
+        attachment_id: attachment.id,
+        filename: attachment.original_name,
+        reason: 'budget_exceeded',
+        included_tokens: 0,
+        estimated_tokens: Math.max(0, Number(attachment.estimated_tokens ?? estimateTokens(attachment.parsed_text))),
+        fully_included: false,
+        partially_included: false,
+      });
+      return;
+    }
     const chunkBudgetChars = Math.max(200, (ATTACHMENT_CONTEXT_TOKEN_BUDGET - consumed) * 4);
     const nextChunk = attachment.parsed_text.slice(0, chunkBudgetChars);
     const nextTokens = estimateTokens(nextChunk);
+    const fullTokens = Math.max(1, estimateTokens(attachment.parsed_text));
+    const isPartial = nextChunk.length < attachment.parsed_text.length;
+    diagnostics.files.push({
+      attachment_id: attachment.id,
+      filename: attachment.original_name,
+      reason: isPartial ? 'budget_exceeded' : 'included_full',
+      included_tokens: nextTokens,
+      estimated_tokens: Math.max(fullTokens, Number(attachment.estimated_tokens ?? 0)),
+      fully_included: !isPartial,
+      partially_included: isPartial,
+    });
     consumed += nextTokens;
     attachmentSources.push(toAttachmentGenerationSource(attachment));
     contextLines.push(`### Source ${index + 1}: ${attachment.original_name} [attachment:${attachment.id}]`);
     contextLines.push(nextChunk);
   });
+  diagnostics.tokens_consumed = consumed;
+  diagnostics.fully_included_attachments = diagnostics.files.filter((entry) => entry.fully_included).length;
+  diagnostics.partially_included_attachments = diagnostics.files.filter((entry) => entry.partially_included).length;
+  diagnostics.excluded_attachments = diagnostics.files.filter((entry) => !entry.fully_included && !entry.partially_included).length;
   contextLines.push('[ATTACHMENT_CONTEXT_END]');
   return {
     attachmentContextBlock: contextLines.length > 2 ? contextLines.join('\n\n') : '',
     attachmentSources,
+    diagnostics,
   };
 };
 
@@ -3193,6 +3381,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
         return true;
       }
+      const urlValidation = validateAgentSettingsUrlFields(payload);
+      if (!urlValidation.ok) {
+        writeJson(res, 400, { error: { message: 'message' in urlValidation ? urlValidation.message : 'Invalid URL.' } });
+        return true;
+      }
       let defaultModel = String(payload.default_model ?? '').trim();
       const generationParams = normalizeAgentGenerationParams(payload.generation_params);
       if (provider === 'ollama' && defaultModel && generationParams?.local_connection) {
@@ -3523,6 +3716,37 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'GET' && /^\/api\/attachments\/[^/]+\/file(\?.*)?$/.test(url)) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const attachmentId = parsedUrl.pathname.replace('/api/attachments/', '').replace('/file', '').trim();
+      if (!attachmentId) {
+        writeJson(res, 400, { error: { message: 'attachment id is required.' } });
+        return true;
+      }
+      const attachment = queryJson<AttachmentRow>(`
+        select * from attachments
+        where id = ${sqlEscape(attachmentId)}
+          and deleted_at is null
+        limit 1
+      `)[0];
+      if (!attachment) {
+        writeJson(res, 404, { error: { message: 'Attachment not found.' } });
+        return true;
+      }
+      const filePath = path.resolve(attachmentsRootPath, attachment.storage_relpath);
+      if (!filePath.startsWith(path.resolve(attachmentsRootPath)) || !existsSync(filePath)) {
+        writeJson(res, 404, { error: { message: 'Attachment file not found.' } });
+        return true;
+      }
+      const shouldDownload = parsedUrl.searchParams.get('download') === '1';
+      const safeName = attachment.original_name.replace(/["\r\n]/g, '');
+      res.statusCode = 200;
+      res.setHeader('Content-Type', attachment.mime_type || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `${shouldDownload ? 'attachment' : 'inline'}; filename="${safeName}"`);
+      res.end(readFileSync(filePath));
+      return true;
+    }
+
     if (req.method === 'POST' && /^\/api\/attachments\/[^/]+\/link$/.test(url)) {
       const attachmentId = url.replace('/api/attachments/', '').replace('/link', '').trim();
       const payload = await readJsonBody(req);
@@ -3576,8 +3800,30 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
 
+    if (req.method === 'DELETE' && /^\/api\/attachments\/[^/]+\/hard$/.test(url)) {
+      const attachmentId = url.replace('/api/attachments/', '').replace('/hard', '').trim();
+      if (!attachmentId) {
+        writeJson(res, 400, { error: { message: 'attachment id is required.' } });
+        return true;
+      }
+      const existing = queryJson<AttachmentRow>(`select * from attachments where id = ${sqlEscape(attachmentId)} limit 1`)[0];
+      if (!existing || existing.deleted_at) {
+        writeJson(res, 404, { error: { message: 'Attachment not found.' } });
+        return true;
+      }
+      execSql(`delete from attachment_links where attachment_id = ${sqlEscape(attachmentId)}`);
+      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())}, updated_at = ${sqlEscape(new Date().toISOString())} where id = ${sqlEscape(attachmentId)}`);
+      const filePath = path.resolve(attachmentsRootPath, existing.storage_relpath);
+      if (filePath.startsWith(path.resolve(attachmentsRootPath)) && existsSync(filePath)) {
+        unlinkSync(filePath);
+      }
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
     if (req.method === 'POST' && url === '/api/agent/generate') {
       const payload = await readJsonBody(req);
+      const preflightOnly = Boolean(payload.preflight_only);
       const actionCorrelationId = randomUUID();
       const provider = payload.provider;
       if (!isAgentProvider(provider)) {
@@ -3604,6 +3850,18 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
       const now = new Date().toISOString();
+      if (preflightOnly) {
+        const promptAttachments = await resolvePromptAttachmentsForGeneration({
+          contextTaskId,
+          contextNoteId,
+        });
+        writeJson(res, 200, {
+          diagnostics: promptAttachments.diagnostics,
+          predicted_truncation: promptAttachments.diagnostics.partially_included_attachments > 0
+            || promptAttachments.diagnostics.excluded_attachments > 0,
+        });
+        return true;
+      }
       const startedAt = Date.now();
       emitStructuredLog('agent.generate.started', {
         correlation_id: actionCorrelationId,
@@ -3751,6 +4009,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         });
         attachmentContextBlock = promptAttachments.attachmentContextBlock;
         normalizedSources = [...promptAttachments.attachmentSources];
+        safeWriteNdjson(res, { type: 'ingestion_diagnostics', phase: 'post', diagnostics: promptAttachments.diagnostics });
         preparedInputText = buildPreparedInputText();
         let searchWarningMessage: string | null = null;
         const routingDecision = decideWebSearchRouting(inputText);
