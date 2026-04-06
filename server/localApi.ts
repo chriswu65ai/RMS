@@ -2555,13 +2555,18 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           session_id: session.id,
         },
       }];
+      const requestedDetailedToolSteps = payload.detailed_tool_steps === true;
+      let allowDetailedTraceFrames = requestedDetailedToolSteps;
       let assistantText = '';
       let persisted = false;
       beginNdjson(res);
       const writeRuntimeFrame = (frame: Record<string, unknown>) => {
         const frameType = typeof frame.type === 'string' ? frame.type : '';
         const isTraceFrame = frameType.startsWith('tool_') || frameType.startsWith('response_generation_');
-        if (runtimeSettings.toolTraceVisibility === 'summary' && isTraceFrame) return;
+        if (isTraceFrame) {
+          if (runtimeSettings.toolTraceVisibility === 'summary') return;
+          if (!allowDetailedTraceFrames) return;
+        }
         writeNdjson(res, frame);
       };
       safeWriteNdjson(res, {
@@ -2681,7 +2686,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         }
         const disambiguationChoice = parseDisambiguationChoice(normalizedInputText);
         let resolvedPendingDraft = pendingToolDraft?.draft ? { ...pendingToolDraft.draft } : null;
-        let pendingRequirement = resolvedPendingDraft ? coercePendingConfirmRequirement(resolvedPendingDraft) : null;
+        let pendingRequirement = resolvedPendingDraft ? coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm) : null;
         if (resolvedPendingDraft && disambiguationChoice !== null) {
           const ambiguousMatches = Array.isArray(resolvedPendingDraft.ambiguous_matches)
             ? resolvedPendingDraft.ambiguous_matches as Array<Record<string, unknown>>
@@ -2728,7 +2733,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
               arguments: draftArguments,
             };
             savePendingActionDraft(session.id, pendingToolDraft.action_key, resolvedPendingDraft, 'pending');
-            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft);
+            pendingRequirement = coercePendingConfirmRequirement(resolvedPendingDraft, commandPrefixMap.confirm);
             if (!explicitConfirm) {
               const selectedTicker = typeof selected.ticker === 'string' && selected.ticker.trim().length > 0 ? selected.ticker.trim() : null;
               const selectedTitle = typeof selected.title === 'string' && selected.title.trim().length > 0 ? selected.title.trim() : null;
@@ -2785,7 +2790,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let structuredToolMetadata: ChatToolMetadata | null = null;
         let generationPrompt = contextPayload.prompt;
         if (resolvedPendingDraft && actionMode !== 'manual_only' && explicitConfirm) {
-          const confirmationValidation = validatePendingConfirmation(pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true }, parsedConfirmCommand);
+          allowDetailedTraceFrames = true;
+          const confirmationValidation = validatePendingConfirmation(
+            pendingRequirement ?? { tier: 'B', plain_confirm_allowed: true },
+            parsedConfirmCommand,
+            commandPrefixMap.confirm,
+          );
           if (!confirmationValidation.ok) {
             const confirmationMessage = 'message' in confirmationValidation ? confirmationValidation.message : 'Confirmation is required before I can continue.';
             const doneFrame = {
@@ -2951,6 +2961,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           && supportsToolCalling(preferred, resolvedModel)
           && (!isPrefixModeOn || Boolean(parsedPrefixedCommand))
         ) {
+          if (intentRouting.route === 'action') {
+            allowDetailedTraceFrames = true;
+          }
           if (intentRouting.route === 'ambiguous') {
             const clarificationText = buildActionClarificationQuestion(commandPrefixMap, isPrefixModeOn);
             const routeFrame = {
@@ -2995,6 +3008,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             writeRuntimeFrame(routeFrame);
           }
           if (shouldRunToolPlanning) {
+          allowDetailedTraceFrames = true;
           try {
             const routeFrame = {
               type: 'intent_routing',

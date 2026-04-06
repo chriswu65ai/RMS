@@ -3575,6 +3575,89 @@ test('chat runtime settings hide tool trace frames when detailed_tool_steps is d
   }
 });
 
+test('conversation turns suppress detailed timeline frames by default even when detailed_tool_steps policy is enabled', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'assist',
+      detailed_tool_steps: true,
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'conversation reply', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'how should I think about inflation this year?' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    assert.equal(frames.some((frame) => String(frame.type ?? '').startsWith('response_generation_')), false);
+    assert.equal(frames.some((frame) => String(frame.type ?? '').startsWith('tool_')), false);
+    assert.equal(frames.some((frame) => frame.type === 'done'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('action turns keep detailed timeline frames visible when detailed_tool_steps policy is enabled', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'assist',
+      detailed_tool_steps: true,
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'trace-action-visible-1',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'action reply', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'list my idea tasks', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; route?: string });
+    assert.equal(frames.some((frame) => frame.type === 'intent_routing' && frame.route === 'action'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'response_generation_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'response_generation_completed'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('chat tool orchestration executes approved action and persists structured tool metadata', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

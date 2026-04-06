@@ -115,7 +115,7 @@ export const resolveChatRuntimeSettings = (args: {
     ? (policy.ask_when_missing ?? true) !== false
     : Boolean(requestBody.ask_when_missing);
   const detailedToolSteps = requestBody.detailed_tool_steps === undefined
-    ? policy.detailed_tool_steps !== false
+    ? policy.detailed_tool_steps === true
     : Boolean(requestBody.detailed_tool_steps);
   const webSearchEnabled = requestWebSearchEnabled ?? policyWebSearchEnabled ?? agentWebSearchEnabled;
 

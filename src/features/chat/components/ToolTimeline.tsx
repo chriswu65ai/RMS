@@ -12,10 +12,20 @@ const STATUS_STYLE: Record<ToolTraceEntry['status'], string> = {
 
 export function ToolTimeline({ traces }: { traces: ToolTraceEntry[] }) {
   if (traces.length === 0) return null;
+  const actionableTraceExists = traces.some((trace) => (
+    trace.toolName !== 'response_generation'
+    && trace.toolName !== 'tool_planning'
+  ));
+  const visibleTraces = traces.filter((trace) => (
+    actionableTraceExists
+      ? true
+      : trace.toolName !== 'response_generation'
+  ));
+  if (visibleTraces.length === 0) return null;
 
   return (
     <ol className="mt-2 space-y-2 rounded-lg border border-slate-300 bg-slate-50 p-3">
-      {traces.map((trace) => (
+      {visibleTraces.map((trace) => (
         <li key={trace.id} className="rounded-md border border-slate-200 bg-white p-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{trace.toolName}</span>
