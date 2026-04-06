@@ -24,6 +24,7 @@ type ThinkingStatus = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
 const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
 const THINKING_EVENT_HISTORY_LIMIT = 50;
+const STREAM_UI_THROTTLE_MS = 150;
 type ThinkingPhase = 'waiting' | 'reasoning' | 'tool_running' | 'tool_completed' | 'tool_failed';
 type ThinkingFeedEvent = {
   id: string;
@@ -184,6 +185,10 @@ export function EditorPane() {
   const originalTextByFileIdRef = useRef<Record<string, string | null>>({});
   const preGenerateVisibleTextByFileIdRef = useRef<Record<string, string | null>>({});
   const suppressOnChangeRef = useRef(0);
+  const streamBufferRef = useRef('');
+  const lastAppliedAtRef = useRef(0);
+  const lastAppliedStreamTextRef = useRef('');
+  const streamFlushTimerRef = useRef<number | null>(null);
   const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
   const editorStateByFileIdRef = useRef<Record<string, EditorState | null>>({});
   const parsed = useMemo(
@@ -358,6 +363,13 @@ export function EditorPane() {
 
   useEffect(() => () => {
     Object.keys(thinkingCloseTimerByFileIdRef.current).forEach(clearThinkingCloseTimer);
+  }, []);
+
+  useEffect(() => () => {
+    if (streamFlushTimerRef.current !== null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
   }, []);
 
 
@@ -897,24 +909,54 @@ export function EditorPane() {
     setThinkingMaxAttemptsByFileId((current) => ({ ...current, [file.id]: undefined }));
     setThinkingStartedAtByFileId((current) => ({ ...current, [file.id]: Date.now() }));
     setSearchWarningMessage(null);
+    streamBufferRef.current = '';
+    lastAppliedAtRef.current = 0;
+    lastAppliedStreamTextRef.current = '';
+    if (streamFlushTimerRef.current !== null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
+
+    const flushStreamBuffer = (force: boolean) => {
+      const bufferedText = streamBufferRef.current;
+      if (!bufferedText || (!force && bufferedText === lastAppliedStreamTextRef.current)) return null;
+      const now = Date.now();
+      if (!force && now - lastAppliedAtRef.current < STREAM_UI_THROTTLE_MS) return null;
+      const nextParsed = splitFrontmatter(bufferedText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+      if (selectedFileIdRef.current === targetFileId) {
+        dispatchEditorContent(targetFileId, toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
+        setFrontmatter(nextParsed.frontmatter);
+        setBody(nextParsed.body);
+      }
+      setDraft(targetFileId, {
+        body: nextParsed.body,
+        frontmatter: nextParsed.frontmatter,
+        source: 'generate',
+        updatedAt: now,
+      });
+      lastAppliedAtRef.current = now;
+      lastAppliedStreamTextRef.current = bufferedText;
+      return nextParsed;
+    };
+
+    const scheduleStreamFlush = () => {
+      if (streamFlushTimerRef.current !== null) return;
+      const elapsedSinceApply = Date.now() - lastAppliedAtRef.current;
+      const delay = Math.max(0, STREAM_UI_THROTTLE_MS - elapsedSinceApply);
+      streamFlushTimerRef.current = window.setTimeout(() => {
+        streamFlushTimerRef.current = null;
+        flushStreamBuffer(false);
+      }, delay);
+    };
+
     try {
       const outputText = await startGenerate(targetFileId, {
         inputText: originalText,
         provider: defaultProvider,
         model: defaultModel,
         onProgress: (nextOutputText) => {
-          const nextParsed = splitFrontmatter(nextOutputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
-          if (selectedFileIdRef.current === targetFileId) {
-            dispatchEditorContent(targetFileId, toVisibleEditorText(nextParsed.body, nextParsed.frontmatter), false);
-            setFrontmatter(nextParsed.frontmatter);
-            setBody(nextParsed.body);
-          }
-          setDraft(targetFileId, {
-            body: nextParsed.body,
-            frontmatter: nextParsed.frontmatter,
-            source: 'generate',
-            updatedAt: Date.now(),
-          });
+          streamBufferRef.current = nextOutputText;
+          scheduleStreamFlush();
         },
         onSources: (sources) => {
           setGeneratedSourcesByFileId((current) => ({ ...current, [targetFileId]: sources }));
@@ -946,7 +988,13 @@ export function EditorPane() {
           });
         },
       });
-      const finalParsed = splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
+      if (streamFlushTimerRef.current !== null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
+      streamBufferRef.current = outputText;
+      const finalParsed = flushStreamBuffer(true)
+        ?? splitFrontmatter(outputText, { knownSectors: sectors, knownNoteTypes: noteTypes });
       const finalVisibleText = toVisibleEditorText(finalParsed.body, finalParsed.frontmatter);
       const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
       if (baselineText) {
@@ -995,6 +1043,10 @@ export function EditorPane() {
         setShowGeneratedDraftNotice(true);
       }
     } catch (error) {
+      if (streamFlushTimerRef.current !== null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
       const isCancelled = error instanceof Error && error.name === 'AbortError';
       if (isCancelled) {
         const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
