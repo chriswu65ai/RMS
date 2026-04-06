@@ -1,8 +1,9 @@
 import { SendHorizonal, Square } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 export function ChatComposer({ running, onSend, onCancel }: { running: boolean; onSend: (text: string) => void; onCancel: () => void }) {
   const [draft, setDraft] = useState('');
+  const textareaId = useId();
 
   const submit = () => {
     const trimmed = draft.trim();
@@ -14,9 +15,13 @@ export function ChatComposer({ running, onSend, onCancel }: { running: boolean; 
   return (
     <div className="border-t border-slate-200 bg-white/90 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-3 backdrop-blur">
       <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+        <label className="sr-only" htmlFor={textareaId}>
+          Message
+        </label>
         <textarea
+          id={textareaId}
           className="input max-h-40 min-h-[56px] resize-y"
-          placeholder="Message the assistant… (type “fail” to test retry/error)"
+          placeholder="Type your message…"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
