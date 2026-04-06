@@ -13,6 +13,7 @@ const makeAdapter = () => {
   const calls = {
     listTasks: 0,
     createTask: [] as Array<Record<string, unknown>>,
+    resolveAllowedNoteTypes: 0,
     updateTask: [] as Array<{ taskId: string; patch: Record<string, unknown> }>,
     generateNote: [] as Array<Record<string, unknown>>,
     drafts: [] as Array<{ sessionId: string; actionKey: string; draft: Record<string, unknown>; status?: string }>,
@@ -22,6 +23,10 @@ const makeAdapter = () => {
     listTasks: async () => {
       calls.listTasks += 1;
       return sampleTasks;
+    },
+    resolveAllowedNoteTypes: async () => {
+      calls.resolveAllowedNoteTypes += 1;
+      return ['Research', 'Event', 'Earnings'];
     },
     createTask: async (input) => {
       calls.createTask.push(input as unknown as Record<string, unknown>);
@@ -197,7 +202,7 @@ test('chat tool orchestration supports generate_note create and update modes', a
     toolCall: {
       id: 'tool-note-2',
       name: 'generate_note',
-      arguments: { instruction: 'Create new overview note', title: 'Overview' },
+      arguments: { instruction: 'Create new overview note', title: 'Overview', note_type: 'research' },
     },
     explicitConfirm: true,
   });
@@ -217,7 +222,7 @@ test('chat tool orchestration supports generate_note create and update modes', a
   assert.equal(updateMode.status, 'executed');
   assert.match(updateMode.narration_after, /Note updated successfully/);
   assert.deepEqual(calls.generateNote, [
-    { instruction: 'Create new overview note', taskId: undefined, noteId: undefined, title: 'Overview' },
+    { instruction: 'Create new overview note', taskId: undefined, noteId: undefined, title: 'Overview', note_type: 'Research' },
     { instruction: 'Refresh numbers', taskId: 'task-2', noteId: 'note-2', title: undefined },
   ]);
 });
@@ -308,4 +313,47 @@ test('chat tool orchestration rejects missing required fields when askWhenInfoMi
   assert.equal(missingCreateFields.status, 'rejected');
   assert.deepEqual(missingCreateFields.missing_fields, ['title', 'note_type']);
   assert.equal(calls.drafts.length, 0);
+});
+
+
+test('create_task missing note_type asks with suggestions and invalid note_type is rejected with allowed options', async () => {
+  const { adapter } = makeAdapter();
+
+  const missing = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-note-missing',
+    toolCall: { id: 'tool-missing-note-type', name: 'create_task', arguments: { ticker: 'AAPL', title: 'Missing type' } },
+    explicitConfirm: true,
+  });
+  assert.equal(missing.status, 'needs_confirmation');
+  assert.match(missing.narration_after, /Allowed note types: Research, Event, Earnings/);
+
+  const invalid = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-note-invalid',
+    toolCall: { id: 'tool-invalid-note-type', name: 'create_task', arguments: { ticker: 'AAPL', title: 'Bad type', note_type: 'unknown' } },
+    explicitConfirm: true,
+    askWhenInfoMissing: false,
+  });
+  assert.equal(invalid.status, 'rejected');
+  assert.match(invalid.narration_after, /Allowed note types: Research, Event, Earnings/);
+});
+
+test('generate_note create flow is blocked until valid note_type is provided', async () => {
+  const { adapter, calls } = makeAdapter();
+  const blocked = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-generate-blocked',
+    toolCall: { id: 'tool-generate-blocked', name: 'generate_note', arguments: { instruction: 'Draft now', title: 'Draft' } },
+    explicitConfirm: true,
+  });
+  assert.equal(blocked.status, 'needs_confirmation');
+  assert.deepEqual(blocked.missing_fields, ['note_type']);
+  assert.equal(calls.generateNote.length, 0);
+
+  const corrected = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-generate-corrected',
+    toolCall: { id: 'tool-generate-corrected', name: 'generate_note', arguments: { instruction: 'Draft now', title: 'Draft', note_type: 'event' } },
+    explicitConfirm: true,
+  });
+  assert.equal(corrected.status, 'executed');
+  assert.equal(calls.generateNote.at(-1)?.note_type, 'Event');
+  assert.match(corrected.narration_after, /note_type: Event/);
 });

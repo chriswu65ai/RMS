@@ -17,6 +17,7 @@ import {
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
+import { resolveAllowedNoteTypes, resolveCanonicalNoteType, resolveTemplateForNoteType, stripSimpleFrontmatter } from './noteTypeResolver';
 import { processResponseCitations } from './response/citation_pipeline';
 import {
   toAttachmentGenerationSource,
@@ -1501,6 +1502,19 @@ const normalizeTaskDateCompleted = (dateCompleted: unknown, status: NewResearchT
   return String(dateCompleted ?? '').trim();
 };
 
+const loadAllowedNoteTypesFromMetadata = async (): Promise<string[]> => {
+  const settingsRow = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
+  const profile = parseJsonOrNull<Record<string, unknown>>(settingsRow.profile_json) ?? {};
+  const settingsNoteTypes = profile.noteTypes;
+  const discoveredRows = await queryJsonAsync<Pick<NewResearchTaskRow, 'note_type'>>("select distinct note_type from new_research_tasks where trim(note_type) != ''");
+  return resolveAllowedNoteTypes({
+    settingsNoteTypes,
+    discoveredTaskNoteTypes: discoveredRows.map((row) => String(row.note_type ?? '').trim()).filter(Boolean),
+  });
+};
+
+const normalizeTaskNoteType = (value: unknown, allowedNoteTypes: string[]): string | null => resolveCanonicalNoteType(value, allowedNoteTypes);
+
 const VALID_PROVIDERS: AgentProvider[] = ['minimax', 'openai', 'anthropic', 'ollama'];
 const isAgentProvider = (value: unknown): value is AgentProvider => typeof value === 'string' && VALID_PROVIDERS.includes(value as AgentProvider);
 const providerLabel = (provider: AgentProvider) => {
@@ -1949,6 +1963,7 @@ const appendChatToolActivity = (input: {
 };
 
 const buildChatToolAdapter = (sessionId: string) => ({
+  resolveAllowedNoteTypes: async () => loadAllowedNoteTypesFromMetadata(),
   listTasks: async () => queryJson<NewResearchTaskRow>(
     'select * from new_research_tasks order by created_at desc',
   ).map((task) => {
@@ -1977,7 +1992,9 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const now = new Date().toISOString();
     const id = randomUUID();
     const ticker = input.ticker.trim().toUpperCase();
-    const noteType = input.note_type.trim().toLowerCase();
+    const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+    const noteType = normalizeTaskNoteType(input.note_type, allowedNoteTypes);
+    if (!noteType) throw new Error(`Invalid note_type. Allowed values: ${allowedNoteTypes.join(', ')}.`);
     const priority = VALID_TASK_PRIORITIES.has(input.priority ?? '') ? (input.priority ?? '') : '';
     await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     recordTaskEvent(id, 'create', `Task created via chat orchestration (${ticker} — ${input.title}).`);
@@ -1999,7 +2016,11 @@ const buildChatToolAdapter = (sessionId: string) => ({
     if (!existing) throw new Error('Task not found.');
     const now = new Date().toISOString();
     const nextTicker = typeof patch.ticker === 'string' ? patch.ticker.trim().toUpperCase() : existing.ticker;
-    const nextNoteType = typeof patch.note_type === 'string' ? patch.note_type.trim().toLowerCase() : existing.note_type;
+    const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+    const nextNoteType = typeof patch.note_type === 'string'
+      ? normalizeTaskNoteType(patch.note_type, allowedNoteTypes)
+      : existing.note_type;
+    if (typeof patch.note_type === 'string' && !nextNoteType) throw new Error(`Invalid note_type. Allowed values: ${allowedNoteTypes.join(', ')}.`);
     const nextPriorityCandidate = typeof patch.priority === 'string' ? patch.priority.trim().toLowerCase() : existing.priority;
     const nextPriority = VALID_TASK_PRIORITIES.has(nextPriorityCandidate) ? nextPriorityCandidate : existing.priority;
     const nextStatus = patch.status === 'ideas' || patch.status === 'researching' || patch.status === 'completed'
@@ -2032,26 +2053,33 @@ const buildChatToolAdapter = (sessionId: string) => ({
       linked_note_path: normalized.linked_note_path,
     };
   },
-  generateNote: async (input: { instruction: string; taskId?: string; noteId?: string; title?: string }) => {
+  generateNote: async (input: { instruction: string; taskId?: string; noteId?: string; title?: string; note_type?: string }) => {
     const now = new Date().toISOString();
     if (input.noteId) {
       const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(input.noteId)} limit 1`)[0];
       if (!existing) throw new Error('Note not found.');
       const nextContent = [existing.content || '', '', `## Chat instruction`, input.instruction].join('\n').trim();
       await execSqlAsync(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
-      return { note_id: existing.id, note_path: existing.path, task_id: input.taskId, action: 'updated' as const };
+      return { note_id: existing.id, note_path: existing.path, task_id: input.taskId, action: 'updated' as const, note_type: input.note_type ?? null, template_path: null };
     }
     const workspace = ensureWorkspaceWithStarterContent();
+    const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+    const canonicalNoteType = normalizeTaskNoteType(input.note_type, allowedNoteTypes);
+    if (!canonicalNoteType) throw new Error(`Invalid note_type. Allowed values: ${allowedNoteTypes.join(', ')}.`);
+    const templates = await queryJsonAsync<ResearchNoteRow>(`select * from research_notes where workspace_id = ${sqlEscape(workspace.id)} and is_template = 1 order by path asc`);
+    const template = resolveTemplateForNoteType(templates.map((row) => ({ ...row, frontmatter_json: row.frontmatter_json ? JSON.parse(row.frontmatter_json) as Record<string, unknown> : null })), canonicalNoteType);
     const noteId = randomUUID();
     const inferredTitle = (input.title?.trim() || `Chat Draft ${new Date().toISOString().slice(0, 10)}`);
     const safeTitle = inferredTitle.replace(/[\\/:*?"<>|]/g, '').trim() || 'Chat Draft';
     const notePath = `${safeTitle}.md`;
-    await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+    const templateBody = template ? stripSimpleFrontmatter(template.content) : '';
+    const noteContent = [`# ${safeTitle}`, '', input.instruction, templateBody].filter((part) => part && part.trim()).join('\n\n');
+    await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(noteContent)}, ${sqlEscape(JSON.stringify({ type: canonicalNoteType }))}, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     if (input.taskId) {
       await execSqlAsync(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(input.taskId, 'link', `Linked generated note via chat orchestration: ${notePath}.`);
     }
-    return { note_id: noteId, note_path: notePath, task_id: input.taskId, action: 'created' as const };
+    return { note_id: noteId, note_path: notePath, task_id: input.taskId, action: 'created' as const, note_type: canonicalNoteType, template_path: template?.path ?? null };
   },
   savePendingActionDraft: async (targetSessionId: string, actionKey: string, draft: Record<string, unknown>, status?: 'pending' | 'confirmed' | 'cancelled') => {
     savePendingActionDraft(targetSessionId, actionKey, draft, status ?? 'pending');
@@ -2782,6 +2810,41 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             }
           }
         }
+        if (resolvedPendingDraft && payload.tool_arguments && typeof payload.tool_arguments === 'object' && !explicitConfirm) {
+          const incomingToolArgs = payload.tool_arguments as Record<string, unknown>;
+          const mergedArguments = {
+            ...(resolvedPendingDraft.arguments && typeof resolvedPendingDraft.arguments === 'object'
+              ? resolvedPendingDraft.arguments as Record<string, unknown>
+              : {}),
+            ...incomingToolArgs,
+          };
+          resolvedPendingDraft = { ...resolvedPendingDraft, arguments: mergedArguments };
+          savePendingActionDraft(session.id, pendingToolDraft?.action_key ?? 'chat_tool:pending', resolvedPendingDraft, 'pending');
+          const followupText = 'Updated the pending draft with your field corrections. Reply /confirm when ready to execute.';
+          const doneFrame = { type: 'done', outputText: followupText, latencyMs: Date.now() - turnStartedAt };
+          streamEvents.push(doneFrame);
+          safeWriteNdjson(res, doneFrame);
+          persistChatTurnAtomic({
+            sessionId: session.id,
+            userContent: inputText,
+            assistantContent: followupText,
+            provider: preferred,
+            model: resolvedModel,
+            stream: { events: streamEvents, status: 'done' },
+            metadata: {
+              usage: null,
+              costEstimate: null,
+              completedAt: new Date().toISOString(),
+              correlation: { turn_id: turnCorrelationId, session_id: session.id },
+              context: contextPayload.meta,
+              pending_action: { updated_fields: Object.keys(incomingToolArgs) },
+            },
+          });
+          persisted = true;
+          res.end();
+          return true;
+        }
+
         let toolCallsAttempted = 0;
         let toolCallsSucceeded = 0;
         let toolNarrationBefore = '';
@@ -4379,7 +4442,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const now = new Date().toISOString();
       const id = randomUUID();
-      const noteType = String(payload.note_type ?? '').trim();
+      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+      const noteType = normalizeTaskNoteType(payload.note_type, allowedNoteTypes);
+      if (!noteType) {
+        writeJson(res, 400, { error: { message: `Valid note_type is required. Allowed values: ${allowedNoteTypes.join(', ')}.` } });
+        return true;
+      }
       await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(normalizedStatus)}, ${sqlEscape(normalizedDateCompleted)}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(nextLinkedFile)}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(id, 'create', 'Task created.');
       const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
@@ -4418,7 +4486,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
-      const noteType = String(payload.note_type ?? existing.note_type).trim();
+      const allowedNoteTypes = await loadAllowedNoteTypesFromMetadata();
+      const noteType = payload.note_type === undefined
+        ? existing.note_type
+        : normalizeTaskNoteType(payload.note_type, allowedNoteTypes);
+      if (!noteType) {
+        writeJson(res, 400, { error: { message: `Valid note_type is required. Allowed values: ${allowedNoteTypes.join(', ')}.` } });
+        return true;
+      }
       const normalizedStatus = normalizeTaskStatus(payload.status, normalizeTaskStatus(existing.status));
       const normalizedDateCompleted = normalizeTaskDateCompleted(payload.date_completed ?? existing.date_completed, normalizedStatus);
       await execSqlAsync(`update new_research_tasks set

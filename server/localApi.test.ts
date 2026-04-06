@@ -4511,3 +4511,79 @@ test('chat purge range and export stay consistent after purge-all', async () => 
   assert.equal((exportAfterPayload.messages?.length ?? 0), 0);
   assert.equal((exportAfterPayload.pending_actions?.length ?? 0), 0);
 });
+
+test('task API canonicalizes note_type and rejects invalid values with allowed options', async () => {
+  const created = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'msft',
+    title: 'Canonical note type',
+    note_type: 'research',
+  });
+  assert.equal(created.status, 200);
+  const createdPayload = JSON.parse(created.body) as { note_type: string };
+  assert.equal(createdPayload.note_type, 'Research');
+
+  const invalid = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'msft',
+    title: 'Invalid note type',
+    note_type: 'not-a-type',
+  });
+  assert.equal(invalid.status, 400);
+  assert.match(invalid.body, /Allowed values:/i);
+});
+
+test('chat generate_note create flow requires valid note_type and allows correcting pending draft field without restart', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'chat-tool-note-missing-type',
+      name: 'generate_note',
+      arguments: { instruction: 'Draft with template routing', title: 'Routing Draft' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'Completed generate note flow.', latencyMs: 1 });
+  try {
+    const first = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'create a new routed note',
+      explicit_confirm: true,
+    });
+    assert.equal(first.status, 200);
+    const firstFrames = first.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; outputText?: string });
+    assert.equal(firstFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'needs_confirmation'), true);
+    assert.match(firstFrames.find((frame) => frame.type === 'done')?.outputText ?? '', /Allowed note types:/i);
+
+    const correction = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: 'set note type to event',
+      tool_arguments: { note_type: 'event' },
+      explicit_confirm: false,
+    });
+    assert.equal(correction.status, 200);
+    const correctionFrames = correction.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    assert.match(correctionFrames.find((frame) => frame.type === 'done')?.outputText ?? '', /Updated the pending draft with your field corrections/i);
+
+    const confirm = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: '/confirm',
+      explicit_confirm: true,
+    });
+    assert.equal(confirm.status, 200);
+    const confirmFrames = confirm.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; outputText?: string });
+    assert.equal(confirmFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+    assert.match(confirmFrames.find((frame) => frame.type === 'tool_call_result') ? JSON.stringify(confirmFrames.find((frame) => frame.type === 'tool_call_result')) : '', /"note_type":"Event"/);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
