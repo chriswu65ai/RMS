@@ -105,6 +105,13 @@ const mapApiMessage = (message: ChatApiMessage): ChatMessage | null => {
   };
 };
 
+const mergeLatestMessages = (existing: ChatMessage[], latest: ChatMessage[]): ChatMessage[] => {
+  if (latest.length === 0) return existing;
+  const latestIds = new Set(latest.map((message) => message.id));
+  const preservedPrefix = existing.filter((message) => !latestIds.has(message.id) && message.createdAt < latest[0]!.createdAt);
+  return [...preservedPrefix, ...latest];
+};
+
 const asErrorMessage = async (response: Response) => {
   try {
     const payload = await response.json() as { error?: { message?: string } | null };
@@ -185,6 +192,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return response.json() as Promise<ChatMessagesResponse>;
   };
 
+  const refreshLatestMessages = async () => {
+    const payload = await loadMessagesPage();
+    const mapped = (payload.messages ?? []).map(mapApiMessage).filter((entry): entry is ChatMessage => Boolean(entry));
+    set((state) => ({
+      messages: mergeLatestMessages(state.messages, mapped),
+      hasOlderMessages: mapped.length >= PAGE_SIZE,
+    }));
+  };
+
   const store: ChatStore = {
     messages: [],
     running: false,
@@ -215,7 +231,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const oldest = get().messages[0];
       if (!oldest) return;
       try {
-        const payload = await loadMessagesPage(oldest.id);
+        const payload = await loadMessagesPage(new Date(oldest.createdAt).toISOString());
         const mapped = (payload.messages ?? []).map(mapApiMessage).filter((entry): entry is ChatMessage => Boolean(entry));
         const knownIds = new Set(get().messages.map((message) => message.id));
         const deduped = mapped.filter((message) => !knownIds.has(message.id));
@@ -282,6 +298,115 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffered = '';
+        const handlePayload = async (payload: StreamPayload) => {
+          if (payload.type === 'delta') {
+            set((state) => ({
+              messages: updateMessage(state.messages, assistantMessageId, (message) => ({
+                ...message,
+                text: `${message.text}${payload.deltaText ?? ''}`,
+              })),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_call_started') {
+            const traceId = pickToolCallId(payload);
+            set((state) => ({
+              messages: upsertTrace(state.messages, assistantMessageId, {
+                id: traceId,
+                toolName: pickToolName(payload),
+                status: 'running',
+                detail: pickNarrationDetail(payload, 'Tool call started.'),
+                startedAt: now(),
+              }),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_planning_result' && Array.isArray(payload.planned_tool_calls)) {
+            set((state) => ({
+              messages: payload.planned_tool_calls.reduce<ChatMessage[]>((messages, plannedCall) => {
+                const traceId = typeof plannedCall.id === 'string' && plannedCall.id.trim()
+                  ? plannedCall.id
+                  : makeId();
+                return upsertTrace(messages, assistantMessageId, {
+                  id: traceId,
+                  toolName: typeof plannedCall.name === 'string' && plannedCall.name.trim()
+                    ? plannedCall.name
+                    : 'tool',
+                  status: 'pending',
+                  detail: 'Planned tool action.',
+                  startedAt: now(),
+                });
+              }, state.messages),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_call_result') {
+            const traceId = pickToolCallId(payload);
+            set((state) => ({
+              messages: updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                traceId,
+                mapTerminalTraceStatus(payload, 'completed'),
+                pickNarrationDetail(payload, 'Tool call completed.'),
+                pickToolName(payload),
+              ),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'tool_call_failed') {
+            const traceId = pickToolCallId(payload);
+            set((state) => ({
+              messages: updateTraceStatus(
+                state.messages,
+                assistantMessageId,
+                traceId,
+                mapTerminalTraceStatus(payload, 'failed'),
+                pickNarrationDetail(payload, 'Tool call failed.'),
+                pickToolName(payload),
+              ),
+            }));
+            return false;
+          }
+
+          if (payload.type === 'done') {
+            set((state) => ({
+              running: false,
+              messages: updateMessage(state.messages, assistantMessageId, (message) => ({
+                ...message,
+                text: payload.outputText ?? message.text,
+                status: 'idle',
+                traces: message.traces.map((trace) => trace.status === 'running'
+                  ? { ...trace, status: 'completed', detail: 'Output finalized.', endedAt: now() }
+                  : trace),
+              })),
+            }));
+            activeStream = null;
+            await refreshLatestMessages();
+            return true;
+          }
+
+          if (payload.type === 'error') {
+            const errorMessage = payload.message ?? 'The stream failed before completion. You can retry.';
+            set((state) => ({
+              running: false,
+              lastError: errorMessage,
+              messages: updateMessage(markRunningTraces(state.messages, assistantMessageId, 'failed', 'Tool failed before completion.'), assistantMessageId, (message) => ({
+                ...message,
+                status: 'error',
+                errorMessage,
+              })),
+            }));
+            activeStream = null;
+            return true;
+          }
+
+          return false;
+        };
 
         while (true) {
           const { value, done } = await reader.read();
@@ -299,111 +424,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
             } catch {
               continue;
             }
+            if (await handlePayload(payload)) return;
+          }
+        }
 
-            if (payload.type === 'delta') {
-              set((state) => ({
-                messages: updateMessage(state.messages, assistantMessageId, (message) => ({
-                  ...message,
-                  text: `${message.text}${payload.deltaText ?? ''}`,
-                })),
-              }));
-              continue;
-            }
-
-            if (payload.type === 'tool_call_started') {
-              const traceId = pickToolCallId(payload);
-              set((state) => ({
-                messages: upsertTrace(state.messages, assistantMessageId, {
-                  id: traceId,
-                  toolName: pickToolName(payload),
-                  status: 'running',
-                  detail: pickNarrationDetail(payload, 'Tool call started.'),
-                  startedAt: now(),
-                }),
-              }));
-              continue;
-            }
-
-            if (payload.type === 'tool_planning_result' && Array.isArray(payload.planned_tool_calls)) {
-              set((state) => ({
-                messages: payload.planned_tool_calls.reduce<ChatMessage[]>((messages, plannedCall) => {
-                  const traceId = typeof plannedCall.id === 'string' && plannedCall.id.trim()
-                    ? plannedCall.id
-                    : makeId();
-                  return upsertTrace(messages, assistantMessageId, {
-                    id: traceId,
-                    toolName: typeof plannedCall.name === 'string' && plannedCall.name.trim()
-                      ? plannedCall.name
-                      : 'tool',
-                    status: 'pending',
-                    detail: 'Planned tool action.',
-                    startedAt: now(),
-                  });
-                }, state.messages),
-              }));
-              continue;
-            }
-
-            if (payload.type === 'tool_call_result') {
-              const traceId = pickToolCallId(payload);
-              set((state) => ({
-                messages: updateTraceStatus(
-                  state.messages,
-                  assistantMessageId,
-                  traceId,
-                  mapTerminalTraceStatus(payload, 'completed'),
-                  pickNarrationDetail(payload, 'Tool call completed.'),
-                  pickToolName(payload),
-                ),
-              }));
-              continue;
-            }
-
-            if (payload.type === 'tool_call_failed') {
-              const traceId = pickToolCallId(payload);
-              set((state) => ({
-                messages: updateTraceStatus(
-                  state.messages,
-                  assistantMessageId,
-                  traceId,
-                  mapTerminalTraceStatus(payload, 'failed'),
-                  pickNarrationDetail(payload, 'Tool call failed.'),
-                  pickToolName(payload),
-                ),
-              }));
-              continue;
-            }
-
-            if (payload.type === 'done') {
-              set((state) => ({
-                running: false,
-                messages: updateMessage(state.messages, assistantMessageId, (message) => ({
-                  ...message,
-                  text: payload.outputText ?? message.text,
-                  status: 'idle',
-                  traces: message.traces.map((trace) => trace.status === 'running'
-                    ? { ...trace, status: 'completed', detail: 'Output finalized.', endedAt: now() }
-                    : trace),
-                })),
-              }));
-              activeStream = null;
-              return;
-            }
-
-            if (payload.type === 'error') {
-              const errorMessage = payload.message ?? 'The stream failed before completion. You can retry.';
-              set((state) => ({
-                running: false,
-                lastError: errorMessage,
-                messages: updateMessage(markRunningTraces(state.messages, assistantMessageId, 'failed', 'Tool failed before completion.'), assistantMessageId, (message) => ({
-                  ...message,
-                  status: 'error',
-                  errorMessage,
-                })),
-              }));
-              activeStream = null;
-              return;
-            }
+        const trailing = buffered.trim();
+        if (trailing) {
+          try {
+            const payload = JSON.parse(trailing) as StreamPayload;
+            if (await handlePayload(payload)) return;
+          } catch {
+            // Ignore trailing non-JSON buffer content.
           }
         }
 
@@ -417,6 +448,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               : trace),
           })),
         }));
+        await refreshLatestMessages();
       } catch (error) {
         if (abortController.signal.aborted) return;
         const errorMessage = error instanceof Error ? error.message : 'The stream failed before completion. You can retry.';
