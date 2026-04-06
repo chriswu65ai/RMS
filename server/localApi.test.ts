@@ -4187,6 +4187,55 @@ test('Tier C note overwrite requires /confirm overwrite <note_id>', async () => 
   }
 });
 
+test('pending generate_note draft recalculates Tier C confirmation after tool_arguments add note_id', async () => {
+  await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {
+      local_connection: { base_url: 'http://localhost:11434', model: 'llama3.2:latest', B: 1 },
+    },
+  });
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { files: Array<{ id: string }> };
+  const noteId = bootstrapPayload.files[0]?.id ?? '';
+  assert.equal(Boolean(noteId), true);
+  const originalFirstTurn = providerRegistry.openai.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    providerRegistry.openai.generateToolFirstTurn = async () => ({
+      outputText: '',
+      latencyMs: 1,
+      toolCalls: [{
+        id: 'tier-b-to-c-overwrite',
+        name: 'generate_note',
+        arguments: { instruction: 'Draft initial note', title: 'Tier transition', note_type: 'Research' },
+      }],
+    });
+    await callRoute('POST', '/api/chat/session/current/messages', { content: 'draft a new note' });
+    providerRegistry.openai.generateToolFirstTurn = async () => ({ outputText: '', latencyMs: 1, toolCalls: [] });
+
+    const correction = await callRoute('POST', '/api/chat/session/current/messages', {
+      content: `actually overwrite existing note ${noteId}`,
+      tool_arguments: { note_id: noteId },
+      explicit_confirm: false,
+    });
+    assert.equal(correction.status, 200);
+    assert.match(correction.body, /Tier C.*\/confirm overwrite/i);
+
+    const stalePlain = await callRoute('POST', '/api/chat/session/current/messages', { content: '/confirm' });
+    assert.match(stalePlain.body, /Tier C.*\/confirm overwrite/i);
+
+    const success = await callRoute('POST', '/api/chat/session/current/messages', { content: `/confirm overwrite ${noteId}` });
+    const successFrames = success.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string; resumed_from_pending?: boolean });
+    assert.equal(successFrames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed' && frame.resumed_from_pending), true);
+  } finally {
+    providerRegistry.openai.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
 test('chat tool actions create/update/archive/list/generate_note execute through streaming orchestration', async () => {
   await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'test-key' });
   await callRoute('PUT', '/api/agent/settings', {
