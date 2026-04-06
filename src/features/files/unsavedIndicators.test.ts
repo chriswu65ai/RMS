@@ -28,16 +28,23 @@ const makeDraft = (overrides: Partial<DraftEntry> = {}): DraftEntry => ({
   ...overrides,
 });
 
-test('unsaved indicator appears on unstarred note', () => {
+test('unsaved indicator exposes semantic token on unstarred note', () => {
   const indicators = getFileTitleIndicators({ isStarred: false, isUnsaved: true });
 
   assert.deepEqual(indicators, ['unsaved']);
 });
 
-test('unsaved indicator is rendered after starred indicator', () => {
+test('indicator ordering remains starred then unsaved', () => {
   const indicators = getFileTitleIndicators({ isStarred: true, isUnsaved: true });
 
   assert.deepEqual(indicators, ['starred', 'unsaved']);
+});
+
+test('indicator output is semantic and not literal punctuation', () => {
+  const indicators = getFileTitleIndicators({ isStarred: true, isUnsaved: true });
+
+  const semanticIndicators: readonly string[] = indicators;
+  assert.equal(semanticIndicators.includes('!'), false);
 });
 
 test('folder propagation marks parent folder as unsaved when child note is unsaved', () => {
