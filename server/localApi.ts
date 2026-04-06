@@ -17,6 +17,7 @@ import {
 import { type SearchResult } from './searchProviders';
 import { runAgentToolOrchestration } from './agentToolOrchestrator';
 import { CHAT_TOOLS, isSupportedChatTool, runChatToolOrchestration } from './chatToolOrchestrator';
+import { appendSystemLog, clearSystemLogs, getRecentSystemLogs } from './systemLog';
 import { resolveAllowedNoteTypes, resolveCanonicalNoteType, resolveTemplateForNoteType, stripSimpleFrontmatter } from './noteTypeResolver';
 import {
   formatInvalidTaskNoteTypeMessage,
@@ -2670,6 +2671,8 @@ const resolvePromptAttachmentsForGeneration = async (input: {
 
 export async function handleLocalApiRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? '';
+  const requestIdHeader = Array.isArray(req.headers['x-request-id']) ? req.headers['x-request-id'][0] : req.headers['x-request-id'];
+  const requestId = typeof requestIdHeader === 'string' && requestIdHeader.trim() ? requestIdHeader.trim() : randomUUID();
   try {
     ensureInitialized();
   } catch (error) {
@@ -2693,6 +2696,20 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   }
 
   try {
+    if (req.method === 'GET' && url.startsWith('/api/system-log')) {
+      const parsedUrl = new URL(url, 'http://localhost');
+      const requestedLimit = Number.parseInt(parsedUrl.searchParams.get('limit') ?? '200', 10);
+      const limit = Number.isFinite(requestedLimit) ? requestedLimit : 200;
+      writeJson(res, 200, { entries: getRecentSystemLogs(limit) });
+      return true;
+    }
+
+    if (req.method === 'DELETE' && url === '/api/system-log') {
+      clearSystemLogs();
+      writeJson(res, 200, { error: null });
+      return true;
+    }
+
     if (req.method === 'GET' && url === '/api/chat/session/current') {
       const session = getOrCreatePrimaryChatSession(DEFAULT_CHAT_USER_ID);
       writeJson(res, 200, session);
@@ -4024,6 +4041,17 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       });
       if (result.catalog_status !== 'live') {
         console.warn('[agent-models] catalog fallback', { provider, catalog_status: result.catalog_status, reason_code: result.reason_code });
+        appendSystemLog({
+          level: 'warn',
+          area: 'agent.models',
+          message: 'Model catalog fallback was used.',
+          details: {
+            provider,
+            catalog_status: result.catalog_status,
+            reason_code: result.reason_code,
+          },
+          request_id: requestId,
+        });
       }
       writeJson(res, 200, result);
       return true;
@@ -4993,6 +5021,17 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       return true;
     }
   } catch (error) {
+    appendSystemLog({
+      level: 'error',
+      area: 'local_api.request',
+      message: error instanceof Error ? error.message : 'Request failed.',
+      details: {
+        method: req.method ?? 'UNKNOWN',
+        url,
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      request_id: requestId,
+    });
     writeJson(res, 400, { error: { message: error instanceof Error ? error.message : 'Request failed.' } });
     return true;
   }
