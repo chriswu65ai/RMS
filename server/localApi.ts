@@ -4260,6 +4260,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         return true;
       }
       const nextLinkedFile = String(payload.linked_note_file_id ?? existing.linked_note_file_id).trim();
+      const nextLinkedPath = nextLinkedFile ? String(payload.linked_note_path ?? existing.linked_note_path) : '';
       if (nextLinkedFile) {
         const linkOwner = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} and id != ${sqlEscape(taskId)} limit 1`))[0];
         if (linkOwner) {
@@ -4284,7 +4285,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         date_completed = ${sqlEscape(normalizedDateCompleted)},
         archived = ${sqlEscape(payload.archived === undefined ? existing.archived : payload.archived ? 1 : 0)},
         linked_note_file_id = ${sqlEscape(nextLinkedFile)},
-        linked_note_path = ${sqlEscape(payload.linked_note_path ?? existing.linked_note_path)},
+        linked_note_path = ${sqlEscape(nextLinkedPath)},
         research_location_folder_id = ${sqlEscape(payload.research_location_folder_id ?? existing.research_location_folder_id)},
         research_location_path = ${sqlEscape(payload.research_location_path ?? existing.research_location_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
@@ -4305,11 +4306,11 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (normalizedPriority !== existing.priority) recordTaskEvent(taskId, 'priority', `Priority changed: ${existing.priority || '—'} → ${normalizedPriority || '—'}.`);
       const nextLinked = nextLinkedFile;
       if (!existing.linked_note_file_id && nextLinked) {
-        recordTaskEvent(taskId, 'link', `Linked note: ${String(payload.linked_note_path ?? existing.linked_note_path) || nextLinked}.`);
+        recordTaskEvent(taskId, 'link', `Linked note: ${nextLinkedPath || nextLinked}.`);
       } else if (existing.linked_note_file_id && !nextLinked) {
         recordTaskEvent(taskId, 'unlink', 'Unlinked note.');
       } else if (existing.linked_note_file_id && nextLinked !== existing.linked_note_file_id) {
-        recordTaskEvent(taskId, 'link', `Relinked note: ${String(payload.linked_note_path ?? existing.linked_note_path) || nextLinked}.`);
+        recordTaskEvent(taskId, 'link', `Relinked note: ${nextLinkedPath || nextLinked}.`);
       }
       const nextArchived = payload.archived === undefined ? Boolean(existing.archived) : Boolean(payload.archived);
       if (nextArchived !== Boolean(existing.archived)) recordTaskEvent(taskId, nextArchived ? 'archive' : 'unarchive', nextArchived ? 'Task archived.' : 'Task unarchived.');
