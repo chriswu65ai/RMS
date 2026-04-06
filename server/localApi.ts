@@ -278,11 +278,28 @@ const pendingActionTtlMs = (() => {
 })();
 let initialized = false;
 let dbCommandQueue: Promise<unknown> = Promise.resolve();
+let hotWriteQueue: Promise<unknown> = Promise.resolve();
 const DB_OP_TIMEOUT_MS = (() => {
   const value = Number(process.env.LOCAL_API_DB_TIMEOUT_MS ?? '2000');
   if (!Number.isFinite(value) || value <= 0) return 2000;
   return Math.floor(value);
 })();
+const DB_BUSY_TIMEOUT_MS = (() => {
+  const value = Number(process.env.LOCAL_API_DB_BUSY_TIMEOUT_MS ?? '5000');
+  if (!Number.isFinite(value) || value <= 0) return 5000;
+  return Math.floor(value);
+})();
+const DB_WRITE_RETRY_ATTEMPTS = (() => {
+  const value = Number(process.env.LOCAL_API_DB_WRITE_RETRY_ATTEMPTS ?? '3');
+  if (!Number.isFinite(value) || value <= 0) return 3;
+  return Math.floor(value);
+})();
+const DB_WRITE_RETRY_BACKOFF_MS = (() => {
+  const value = Number(process.env.LOCAL_API_DB_WRITE_RETRY_BACKOFF_MS ?? '75');
+  if (!Number.isFinite(value) || value < 0) return 75;
+  return Math.floor(value);
+})();
+const SERIALIZE_HOT_WRITES = process.env.LOCAL_API_SERIALIZE_HOT_WRITES !== '0';
 
 const sqlEscape = (value: unknown) => {
   if (value === null || value === undefined) return 'NULL';
@@ -291,15 +308,80 @@ const sqlEscape = (value: unknown) => {
   return `'${String(value).replace(/'/g, "''")}'`;
 };
 
-const execSql = (sql: string) => {
-  const result = spawnSync('sqlite3', [dbPath, sql], { stdio: 'pipe' });
-  if (result.status !== 0) {
-    throw new Error(result.stderr?.toString('utf8') || 'sqlite3 command failed.');
+const withBusyTimeoutPragma = (sql: string) => `PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS};\n${sql}`;
+
+const sleep = async (ms: number) => {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+const extractErrorText = (error: unknown): string => {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) {
+    const withStderr = error as Error & { stderr?: string | Buffer };
+    const stderr = typeof withStderr.stderr === 'string'
+      ? withStderr.stderr
+      : Buffer.isBuffer(withStderr.stderr)
+        ? withStderr.stderr.toString('utf8')
+        : '';
+    return [error.message, stderr].filter(Boolean).join('\n');
+  }
+  return String(error);
+};
+
+const isBusyOrLockedError = (error: unknown): boolean => {
+  const message = extractErrorText(error).toLowerCase();
+  return message.includes('database is locked')
+    || message.includes('database table is locked')
+    || message.includes('database is busy')
+    || message.includes('sqlite_busy')
+    || message.includes('sqlite_locked');
+};
+
+const withWriteRetrySync = (run: () => void) => {
+  let attempt = 0;
+  while (attempt < DB_WRITE_RETRY_ATTEMPTS) {
+    try {
+      run();
+      return;
+    } catch (error) {
+      attempt += 1;
+      if (!isBusyOrLockedError(error) || attempt >= DB_WRITE_RETRY_ATTEMPTS) throw error;
+      const startedAt = Date.now();
+      const targetDelay = DB_WRITE_RETRY_BACKOFF_MS * attempt;
+      while (Date.now() - startedAt < targetDelay) {
+        // spin-wait: sync path
+      }
+    }
   }
 };
 
+const withWriteRetryAsync = async <T>(run: () => Promise<T>): Promise<T> => {
+  let attempt = 0;
+  while (attempt < DB_WRITE_RETRY_ATTEMPTS) {
+    try {
+      return await run();
+    } catch (error) {
+      attempt += 1;
+      if (!isBusyOrLockedError(error) || attempt >= DB_WRITE_RETRY_ATTEMPTS) throw error;
+      await sleep(DB_WRITE_RETRY_BACKOFF_MS * attempt);
+    }
+  }
+  throw new Error('Unreachable retry loop in withWriteRetryAsync');
+};
+
+const execSql = (sql: string) => {
+  withWriteRetrySync(() => {
+    const result = spawnSync('sqlite3', [dbPath, withBusyTimeoutPragma(sql)], { stdio: 'pipe' });
+    if (result.status !== 0) {
+      throw new Error(result.stderr?.toString('utf8') || 'sqlite3 command failed.');
+    }
+  });
+};
+
 const queryJson = <T>(sql: string): T[] => {
-  const result = spawnSync('sqlite3', ['-json', dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
+  const result = spawnSync('sqlite3', ['-json', dbPath, withBusyTimeoutPragma(sql)], { stdio: 'pipe', encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(result.stderr || 'sqlite3 query failed.');
   }
@@ -314,25 +396,42 @@ const enqueueDbCommand = async <T>(run: () => Promise<T>): Promise<T> => {
   return next;
 };
 
-const execSqlAsync = async (sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<void> => {
-  await enqueueDbCommand(async () => {
-    await new Promise<void>((resolve, reject) => {
-      const child = execFile('sqlite3', [dbPath, sql], { timeout: timeoutMs }, (error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
+const enqueueHotWrite = async <T>(run: () => Promise<T>): Promise<T> => {
+  const next = hotWriteQueue.then(run, run);
+  hotWriteQueue = next.then(() => undefined, () => undefined);
+  return next;
+};
+
+const execSqlAsync = async (
+  sql: string,
+  timeoutMs = DB_OP_TIMEOUT_MS,
+  options?: { serializeHotPath?: boolean },
+): Promise<void> => {
+  const runWrite = async () => withWriteRetryAsync(async () => {
+    await enqueueDbCommand(async () => {
+      await new Promise<void>((resolve, reject) => {
+        const child = execFile('sqlite3', [dbPath, withBusyTimeoutPragma(sql)], { timeout: timeoutMs }, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+        child.on('error', reject);
       });
-      child.on('error', reject);
     });
   });
+  if (options?.serializeHotPath && SERIALIZE_HOT_WRITES) {
+    await enqueueHotWrite(runWrite);
+    return;
+  }
+  await runWrite();
 };
 
 const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<T[]> => (
   enqueueDbCommand(async () => {
     const stdout = await new Promise<string>((resolve, reject) => {
-      const child = execFile('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
+      const child = execFile('sqlite3', ['-json', dbPath, withBusyTimeoutPragma(sql)], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
         if (error) {
           reject(error);
           return;
@@ -1763,7 +1862,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const ticker = input.ticker.trim().toUpperCase();
     const noteType = input.note_type.trim().toLowerCase();
     const priority = VALID_TASK_PRIORITIES.has(input.priority ?? '') ? (input.priority ?? '') : '';
-    await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     recordTaskEvent(id, 'create', `Task created via chat orchestration (${ticker} — ${input.title}).`);
     const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
     const normalized = normalizeTaskRow(created);
@@ -1801,7 +1900,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       status = ${sqlEscape(nextStatus)},
       archived = ${sqlEscape(nextArchived ? 1 : 0)},
       updated_at = ${sqlEscape(now)}
-      where id = ${sqlEscape(taskId)}`);
+      where id = ${sqlEscape(taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     const updated = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
     const normalized = normalizeTaskRow(updated);
     recordTaskEvent(taskId, 'edit', 'Task updated via chat orchestration.');
@@ -1822,7 +1921,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(input.noteId)} limit 1`)[0];
       if (!existing) throw new Error('Note not found.');
       const nextContent = [existing.content || '', '', `## Chat instruction`, input.instruction].join('\n').trim();
-      await execSqlAsync(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`);
+      await execSqlAsync(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       return { note_id: existing.id, note_path: existing.path, task_id: input.taskId, action: 'updated' as const };
     }
     const workspace = ensureWorkspaceWithStarterContent();
@@ -1830,9 +1929,9 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const inferredTitle = (input.title?.trim() || `Chat Draft ${new Date().toISOString().slice(0, 10)}`);
     const safeTitle = inferredTitle.replace(/[\\/:*?"<>|]/g, '').trim() || 'Chat Draft';
     const notePath = `${safeTitle}.md`;
-    await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
     if (input.taskId) {
-      await execSqlAsync(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`);
+      await execSqlAsync(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(input.taskId, 'link', `Linked generated note via chat orchestration: ${notePath}.`);
     }
     return { note_id: noteId, note_path: notePath, task_id: input.taskId, action: 'created' as const };
@@ -3812,7 +3911,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const now = new Date().toISOString();
       const id = randomUUID();
       const noteType = String(payload.note_type ?? '').trim();
-      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       recordTaskEvent(id, 'create', 'Task created.');
       const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
       emitStructuredLog('task.create.outcome', {
@@ -3866,7 +3965,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         research_location_folder_id = ${sqlEscape(payload.research_location_folder_id ?? existing.research_location_folder_id)},
         research_location_path = ${sqlEscape(payload.research_location_path ?? existing.research_location_path)},
         updated_at = ${sqlEscape(new Date().toISOString())}
-        where id = ${sqlEscape(taskId)}`);
+        where id = ${sqlEscape(taskId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       const changedFields: string[] = [];
       if (String(payload.title ?? existing.title) !== existing.title) changedFields.push('title');
       if (String(payload.details ?? existing.details) !== existing.details) changedFields.push('details');
@@ -3918,8 +4017,8 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         delete from task_activity_events where task_id = ${sqlEscape(taskId)};
         delete from new_research_tasks where id = ${sqlEscape(taskId)};
         commit;
-      `);
-      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
+      `, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -3950,7 +4049,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'POST' && url === '/api/files') {
       const payload = await readJsonBody(req);
       const now = new Date().toISOString();
-      await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -3978,10 +4077,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         frontmatter_json = ${payload.frontmatter_json === undefined ? sqlEscape(existing.frontmatter_json) : sqlEscape(payload.frontmatter_json ? JSON.stringify(payload.frontmatter_json) : null)},
         is_template = ${payload.is_template === undefined ? sqlEscape(existing.is_template) : sqlEscape(payload.is_template ? 1 : 0)},
         updated_at = ${sqlEscape(now)}
-        where id = ${sqlEscape(fileId)}`);
+        where id = ${sqlEscape(fileId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
 
       if (pathChanged) {
-        await execSqlAsync(`update new_research_tasks set linked_note_path = ${sqlEscape(nextPath)}, updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        await execSqlAsync(`update new_research_tasks set linked_note_path = ${sqlEscape(nextPath)}, updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
         linkedTasks.forEach((task) => {
           recordTaskEvent(task.id, 'link_path_sync', `Linked note path synced to ${nextPath}.`);
         });
@@ -3995,14 +4094,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const now = new Date().toISOString();
       const linkedTasks = await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`);
       if (linkedTasks.length > 0) {
-        await execSqlAsync(`update new_research_tasks set linked_note_file_id = '', linked_note_path = '', updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        await execSqlAsync(`update new_research_tasks set linked_note_file_id = '', linked_note_path = '', updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
         linkedTasks.forEach((task) => {
           recordTaskEvent(task.id, 'unlink', 'Unlinked note because the linked note was deleted.');
         });
       }
-      await execSqlAsync(`delete from attachment_links where link_type = 'note' and link_id = ${sqlEscape(fileId)}`);
-      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
-      await execSqlAsync(`delete from research_notes where id = ${sqlEscape(fileId)}`);
+      await execSqlAsync(`delete from attachment_links where link_type = 'note' and link_id = ${sqlEscape(fileId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
+      await execSqlAsync(`delete from research_notes where id = ${sqlEscape(fileId)}`, DB_OP_TIMEOUT_MS, { serializeHotPath: true });
       writeJson(res, 200, { error: null });
       return true;
     }
