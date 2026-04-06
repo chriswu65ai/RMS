@@ -12,6 +12,7 @@ import { PageState } from '../../components/shared/PageState';
 import { useDialog } from '../../components/ui/DialogProvider';
 import { EMPTY_NOTE_TYPE_PLACEHOLDER, getCreateNoteType, getInitialTaskNoteType, getNoteTypeSelectOptions } from './noteTypeOptions';
 import { formatLocalDateTime } from '../../lib/time';
+import { normalizeFolderPathSegments } from '../../lib/folderPathSegments';
 import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
@@ -149,7 +150,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   };
 
   const ensureFolderPath = async (workspaceId: string, path: string, rootFolder: Folder | null) => {
-    const parts = path.split('/').map((part) => part.trim()).filter(Boolean);
+    const parts = normalizeFolderPathSegments(path);
     let parent = rootFolder;
 
     for (const part of parts) {
