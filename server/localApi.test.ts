@@ -2113,6 +2113,131 @@ test('chat tool orchestration saves pending draft for missing fields and streams
   }
 });
 
+test('command prefix mode ON blocks natural-language tool execution and returns guidance', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'on',
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  providerRegistry.ollama.generateToolFirstTurn = async () => {
+    throw new Error('tool planner should not run when NL tool request is blocked');
+  };
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'create a task for apple' });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outputText?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), false);
+    const done = frames.find((frame) => frame.type === 'done');
+    assert.match(done?.outputText ?? '', /Command prefix mode is enabled/);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+  }
+});
+
+test('command prefix mode OFF allows natural-language tool execution via intent routing', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'off',
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'prefix-off-tool-1',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'listed', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: 'list my idea tasks', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
+test('custom command prefix map is reflected in command parsing', async () => {
+  await callRoute('PUT', '/api/agent/settings', {
+    default_provider: 'ollama',
+    default_model: 'llama3.2:latest',
+    generation_params: {
+      local_connection: {
+        base_url: 'http://localhost:11434',
+        model: 'llama3.2:latest',
+        B: 1,
+      },
+    },
+  });
+  await callRoute('PUT', '/api/chat/settings', {
+    policy: {
+      action_mode: 'act',
+      command_prefix_mode: 'on',
+      command_prefix_map: {
+        task: '!do',
+        note: '!note',
+        confirm: '!ok',
+        cancel: '!stop',
+        help: '!help',
+      },
+    },
+  });
+  const originalFirstTurn = providerRegistry.ollama.generateToolFirstTurn;
+  const originalGenerate = providerRegistry.ollama.generate;
+  providerRegistry.ollama.generateToolFirstTurn = async () => ({
+    outputText: '',
+    latencyMs: 1,
+    toolCalls: [{
+      id: 'custom-prefix-tool-1',
+      name: 'list_tasks_by_status',
+      arguments: { status: 'ideas' },
+    }],
+  });
+  providerRegistry.ollama.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  try {
+    const response = await callRoute('POST', '/api/chat/session/current/messages', { content: '!do list idea tasks', explicit_confirm: true });
+    assert.equal(response.status, 200);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; outcome?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_planning_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_result' && frame.outcome === 'executed'), true);
+  } finally {
+    providerRegistry.ollama.generateToolFirstTurn = originalFirstTurn;
+    providerRegistry.ollama.generate = originalGenerate;
+  }
+});
+
 test('chat tool orchestration executes approved action and persists tool metadata', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',

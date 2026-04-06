@@ -14,6 +14,9 @@ import type {
 type ApiError = { error?: { message?: string } | null };
 export type ChatProfileSource = 'built_in' | 'file' | 'merged';
 export type ChatActionMode = 'assist' | 'act';
+export type ChatCommandName = 'task' | 'note' | 'confirm' | 'cancel' | 'help';
+export type ChatCommandPrefixMode = 'on' | 'off' | boolean;
+export type ChatCommandPrefixMap = Record<ChatCommandName, string>;
 export type ChatSettingsPolicy = {
   action_mode?: ChatActionMode;
   ask_when_missing?: boolean;
@@ -22,6 +25,8 @@ export type ChatSettingsPolicy = {
   profile_source?: ChatProfileSource;
   profile_file_path?: string;
   reload_profile_every_message?: boolean;
+  command_prefix_mode?: ChatCommandPrefixMode;
+  command_prefix_map?: Partial<ChatCommandPrefixMap>;
 } & Record<string, unknown>;
 export type ChatSettings = {
   id: string;
