@@ -2464,6 +2464,46 @@ test('research task create preserves provided date_completed when status is comp
   assert.equal(createdTask.date_completed, '2026-01-01');
 });
 
+test('research task create allows empty linked note', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'No linked note',
+    ticker: 'ACME',
+    linked_note_file_id: '   ',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { linked_note_file_id: string };
+  assert.equal(createdTask.linked_note_file_id, '');
+});
+
+test('research task create allows unique linked note', async () => {
+  const createResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Unique linked note',
+    ticker: 'ACME',
+    linked_note_file_id: 'note-unique-1',
+  });
+  assert.equal(createResponse.status, 200);
+  const createdTask = JSON.parse(createResponse.body) as { linked_note_file_id: string };
+  assert.equal(createdTask.linked_note_file_id, 'note-unique-1');
+});
+
+test('research task create rejects duplicate linked note with conflict', async () => {
+  const firstCreateResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'First task',
+    ticker: 'ACME',
+    linked_note_file_id: 'note-duplicate-1',
+  });
+  assert.equal(firstCreateResponse.status, 200);
+
+  const secondCreateResponse = await callRoute('POST', '/api/research-tasks', {
+    title: 'Second task',
+    ticker: 'MSFT',
+    linked_note_file_id: 'note-duplicate-1',
+  });
+  assert.equal(secondCreateResponse.status, 409);
+  const secondCreatePayload = JSON.parse(secondCreateResponse.body) as { error?: { message?: string } };
+  assert.equal(secondCreatePayload.error?.message, 'That note is already linked to another task. Task↔note links must stay one-to-one.');
+});
+
 test('research task status transitions normalize date_completed correctly', async () => {
   const createResponse = await callRoute('POST', '/api/research-tasks', {
     title: 'Status transition normalization',
