@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import {
   FALLBACK_MODELS,
   providerRegistry,
@@ -270,6 +270,12 @@ const pendingActionTtlMs = (() => {
   return Math.floor(rawMinutes * 60 * 1000);
 })();
 let initialized = false;
+let dbCommandQueue: Promise<unknown> = Promise.resolve();
+const DB_OP_TIMEOUT_MS = (() => {
+  const value = Number(process.env.LOCAL_API_DB_TIMEOUT_MS ?? '2000');
+  if (!Number.isFinite(value) || value <= 0) return 2000;
+  return Math.floor(value);
+})();
 
 const sqlEscape = (value: unknown) => {
   if (value === null || value === undefined) return 'NULL';
@@ -279,13 +285,80 @@ const sqlEscape = (value: unknown) => {
 };
 
 const execSql = (sql: string) => {
-  execFileSync('sqlite3', [dbPath, sql], { stdio: 'pipe' });
+  const result = spawnSync('sqlite3', [dbPath, sql], { stdio: 'pipe' });
+  if (result.status !== 0) {
+    throw new Error(result.stderr?.toString('utf8') || 'sqlite3 command failed.');
+  }
 };
 
 const queryJson = <T>(sql: string): T[] => {
-  const out = execFileSync('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8' });
+  const result = spawnSync('sqlite3', ['-json', dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || 'sqlite3 query failed.');
+  }
+  const out = result.stdout;
   const trimmed = out.trim();
   return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+};
+
+const enqueueDbCommand = async <T>(run: () => Promise<T>): Promise<T> => {
+  const next = dbCommandQueue.then(run, run);
+  dbCommandQueue = next.then(() => undefined, () => undefined);
+  return next;
+};
+
+const execSqlAsync = async (sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<void> => {
+  await enqueueDbCommand(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const child = execFile('sqlite3', [dbPath, sql], { timeout: timeoutMs }, (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+      child.on('error', reject);
+    });
+  });
+};
+
+const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<T[]> => (
+  enqueueDbCommand(async () => {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      const child = execFile('sqlite3', ['-json', dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(out);
+      });
+      child.on('error', reject);
+    });
+    const trimmed = stdout.trim();
+    return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+  })
+);
+
+const withDbGuard = async <T>(
+  res: ServerResponse,
+  route: string,
+  action: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false }> => {
+  try {
+    return { ok: true, value: await action() };
+  } catch (error) {
+    emitStructuredLog('db.request.failed', {
+      route,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    writeJson(res, 503, {
+      error: {
+        code: 'DB_UNAVAILABLE',
+        message: 'Database is temporarily busy. Please retry.',
+      },
+    });
+    return { ok: false };
+  }
 };
 
 const parseJsonOrNull = <T>(value: string | null | undefined): T | null => {
@@ -1226,6 +1299,35 @@ function listWorkspaceData(workspaceId: string) {
   return { workspace, folders, files };
 }
 
+async function ensureWorkspaceWithStarterContentAsync() {
+  const existing = (await queryJsonAsync<WorkspaceRow>('select * from workspaces limit 1'))[0];
+  if (existing) return existing;
+
+  const now = new Date().toISOString();
+  const workspaceId = randomUUID();
+  const templatesFolderId = randomUUID();
+
+  await execSqlAsync(`
+begin;
+insert into workspaces (id, name, created_at, updated_at) values (${sqlEscape(workspaceId)}, 'Workspace', ${sqlEscape(now)}, ${sqlEscape(now)});
+insert into folders (id, workspace_id, parent_id, name, path, created_at, updated_at) values (${sqlEscape(templatesFolderId)}, ${sqlEscape(workspaceId)}, NULL, 'Templates', 'Templates', ${sqlEscape(now)}, ${sqlEscape(now)});
+commit;
+`);
+
+  return (await queryJsonAsync<WorkspaceRow>(`select * from workspaces where id = ${sqlEscape(workspaceId)} limit 1`))[0];
+}
+
+async function listWorkspaceDataAsync(workspaceId: string) {
+  const workspace = (await queryJsonAsync<{ id: string; name: string }>(`select id, name from workspaces where id = ${sqlEscape(workspaceId)} limit 1`))[0];
+  const folders = await queryJsonAsync<FolderRow>(`select * from folders where workspace_id = ${sqlEscape(workspaceId)} order by path`);
+  const files = (await queryJsonAsync<ResearchNoteRow>(`select * from research_notes where workspace_id = ${sqlEscape(workspaceId)} order by path`)).map((file) => ({
+    ...file,
+    is_template: Boolean(file.is_template),
+    frontmatter_json: file.frontmatter_json ? JSON.parse(file.frontmatter_json) : null,
+  }));
+  return { workspace, folders, files };
+}
+
 
 
 function normalizeTaskRow(row: NewResearchTaskRow) {
@@ -1640,9 +1742,9 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const ticker = input.ticker.trim().toUpperCase();
     const noteType = input.note_type.trim().toLowerCase();
     const priority = VALID_TASK_PRIORITIES.has(input.priority ?? '') ? (input.priority ?? '') : '';
-    execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(input.title)}, ${sqlEscape(input.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(input.assignee ?? '')}, ${sqlEscape(priority)}, ${sqlEscape(input.deadline ?? '')}, ${sqlEscape(input.status ?? 'ideas')}, '', 0, '', '', '', '', ${sqlEscape(now)}, ${sqlEscape(now)})`);
     recordTaskEvent(id, 'create', `Task created via chat orchestration (${ticker} — ${input.title}).`);
-    const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
+    const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
     const normalized = normalizeTaskRow(created);
     return {
       id: normalized.id,
@@ -1656,7 +1758,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
     };
   },
   updateTask: async (taskId: string, patch: Record<string, unknown>) => {
-    const existing = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+    const existing = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
     if (!existing) throw new Error('Task not found.');
     const now = new Date().toISOString();
     const nextTicker = typeof patch.ticker === 'string' ? patch.ticker.trim().toUpperCase() : existing.ticker;
@@ -1667,7 +1769,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       ? patch.status
       : existing.status;
     const nextArchived = typeof patch.archived === 'boolean' ? patch.archived : Boolean(existing.archived);
-    execSql(`update new_research_tasks set
+    await execSqlAsync(`update new_research_tasks set
       title = ${sqlEscape(typeof patch.title === 'string' ? patch.title : existing.title)},
       details = ${sqlEscape(typeof patch.details === 'string' ? patch.details : existing.details)},
       ticker = ${sqlEscape(nextTicker)},
@@ -1679,7 +1781,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       archived = ${sqlEscape(nextArchived ? 1 : 0)},
       updated_at = ${sqlEscape(now)}
       where id = ${sqlEscape(taskId)}`);
-    const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+    const updated = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
     const normalized = normalizeTaskRow(updated);
     recordTaskEvent(taskId, 'edit', 'Task updated via chat orchestration.');
     return {
@@ -1699,7 +1801,7 @@ const buildChatToolAdapter = (sessionId: string) => ({
       const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(input.noteId)} limit 1`)[0];
       if (!existing) throw new Error('Note not found.');
       const nextContent = [existing.content || '', '', `## Chat instruction`, input.instruction].join('\n').trim();
-      execSql(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`);
+      await execSqlAsync(`update research_notes set content = ${sqlEscape(nextContent)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(existing.id)}`);
       return { note_id: existing.id, note_path: existing.path, task_id: input.taskId, action: 'updated' as const };
     }
     const workspace = ensureWorkspaceWithStarterContent();
@@ -1707,9 +1809,9 @@ const buildChatToolAdapter = (sessionId: string) => ({
     const inferredTitle = (input.title?.trim() || `Chat Draft ${new Date().toISOString().slice(0, 10)}`);
     const safeTitle = inferredTitle.replace(/[\\/:*?"<>|]/g, '').trim() || 'Chat Draft';
     const notePath = `${safeTitle}.md`;
-    execSql(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+    await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(noteId)}, ${sqlEscape(workspace.id)}, NULL, ${sqlEscape(safeTitle)}, ${sqlEscape(notePath)}, ${sqlEscape(`# ${safeTitle}\n\n${input.instruction}`)}, NULL, 0, ${sqlEscape(now)}, ${sqlEscape(now)})`);
     if (input.taskId) {
-      execSql(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`);
+      await execSqlAsync(`update new_research_tasks set linked_note_file_id = ${sqlEscape(noteId)}, linked_note_path = ${sqlEscape(notePath)}, updated_at = ${sqlEscape(now)} where id = ${sqlEscape(input.taskId)}`);
       recordTaskEvent(input.taskId, 'link', `Linked generated note via chat orchestration: ${notePath}.`);
     }
     return { note_id: noteId, note_path: notePath, task_id: input.taskId, action: 'created' as const };
@@ -1805,11 +1907,35 @@ const getAgentSettings = () => {
   return nextSettings;
 };
 
+const getAgentSettingsAsync = async () => {
+  const settings = (await queryJsonAsync<AgentSettingsRow>('select default_provider, default_model, generation_params_json from agent_settings where id = 1 limit 1'))[0];
+  const provider = isAgentProvider(settings?.default_provider) ? settings.default_provider : 'minimax';
+  const generationParams = normalizeAgentGenerationParams(settings?.generation_params_json ? JSON.parse(settings.generation_params_json) : null);
+  const nextSettings = {
+    default_provider: provider,
+    default_model: settings?.default_model ?? '',
+    generation_params: generationParams,
+  };
+  const ollamaRuntime = resolveOllamaRuntimeConfig(nextSettings);
+  if (nextSettings.generation_params?.local_connection) {
+    nextSettings.generation_params.local_connection.base_url = ollamaRuntime.baseUrl;
+    nextSettings.generation_params.local_connection.model = ollamaRuntime.model;
+  }
+  if (nextSettings.default_provider === 'ollama') {
+    nextSettings.default_model = ollamaRuntime.model;
+  }
+  return nextSettings;
+};
+
 const appendAgentActivityLog = (entry: Omit<AgentActivityLogRow, 'id'>) => {
   agentActivityBuffer.push({ id: randomUUID(), ...entry });
   if (agentActivityBuffer.length > AGENT_ACTIVITY_BUFFER_MAX) {
     agentActivityBuffer.splice(0, agentActivityBuffer.length - AGENT_ACTIVITY_BUFFER_MAX);
   }
+};
+
+const appendAgentActivityLogAsync = async (entry: Omit<AgentActivityLogRow, 'id'>) => {
+  appendAgentActivityLog(entry);
 };
 
 const getAttachmentSettings = () => {
@@ -1883,8 +2009,12 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   }
 
   if (req.method === 'GET' && url === '/api/bootstrap') {
-    const workspace = ensureWorkspaceWithStarterContent();
-    writeJson(res, 200, listWorkspaceData(workspace.id));
+    const guarded = await withDbGuard(res, '/api/bootstrap', async () => {
+      const workspace = await ensureWorkspaceWithStarterContentAsync();
+      return listWorkspaceDataAsync(workspace.id);
+    });
+    if (!guarded.ok) return true;
+    writeJson(res, 200, await guarded.value);
     return true;
   }
 
@@ -1916,7 +2046,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'content is required.' } });
         return true;
       }
-      const settings = getAgentSettings();
+      const settings = await getAgentSettingsAsync();
       const preferred = isAgentProvider(payload.provider) ? payload.provider : settings.default_provider;
       const modelFromPayload = String(payload.model ?? '').trim();
       const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
@@ -2919,7 +3049,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Invalid provider.' } });
         return true;
       }
-      const settings = getAgentSettings();
+      const settings = await getAgentSettingsAsync();
       const preferredModel = settings.default_provider === provider ? settings.default_model : undefined;
       const fallbackModels = FALLBACK_MODELS[provider];
       const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
@@ -3240,7 +3370,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         writeJson(res, 400, { error: { message: 'Input text is required.' } });
         return true;
       }
-      const settings = getAgentSettings();
+      const settings = await getAgentSettingsAsync();
       const ollamaRuntime = resolveOllamaRuntimeConfig(settings);
       const resolvedModel = provider === 'ollama' ? ollamaRuntime.model : model;
       if (!resolvedModel) {
@@ -3255,7 +3385,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         provider,
         model: resolvedModel,
       });
-      appendAgentActivityLog({
+      await appendAgentActivityLogAsync({
         timestamp: now,
         note_id: String(payload.note_id ?? ''),
         action: 'generate',
@@ -3282,7 +3412,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       });
       const apiKey = secretStore.get(provider);
       if (provider !== 'ollama' && !apiKey) {
-        appendAgentActivityLog({
+        await appendAgentActivityLogAsync({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
           action: 'generate',
@@ -3313,7 +3443,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const isWebSearchEnabled = Boolean(settings.generation_params?.web_search?.enabled);
       if (isWebSearchEnabled && !supportsToolCalling(provider, resolvedModel)) {
         const reason = `Web search requires tool calling support for ${provider}/${resolvedModel}.`;
-        appendAgentActivityLog({
+        await appendAgentActivityLogAsync({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
           action: 'generate',
@@ -3355,7 +3485,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       beginNdjson(res);
       writeNdjson(res, { type: 'status', stage: 'started' });
       try {
-        const preferredSources = queryJson<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
+        const preferredSources = await queryJsonAsync<PreferredSourceRow>('select * from preferred_sources where enabled = 1 order by weight desc, domain asc');
         const normalizedWebSearchConfig = settings.generation_params?.web_search ?? {
           enabled: false,
           fail_open_on_tool_error: WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT,
@@ -3391,21 +3521,21 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         let preparedInputText = buildPreparedInputText();
         const attachmentCandidateIds = new Set<string>(explicitAttachmentIds);
         if (contextTaskId) {
-          const task = queryJson<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(`select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`)[0];
-          const taskAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'task' and link_id = ${sqlEscape(contextTaskId)}`);
+          const task = (await queryJsonAsync<Pick<NewResearchTaskRow, 'linked_note_file_id'>>(`select linked_note_file_id from new_research_tasks where id = ${sqlEscape(contextTaskId)} limit 1`))[0];
+          const taskAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'task' and link_id = ${sqlEscape(contextTaskId)}`);
           taskAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
           if (task?.linked_note_file_id) {
-            const linkedNoteAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(task.linked_note_file_id)}`);
+            const linkedNoteAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(task.linked_note_file_id)}`);
             linkedNoteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
           }
         }
         if (contextNoteId) {
-          const noteAttachments = queryJson<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(contextNoteId)}`);
+          const noteAttachments = await queryJsonAsync<Pick<AttachmentRow, 'id'>>(`select attachment_id as id from attachment_links where link_type = 'note' and link_id = ${sqlEscape(contextNoteId)}`);
           noteAttachments.forEach((row) => attachmentCandidateIds.add(row.id));
         }
         if (attachmentCandidateIds.size > 0) {
           const idsSql = Array.from(attachmentCandidateIds).map((id) => sqlEscape(id)).join(', ');
-          const candidates = queryJson<AttachmentRow>(`select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`);
+          const candidates = await queryJsonAsync<AttachmentRow>(`select * from attachments where id in (${idsSql}) and deleted_at is null and parse_status = 'parsed' and parsed_text is not null order by created_at asc`);
           let consumed = 0;
           const contextLines: string[] = ['[ATTACHMENT_CONTEXT_BEGIN]'];
           candidates.forEach((attachment, index) => {
@@ -3522,7 +3652,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             : undefined,
         });
         const outputText = citationResult.outputText;
-        appendAgentActivityLog({
+        await appendAgentActivityLogAsync({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
           action: 'generate',
@@ -3569,7 +3699,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           cancelled,
           message: errorMessage,
         });
-        appendAgentActivityLog({
+        await appendAgentActivityLogAsync({
           timestamp: new Date().toISOString(),
           note_id: String(payload.note_id ?? ''),
           action: 'generate',
@@ -3605,14 +3735,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     }
 
     if (req.method === 'GET' && url === '/api/research-tasks') {
-      const tasks = queryJson<NewResearchTaskRow>('select * from new_research_tasks order by created_at desc').map(normalizeTaskRow);
+      const tasks = (await queryJsonAsync<NewResearchTaskRow>('select * from new_research_tasks order by created_at desc')).map(normalizeTaskRow);
       writeJson(res, 200, tasks);
       return true;
     }
 
     if (req.method === 'GET' && /^\/api\/research-tasks\/[^/]+\/activity$/.test(url)) {
       const taskId = url.replace('/api/research-tasks/', '').replace('/activity', '').trim();
-      const activity = queryJson<TaskActivityRow>(`select * from task_activity_events where task_id = ${sqlEscape(taskId)} order by created_at desc`);
+      const activity = await queryJsonAsync<TaskActivityRow>(`select * from task_activity_events where task_id = ${sqlEscape(taskId)} order by created_at desc`);
       writeJson(res, 200, activity);
       return true;
     }
@@ -3630,9 +3760,9 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const now = new Date().toISOString();
       const id = randomUUID();
       const noteType = String(payload.note_type ?? '').trim();
-      execSql(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      await execSqlAsync(`insert into new_research_tasks (id, title, details, ticker, note_type, assignee, priority, deadline, status, date_completed, archived, linked_note_file_id, linked_note_path, research_location_folder_id, research_location_path, created_at, updated_at) values (${sqlEscape(id)}, ${sqlEscape(payload.title ?? '')}, ${sqlEscape(payload.details ?? '')}, ${sqlEscape(ticker)}, ${sqlEscape(noteType)}, ${sqlEscape(payload.assignee ?? '')}, ${sqlEscape(normalizedPriority)}, ${sqlEscape(payload.deadline ?? '')}, ${sqlEscape(payload.status ?? 'ideas')}, ${sqlEscape(payload.date_completed ?? '')}, ${sqlEscape(payload.archived ? 1 : 0)}, ${sqlEscape(payload.linked_note_file_id ?? '')}, ${sqlEscape(payload.linked_note_path ?? '')}, ${sqlEscape(payload.research_location_folder_id ?? '')}, ${sqlEscape(payload.research_location_path ?? '')}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       recordTaskEvent(id, 'create', 'Task created.');
-      const created = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`)[0];
+      const created = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(id)} limit 1`))[0];
       emitStructuredLog('task.create.outcome', {
         correlation_id: actionCorrelationId,
         action: 'create',
@@ -3647,7 +3777,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const taskId = url.replace('/api/research-tasks/', '').trim();
       const actionCorrelationId = randomUUID();
       const payload = await readJsonBody(req);
-      const existing = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      const existing = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
       if (!existing) {
         writeJson(res, 404, { error: { message: 'Task not found.' } });
         return true;
@@ -3659,7 +3789,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       }
       const nextLinkedFile = String(payload.linked_note_file_id ?? existing.linked_note_file_id).trim();
       if (nextLinkedFile) {
-        const linkOwner = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} and id != ${sqlEscape(taskId)} limit 1`)[0];
+        const linkOwner = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(nextLinkedFile)} and id != ${sqlEscape(taskId)} limit 1`))[0];
         if (linkOwner) {
           writeJson(res, 409, { error: { message: 'That note is already linked to another task. Task↔note links must stay one-to-one.' } });
           return true;
@@ -3668,7 +3798,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const nextPriority = String(payload.priority ?? existing.priority).trim().toLowerCase();
       const normalizedPriority = VALID_TASK_PRIORITIES.has(nextPriority) ? nextPriority : '';
       const noteType = String(payload.note_type ?? existing.note_type).trim();
-      execSql(`update new_research_tasks set
+      await execSqlAsync(`update new_research_tasks set
         title = ${sqlEscape(payload.title ?? existing.title)},
         details = ${sqlEscape(payload.details ?? existing.details)},
         ticker = ${sqlEscape(ticker)},
@@ -3711,7 +3841,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       if (nextArchived !== Boolean(existing.archived)) recordTaskEvent(taskId, nextArchived ? 'archive' : 'unarchive', nextArchived ? 'Task archived.' : 'Task unarchived.');
       if (changedFields.length > 0) recordTaskEvent(taskId, 'edit', `Updated ${changedFields.join(', ')}.`);
 
-      const updated = queryJson<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      const updated = (await queryJsonAsync<NewResearchTaskRow>(`select * from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
       emitStructuredLog('task.update.outcome', {
         correlation_id: actionCorrelationId,
         action: nextArchived !== Boolean(existing.archived) && nextArchived ? 'archive' : 'update',
@@ -3725,19 +3855,19 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
 
     if (req.method === 'DELETE' && url.startsWith('/api/research-tasks/')) {
       const taskId = url.replace('/api/research-tasks/', '').trim();
-      const existing = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`)[0];
+      const existing = (await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where id = ${sqlEscape(taskId)} limit 1`))[0];
       if (!existing) {
         writeJson(res, 404, { error: { message: 'Task not found.' } });
         return true;
       }
-      execSql(`
+      await execSqlAsync(`
         begin;
         delete from attachment_links where link_type = 'task' and link_id = ${sqlEscape(taskId)};
         delete from task_activity_events where task_id = ${sqlEscape(taskId)};
         delete from new_research_tasks where id = ${sqlEscape(taskId)};
         commit;
       `);
-      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
+      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -3768,7 +3898,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'POST' && url === '/api/files') {
       const payload = await readJsonBody(req);
       const now = new Date().toISOString();
-      execSql(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
+      await execSqlAsync(`insert into research_notes (id, workspace_id, folder_id, name, path, content, frontmatter_json, is_template, created_at, updated_at) values (${sqlEscape(randomUUID())}, ${sqlEscape(payload.workspaceId)}, ${sqlEscape(payload.folderId)}, ${sqlEscape(payload.name)}, ${sqlEscape(payload.path)}, ${sqlEscape(payload.content)}, ${sqlEscape(payload.frontmatter ? JSON.stringify(payload.frontmatter) : null)}, ${sqlEscape(payload.isTemplate ? 1 : 0)}, ${sqlEscape(now)}, ${sqlEscape(now)})`);
       writeJson(res, 200, { error: null });
       return true;
     }
@@ -3776,7 +3906,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'PATCH' && url.startsWith('/api/files/')) {
       const fileId = url.replace('/api/files/', '').trim();
       const payload = await readJsonBody(req);
-      const existing = queryJson<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(fileId)} limit 1`)[0];
+      const existing = (await queryJsonAsync<ResearchNoteRow>(`select * from research_notes where id = ${sqlEscape(fileId)} limit 1`))[0];
       if (!existing) {
         writeJson(res, 404, { error: { message: 'File not found.' } });
         return true;
@@ -3785,10 +3915,10 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
       const pathChanged = nextPath !== existing.path;
       const now = new Date().toISOString();
       const linkedTasks = pathChanged
-        ? queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`)
+        ? await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`)
         : [];
 
-      execSql(`update research_notes set
+      await execSqlAsync(`update research_notes set
         name = ${sqlEscape(payload.name ?? existing.name)},
         path = ${sqlEscape(nextPath)},
         folder_id = ${payload.folder_id === undefined ? sqlEscape(existing.folder_id) : sqlEscape(payload.folder_id)},
@@ -3799,7 +3929,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         where id = ${sqlEscape(fileId)}`);
 
       if (pathChanged) {
-        execSql(`update new_research_tasks set linked_note_path = ${sqlEscape(nextPath)}, updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        await execSqlAsync(`update new_research_tasks set linked_note_path = ${sqlEscape(nextPath)}, updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
         linkedTasks.forEach((task) => {
           recordTaskEvent(task.id, 'link_path_sync', `Linked note path synced to ${nextPath}.`);
         });
@@ -3811,16 +3941,16 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
     if (req.method === 'DELETE' && url.startsWith('/api/files/')) {
       const fileId = url.replace('/api/files/', '').trim();
       const now = new Date().toISOString();
-      const linkedTasks = queryJson<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`);
+      const linkedTasks = await queryJsonAsync<Pick<NewResearchTaskRow, 'id'>>(`select id from new_research_tasks where linked_note_file_id = ${sqlEscape(fileId)}`);
       if (linkedTasks.length > 0) {
-        execSql(`update new_research_tasks set linked_note_file_id = '', linked_note_path = '', updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
+        await execSqlAsync(`update new_research_tasks set linked_note_file_id = '', linked_note_path = '', updated_at = ${sqlEscape(now)} where linked_note_file_id = ${sqlEscape(fileId)}`);
         linkedTasks.forEach((task) => {
           recordTaskEvent(task.id, 'unlink', 'Unlinked note because the linked note was deleted.');
         });
       }
-      execSql(`delete from attachment_links where link_type = 'note' and link_id = ${sqlEscape(fileId)}`);
-      execSql(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
-      execSql(`delete from research_notes where id = ${sqlEscape(fileId)}`);
+      await execSqlAsync(`delete from attachment_links where link_type = 'note' and link_id = ${sqlEscape(fileId)}`);
+      await execSqlAsync(`update attachments set deleted_at = ${sqlEscape(new Date().toISOString())} where id in (select a.id from attachments a left join attachment_links l on l.attachment_id = a.id where l.id is null and a.deleted_at is null)`);
+      await execSqlAsync(`delete from research_notes where id = ${sqlEscape(fileId)}`);
       writeJson(res, 200, { error: null });
       return true;
     }
