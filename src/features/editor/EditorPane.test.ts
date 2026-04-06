@@ -12,6 +12,7 @@ import {
   deriveLinkLabelFromUrl,
   EDITOR_SHORTCUT_KEYS,
   formatThinkingModelBadge,
+  getThinkingPhaseLabel,
   getTableSizeError,
   getThinkingStatusUi,
   isUrlLikeSelection,
@@ -163,6 +164,25 @@ test('thinking status UI maps failed and cancelled badges distinctly', () => {
   assert.deepEqual(getThinkingStatusUi('completed'), { label: 'completed', badgeClassName: 'bg-emerald-100 text-emerald-700' });
 });
 
+test('thinking phase label mapper returns user-facing labels without internal underscores', () => {
+  const labels = [
+    getThinkingPhaseLabel('waiting'),
+    getThinkingPhaseLabel('reasoning'),
+    getThinkingPhaseLabel('tool_running'),
+    getThinkingPhaseLabel('tool_completed'),
+    getThinkingPhaseLabel('tool_failed'),
+  ];
+
+  assert.deepEqual(labels, [
+    'Waiting',
+    'Reasoning',
+    'Running tools',
+    'Tool step complete',
+    'Tool step failed',
+  ]);
+  labels.forEach((label) => assert.equal(label.includes('_'), false));
+});
+
 test('thinking bubble visibility keeps failures visible but hides cancelled when closed', () => {
   assert.equal(
     shouldShowThinkingBubble({ thinkingStatus: 'failed', thinkingEventCount: 0, isThinkingBubbleClosed: false }),
@@ -189,6 +209,13 @@ test('thinking header renders configured model badge chip next to title', () => 
   assert.equal(editorPaneSource.includes('const thinkingModelBadgeLabel = formatThinkingModelBadge(defaultProvider, defaultModel);'), true);
   assert.equal(editorPaneSource.includes('{thinkingModelBadgeLabel && ('), true);
   assert.equal(editorPaneSource.includes('{thinkingModelBadgeLabel}'), true);
+});
+
+test('thinking badge renders mapped phase label instead of raw enum token', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('const thinkingPhaseLabel = getThinkingPhaseLabel(thinkingPhase);'), true);
+  assert.equal(editorPaneSource.includes('{thinkingPhaseLabel}'), true);
+  assert.equal(editorPaneSource.includes('{thinkingPhase}'), false);
 });
 
 type ScheduledTimer = { id: number; runAt: number; callback: () => void };
