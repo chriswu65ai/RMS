@@ -37,6 +37,8 @@ const PRIORITY_RANK: Record<Priority | '', number> = {
   [Priority.Low]: 2,
   '': 3,
 };
+const OPEN_LINKED_NOTE_ACTION_LABEL = 'Open linked note';
+const CREATE_NOTE_FROM_TASK_ACTION_LABEL = 'Create note from task';
 
 type ModalState = { mode: 'create' | 'edit'; task: NewResearchTaskInput; id?: string };
 
@@ -439,7 +441,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                       {/* linked_note_file_id remains the open/navigation source of truth; path is display-only metadata */}
                       <p className="col-span-2 mt-1">Linked note: {hasLinkedNote(task) ? task.linked_note_path : '—'}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => { if (hasLinkedNote(task)) { openLinkedNote(task); return; } void createNoteFromTask(task); }}>{hasLinkedNote(task) ? 'Reopen note' : 'Create note from task'}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
+                    <div className="mt-3 flex items-center justify-between gap-2"><button className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100" onClick={() => { if (hasLinkedNote(task)) { openLinkedNote(task); return; } void createNoteFromTask(task); }}>{hasLinkedNote(task) ? OPEN_LINKED_NOTE_ACTION_LABEL : CREATE_NOTE_FROM_TASK_ACTION_LABEL}</button><div className="flex items-center gap-3"><button className="text-xs text-rose-600" onClick={() => void removeTask(task.id)}>Delete</button><button className="text-xs text-slate-600 hover:text-slate-900" onClick={() => void toggleArchive(task)}>{task.archived ? 'Unarchive' : 'Archive'}</button></div></div>
                   </article>
                 ))}
                 {prioritizedTasks.filter((task) => task.status === column.key).length === 0 && <PageState kind="empty" message={`No tasks in ${column.label.toLowerCase()}.`} />}
@@ -611,7 +613,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
                     void createNoteFromTask(task);
                   }}
                 >
-                  {hasLinkedNote(modalState.task as NewResearchTask) ? 'Open linked note' : 'Create note from task'}
+                  {hasLinkedNote(modalState.task as NewResearchTask) ? OPEN_LINKED_NOTE_ACTION_LABEL : CREATE_NOTE_FROM_TASK_ACTION_LABEL}
                 </button>
               )}
               <button className="rounded-lg border border-slate-200 px-3 py-2 text-sm" onClick={closeModal}>Cancel</button>
