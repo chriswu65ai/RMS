@@ -110,9 +110,9 @@ export type ProviderTimeoutSettings = {
 
 const DEFAULT_PROVIDER_TIMEOUT_SETTINGS: ProviderTimeoutSettings = {
   generateMs: 30 * 60 * 1000,
-  generateIdleMs: 3 * 60 * 1000,
-  toolFirstTurnMs: 45_000,
-  toolFollowupMs: 45_000,
+  generateIdleMs: 5 * 60 * 1000,
+  toolFirstTurnMs: 300_000,
+  toolFollowupMs: 300_000,
   listModelsMs: 15_000,
 };
 

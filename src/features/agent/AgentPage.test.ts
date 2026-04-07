@@ -55,7 +55,7 @@ test('save defaults payload for ollama uses selected model and current base URL 
   assert.equal(payload.generation_params?.local_connection?.model, 'deepseek-r1:8b');
   assert.equal(payload.generation_params?.local_connection?.B, 2);
   assert.equal(payload.generation_params?.provider_timeouts?.generate_minutes, 30);
-  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 3);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 5);
 });
 
 test('save defaults payload persists provider generate and idle timeout minutes as milliseconds and minutes', () => {
@@ -561,7 +561,7 @@ test('configure agent renders generation and idle timeout minute fields with def
   assert.equal(source.includes('Generation timeout (minutes)'), true);
   assert.equal(source.includes('Idle timeout (minutes)'), true);
   assert.equal(source.includes('GENERATION_TIMEOUT_MINUTES_DEFAULT = 30'), true);
-  assert.equal(source.includes('GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 3'), true);
+  assert.equal(source.includes('GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 5'), true);
 });
 
 test('activity log clear action requires confirmation before deleting rows', () => {

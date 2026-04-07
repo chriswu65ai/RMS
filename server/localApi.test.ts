@@ -1317,11 +1317,11 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.base_url, 'http://localhost:8080');
   assert.equal(payload.generation_params?.web_search?.provider_config?.searxng?.use_json_api, true);
   assert.equal(payload.generation_params?.provider_timeouts?.generate_minutes, 30);
-  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 3);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 5);
   assert.equal(payload.generation_params?.provider_timeouts?.generate_ms, 1800000);
-  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_ms, 180000);
-  assert.equal(payload.generation_params?.provider_timeouts?.tool_first_turn_ms, 45000);
-  assert.equal(payload.generation_params?.provider_timeouts?.tool_followup_ms, 45000);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_ms, 300000);
+  assert.equal(payload.generation_params?.provider_timeouts?.tool_first_turn_ms, 300000);
+  assert.equal(payload.generation_params?.provider_timeouts?.tool_followup_ms, 300000);
   assert.equal(payload.generation_params?.provider_timeouts?.model_list_ms, 15000);
 });
 
@@ -1351,8 +1351,8 @@ test('agent settings provider_timeouts maps legacy generate_ms and defaults idle
   };
   assert.equal(payload.generation_params?.provider_timeouts?.generate_ms, 120000);
   assert.equal(payload.generation_params?.provider_timeouts?.generate_minutes, 2);
-  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 3);
-  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_ms, 180000);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 5);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_ms, 300000);
 });
 
 test('preferred sources create normalizes domain and supports listing', async () => {
