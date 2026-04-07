@@ -4710,6 +4710,46 @@ test('task API canonicalizes note_type and rejects invalid values with allowed o
   assert.match(invalid.body, /Allowed values:/i);
 });
 
+test('task API accepts note_type discovered only from note frontmatter for create and update', async () => {
+  const bootstrap = await callRoute('GET', '/api/bootstrap');
+  const bootstrapPayload = JSON.parse(bootstrap.body) as { workspace: { id: string } };
+  const discoveredType = 'CatalystMemo';
+
+  const noteResponse = await callRoute('POST', '/api/files', {
+    workspaceId: bootstrapPayload.workspace.id,
+    folderId: null,
+    name: 'frontmatter-discovery.md',
+    path: 'frontmatter-discovery.md',
+    content: 'seed',
+    frontmatter: { type: discoveredType },
+  });
+  assert.equal(noteResponse.status, 200);
+
+  const created = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'orcl',
+    title: 'Create with discovered type',
+    note_type: discoveredType.toLowerCase(),
+  });
+  assert.equal(created.status, 200);
+  const createdPayload = JSON.parse(created.body) as { id: string; note_type: string };
+  assert.equal(createdPayload.note_type, discoveredType);
+
+  const updated = await callRoute('PATCH', `/api/research-tasks/${createdPayload.id}`, {
+    note_type: discoveredType.toUpperCase(),
+  });
+  assert.equal(updated.status, 200);
+  const updatedPayload = JSON.parse(updated.body) as { note_type: string };
+  assert.equal(updatedPayload.note_type, discoveredType);
+
+  const invalid = await callRoute('POST', '/api/research-tasks', {
+    ticker: 'orcl',
+    title: 'Still invalid',
+    note_type: 'missing-everywhere',
+  });
+  assert.equal(invalid.status, 400);
+  assert.match(invalid.body, /Allowed values:/i);
+});
+
 test('chat generate_note create flow requires valid note_type and allows correcting pending draft field without restart', async () => {
   await callRoute('PUT', '/api/agent/settings', {
     default_provider: 'ollama',
