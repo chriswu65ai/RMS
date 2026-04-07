@@ -419,14 +419,47 @@ const execSql = (sql: string) => {
   });
 };
 
-const queryJson = <T>(sql: string): T[] => {
+const SQL_LOG_CONTEXT_MAX_CHARS = 180;
+const SQLITE_STDOUT_SNIPPET_MAX_CHARS = 300;
+
+const sanitizeSqlForLog = (sql: string): string => {
+  const collapsed = sql.replace(/\s+/g, ' ').trim();
+  const withoutStringLiterals = collapsed
+    .replace(/'([^']|'')*'/g, '\'<redacted>\'')
+    .replace(/"([^"]|"")*"/g, '"<redacted>"');
+  const shortened = withoutStringLiterals.slice(0, SQL_LOG_CONTEXT_MAX_CHARS);
+  return withoutStringLiterals.length > SQL_LOG_CONTEXT_MAX_CHARS ? `${shortened}…` : shortened;
+};
+
+const formatSqliteJsonParseError = (
+  contextLabelOrSql: string | undefined,
+  sql: string,
+  stdout: string,
+  stderr?: string,
+): Error => {
+  const context = contextLabelOrSql?.trim() ? contextLabelOrSql.trim() : sanitizeSqlForLog(sql);
+  const stdoutSnippet = stdout.slice(0, SQLITE_STDOUT_SNIPPET_MAX_CHARS).trim();
+  const details = [
+    `Failed to parse sqlite JSON response (context: ${context}).`,
+    `stdout[0..${SQLITE_STDOUT_SNIPPET_MAX_CHARS}]: ${stdoutSnippet || '<empty>'}`,
+    stderr?.trim() ? `sqlite stderr: ${stderr.trim()}` : 'sqlite stderr: <empty>',
+  ];
+  return new Error(details.join('\n'));
+};
+
+const queryJson = <T>(sql: string, contextLabel?: string): T[] => {
   const result = spawnSync('sqlite3', ['-json', '-cmd', `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`, dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(result.stderr || 'sqlite3 query failed.');
   }
   const out = result.stdout;
   const trimmed = out.trim();
-  return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+  if (!trimmed) return [];
+  try {
+    return JSON.parse(trimmed) as T[];
+  } catch {
+    throw formatSqliteJsonParseError(contextLabel, sql, out, result.stderr);
+  }
 };
 
 const enqueueDbCommand = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -467,20 +500,25 @@ const execSqlAsync = async (
   await runWrite();
 };
 
-const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<T[]> => (
+const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS, contextLabel?: string): Promise<T[]> => (
   enqueueDbCommand(async () => {
-    const stdout = await new Promise<string>((resolve, reject) => {
-      const child = execFile('sqlite3', ['-json', '-cmd', `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`, dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
+    const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = execFile('sqlite3', ['-json', '-cmd', `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`, dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out, err) => {
         if (error) {
           reject(error);
           return;
         }
-        resolve(out);
+        resolve({ stdout: out, stderr: typeof err === 'string' ? err : '' });
       });
       child.on('error', reject);
     });
     const trimmed = stdout.trim();
-    return trimmed ? (JSON.parse(trimmed) as T[]) : [];
+    if (!trimmed) return [];
+    try {
+      return JSON.parse(trimmed) as T[];
+    } catch {
+      throw formatSqliteJsonParseError(contextLabel, sql, stdout, stderr);
+    }
   })
 );
 
@@ -2678,10 +2716,14 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
   try {
     ensureInitialized();
   } catch (error) {
+    emitStructuredLog('local_api.init.failed', {
+      request_id: requestId,
+      error: extractErrorText(error),
+    });
     writeJson(res, 500, {
       error: {
         code: 'LOCAL_API_INIT_FAILED',
-        message: error instanceof Error ? error.message : 'Local API initialization failed.',
+        message: 'Local API initialization failed.',
       },
     });
     return true;
