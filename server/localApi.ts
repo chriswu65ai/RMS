@@ -347,7 +347,8 @@ const sqlEscape = (value: unknown) => {
 };
 
 const withBusyTimeoutPragma = (sql: string) => `PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS};\n${sql}`;
-const busyTimeoutPragmaCmd = `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`;
+const busyTimeoutPragmaCmd = `PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS}`;
+const busyTimeoutCmdPrefixArgs = ['-cmd', '.output /dev/null', '-cmd', busyTimeoutPragmaCmd, '-cmd', '.output stdout'] as const;
 
 const sleep = async (ms: number) => {
   if (ms <= 0) return;
@@ -448,7 +449,7 @@ const formatSqliteJsonParseError = (
 };
 
 const queryJson = <T>(sql: string, contextLabel?: string): T[] => {
-  const result = spawnSync('sqlite3', ['-json', '-cmd', `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`, dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
+  const result = spawnSync('sqlite3', ['-json', ...busyTimeoutCmdPrefixArgs, dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(result.stderr || 'sqlite3 query failed.');
   }
@@ -503,7 +504,7 @@ const execSqlAsync = async (
 const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS, contextLabel?: string): Promise<T[]> => (
   enqueueDbCommand(async () => {
     const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      const child = execFile('sqlite3', ['-json', '-cmd', `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`, dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out, err) => {
+      const child = execFile('sqlite3', ['-json', ...busyTimeoutCmdPrefixArgs, dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out, err) => {
         if (error) {
           reject(error);
           return;
