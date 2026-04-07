@@ -8,7 +8,6 @@ import { editorExtensions, shouldRenderEditableEditor } from './editorSpellcheck
 import {
   applyTextToEditorState,
   buildMarkdownTable,
-  createStreamPreviewController,
   deriveLinkLabelFromUrl,
   EDITOR_SHORTCUT_KEYS,
   formatThinkingModelBadge,
@@ -244,92 +243,6 @@ test('split preview pane uses explicit independent overflow classes and shared p
   );
 });
 
-type ScheduledTimer = { id: number; runAt: number; callback: () => void };
-
-const createTimerHarness = () => {
-  let nowMs = 0;
-  let nextTimerId = 1;
-  const timers: ScheduledTimer[] = [];
-
-  const setTimer = (callback: () => void, delayMs: number) => {
-    const id = nextTimerId;
-    nextTimerId += 1;
-    timers.push({ id, runAt: nowMs + delayMs, callback });
-    return id;
-  };
-
-  const clearTimer = (timerId: number) => {
-    const index = timers.findIndex((timer) => timer.id === timerId);
-    if (index >= 0) timers.splice(index, 1);
-  };
-
-  const advanceTo = (targetMs: number) => {
-    nowMs = targetMs;
-    const ready = timers
-      .filter((timer) => timer.runAt <= nowMs)
-      .sort((a, b) => a.runAt - b.runAt);
-    ready.forEach((timer) => {
-      clearTimer(timer.id);
-      timer.callback();
-    });
-  };
-
-  const pendingTimerCount = () => timers.length;
-
-  return {
-    now: () => nowMs,
-    setTimer,
-    clearTimer,
-    advanceTo,
-    pendingTimerCount,
-  };
-};
-
-test('stream preview applies high-frequency chunks with throttling instead of mutating on every chunk', () => {
-  const clock = createTimerHarness();
-  const applied: string[] = [];
-  const controller = createStreamPreviewController({
-    throttleMs: 150,
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    onApply: (nextText) => {
-      applied.push(nextText);
-    },
-  });
-
-  for (let i = 1; i <= 30; i += 1) {
-    controller.onChunk(`chunk-${i}`);
-  }
-
-  assert.equal(applied.length, 1);
-  assert.equal(applied[0], 'chunk-1');
-  clock.advanceTo(150);
-  assert.deepEqual(applied, ['chunk-1', 'chunk-30']);
-});
-
-test('stream preview complete applies full output exactly once, even when done follows matching preview', () => {
-  const clock = createTimerHarness();
-  const applied: string[] = [];
-  const controller = createStreamPreviewController({
-    throttleMs: 150,
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    onApply: (nextText) => {
-      applied.push(nextText);
-    },
-  });
-
-  controller.onChunk('draft');
-  clock.advanceTo(150);
-  controller.onChunk('final output');
-  clock.advanceTo(300);
-  controller.complete('final output');
-
-  assert.deepEqual(applied, ['draft', 'final output']);
-});
-
 test('sources bubble merge keeps injected attachments visible even if later updates omit them', () => {
   const injectedAttachment = { kind: 'attachment', attachment_id: 'doc-7', label: 'appendix.pdf' } as const;
   const first = mergeSourcesForBubble([], [injectedAttachment]);
@@ -396,52 +309,29 @@ test('editor warning area includes preflight continue flow and diagnostics detai
   assert.equal(editorPaneSource.includes('Show details'), true);
 });
 
-test('malformed or interrupted chunk sequence errors are tolerated and future updates still apply', () => {
-  const clock = createTimerHarness();
-  const applied: string[] = [];
-  const errors: unknown[] = [];
-  const controller = createStreamPreviewController({
-    throttleMs: 150,
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    onApply: (nextText) => {
-      if (nextText === 'broken') throw new Error('malformed chunk');
-      applied.push(nextText);
-    },
-    onError: (error) => {
-      errors.push(error);
-    },
-  });
-
-  controller.onChunk('broken');
-  assert.equal(errors.length, 1);
-  controller.onChunk('recovered');
-  clock.advanceTo(150);
-  assert.equal(errors.length, 1);
-  assert.deepEqual(applied, ['recovered']);
+test('generate status remains streamed while editor mutation is deferred until finalize', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.drafting);'), true);
+  assert.equal(editorPaneSource.includes('onThinkingEvent: (event) => {'), true);
+  assert.equal(editorPaneSource.includes('onProgress: (nextOutputText) => {'), true);
+  assert.equal(editorPaneSource.includes('streamPreviewController.onChunk(nextOutputText);'), false);
 });
 
-test('cancellation clears pending flush and prevents stale scheduled updates', () => {
-  const clock = createTimerHarness();
-  const applied: string[] = [];
-  const controller = createStreamPreviewController({
-    throttleMs: 150,
-    now: clock.now,
-    setTimer: clock.setTimer,
-    clearTimer: clock.clearTimer,
-    onApply: (nextText) => {
-      applied.push(nextText);
-    },
-  });
+test('generate finalization still applies output exactly once after startGenerate resolves', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('const finalizeGeneratedOutput = async (outputText: string) => {'), true);
+  assert.equal(editorPaneSource.includes('const outputText = await startGenerate(targetFileId, {'), true);
+  assert.equal(editorPaneSource.includes('await finalizeGeneratedOutput(outputText);'), true);
+});
 
-  controller.onChunk('initial');
-  controller.onChunk('stale-pending');
-  assert.equal(clock.pendingTimerCount(), 1);
-  controller.cancel();
-  assert.equal(clock.pendingTimerCount(), 0);
+test('generate cancel/error paths still restore original draft and manual source metadata', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes("await dialog.alert('Generation cancelled', 'The generate request was cancelled. Original content is preserved.');"), true);
+  assert.equal(editorPaneSource.includes("await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');"), true);
+  assert.equal(editorPaneSource.includes("source: 'manual',"), true);
+});
 
-  clock.advanceTo(1000);
-  controller.onChunk('ignored-after-cancel');
-  assert.deepEqual(applied, ['initial']);
+test('generate running copy clarifies draft appears only after completion', () => {
+  const editorPaneSource = readFileSync(new URL('./EditorPane.tsx', import.meta.url), 'utf8');
+  assert.equal(editorPaneSource.includes('Generating… draft will appear when complete. Cancel'), true);
 });
