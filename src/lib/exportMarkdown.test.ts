@@ -103,8 +103,8 @@ test('reads uncompressed markdown entries from zip', async () => {
   const entries = await readMarkdownEntriesFromImport(file);
 
   assert.deepEqual(entries, [
-    { path: 'notes/alpha.md', content: '# Alpha' },
-    { path: 'notes/beta.md', content: 'Beta content' },
+    { path: 'alpha.md', content: '# Alpha' },
+    { path: 'beta.md', content: 'Beta content' },
   ]);
 });
 
@@ -114,7 +114,7 @@ test('reads compressed markdown entries from zip', async () => {
   const file = new File([zip], 'compressed.zip', { type: 'application/zip' });
   const entries = await readMarkdownEntriesFromImport(file);
 
-  assert.deepEqual(entries, [{ path: 'deep/report.md', content: 'Compressed content ✅' }]);
+  assert.deepEqual(entries, [{ path: 'report.md', content: 'Compressed content ✅' }]);
 });
 
 test('ignores non-markdown files and keeps relative markdown paths', async () => {
@@ -127,7 +127,7 @@ test('ignores non-markdown files and keeps relative markdown paths', async () =>
   const file = new File([zip], 'mixed.zip', { type: 'application/zip' });
   const entries = await readMarkdownEntriesFromImport(file);
 
-  assert.deepEqual(entries, [{ path: 'notes/summary.md', content: 'Keep me' }]);
+  assert.deepEqual(entries, [{ path: 'summary.md', content: 'Keep me' }]);
 });
 
 test('throws a clear error for malformed zip archives', async () => {
@@ -136,22 +136,22 @@ test('throws a clear error for malformed zip archives', async () => {
   await assert.rejects(readMarkdownEntriesFromImport(malformed), /malformed|central directory/i);
 });
 
-test('strips top-level zip-name folder when all markdown files are nested under it', async () => {
+test('strips common root folder even when zip name differs', async () => {
   const zip = buildZip([
-    { path: 'ABC/folderinsideabc/report.md', content: 'Inside nested folder', method: 0 },
-    { path: 'ABC/summary.md', content: 'Inside zip-name folder', method: 8 },
+    { path: 'project-export/folderinside/report.md', content: 'Inside nested folder', method: 0 },
+    { path: 'project-export/summary.md', content: 'Inside common root folder', method: 8 },
   ]);
 
-  const file = new File([zip], 'abc.zip', { type: 'application/zip' });
+  const file = new File([zip], 'different-name.zip', { type: 'application/zip' });
   const entries = await readMarkdownEntriesFromImport(file);
 
   assert.deepEqual(entries, [
-    { path: 'folderinsideabc/report.md', content: 'Inside nested folder' },
-    { path: 'summary.md', content: 'Inside zip-name folder' },
+    { path: 'folderinside/report.md', content: 'Inside nested folder' },
+    { path: 'summary.md', content: 'Inside common root folder' },
   ]);
 });
 
-test('keeps original paths when zip-name folder is not a universal prefix', async () => {
+test('keeps original paths for zip with mixed roots', async () => {
   const zip = buildZip([
     { path: 'abc/a.md', content: 'Nested', method: 0 },
     { path: 'other/b.md', content: 'Different root', method: 0 },
@@ -163,5 +163,20 @@ test('keeps original paths when zip-name folder is not a universal prefix', asyn
   assert.deepEqual(entries, [
     { path: 'abc/a.md', content: 'Nested' },
     { path: 'other/b.md', content: 'Different root' },
+  ]);
+});
+
+test('keeps original paths when a markdown file is at zip root', async () => {
+  const zip = buildZip([
+    { path: 'reports/inside.md', content: 'Nested note', method: 0 },
+    { path: 'top-level.md', content: 'At root', method: 0 },
+  ]);
+
+  const file = new File([zip], 'root-file.zip', { type: 'application/zip' });
+  const entries = await readMarkdownEntriesFromImport(file);
+
+  assert.deepEqual(entries, [
+    { path: 'reports/inside.md', content: 'Nested note' },
+    { path: 'top-level.md', content: 'At root' },
   ]);
 });

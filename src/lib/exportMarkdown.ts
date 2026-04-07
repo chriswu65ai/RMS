@@ -205,7 +205,6 @@ export async function readMarkdownEntriesFromImport(file: File) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const decoder = new TextDecoder();
   const entries: Array<{ path: string; content: string }> = [];
-  const zipBaseName = file.name.replace(/\.zip$/i, '').trim().toLowerCase();
 
   const eocdOffset = findEndOfCentralDirectoryOffset(bytes, view);
   const totalEntries = view.getUint16(eocdOffset + 10, true);
@@ -276,21 +275,26 @@ export async function readMarkdownEntriesFromImport(file: File) {
     offset = fileNameEnd + extraLength + commentLength;
   }
 
-  const shouldStripZipRootFolder = Boolean(zipBaseName)
-    && entries.length > 0
-    && entries.every((entry) => {
-      const normalized = entry.path.replace(/^\/+/, '').replace(/\\/g, '/');
-      const [firstPart, ...remainingParts] = normalized.split('/').filter(Boolean);
-      return firstPart?.toLowerCase() === zipBaseName && remainingParts.length > 0;
-    });
+  const normalizedEntries = entries.map((entry) => {
+    const normalizedPath = entry.path.replace(/^\/+/, '').replace(/\\/g, '/');
+    const segments = normalizedPath.split('/').filter(Boolean);
+    return { ...entry, segments };
+  });
 
-  if (!shouldStripZipRootFolder) {
+  if (normalizedEntries.length === 0) {
     return entries;
   }
 
-  return entries.map((entry) => {
-    const normalized = entry.path.replace(/^\/+/, '').replace(/\\/g, '/');
-    const [, ...remainingParts] = normalized.split('/').filter(Boolean);
+  const firstSegment = normalizedEntries[0]?.segments[0];
+  const shouldStripCommonRoot = Boolean(firstSegment)
+    && normalizedEntries.every((entry) => entry.segments[0] === firstSegment && entry.segments.length > 1);
+
+  if (!shouldStripCommonRoot) {
+    return entries;
+  }
+
+  return normalizedEntries.map((entry) => {
+    const [, ...remainingParts] = entry.segments;
     return {
       path: remainingParts.join('/'),
       content: entry.content,
