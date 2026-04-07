@@ -102,7 +102,10 @@ type AgentGenerationParams = {
   temperature?: number;
   maxTokens?: number;
   provider_timeouts?: {
+    generate_minutes?: number;
+    generate_idle_minutes?: number;
     generate_ms: number;
+    generate_idle_ms?: number;
     tool_first_turn_ms: number;
     tool_followup_ms: number;
     model_list_ms: number;
@@ -1587,7 +1590,10 @@ const WEB_SEARCH_SAFE_SEARCH_DEFAULT = false;
 const WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT = true;
 const WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT = 'http://localhost:8080';
 const WEB_SEARCH_SEARXNG_USE_JSON_API_DEFAULT = true;
-const PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT = 45_000;
+const PROVIDER_TIMEOUT_GENERATE_MINUTES_DEFAULT = 30;
+const PROVIDER_TIMEOUT_GENERATE_IDLE_MINUTES_DEFAULT = 3;
+const PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT = PROVIDER_TIMEOUT_GENERATE_MINUTES_DEFAULT * 60_000;
+const PROVIDER_TIMEOUT_GENERATE_IDLE_MS_DEFAULT = PROVIDER_TIMEOUT_GENERATE_IDLE_MINUTES_DEFAULT * 60_000;
 const PROVIDER_TIMEOUT_TOOL_FIRST_TURN_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_TOOL_FOLLOWUP_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_MODEL_LIST_MS_DEFAULT = 15_000;
@@ -2243,13 +2249,39 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
   const searxngConfig = webSearchProviderConfig?.searxng && typeof webSearchProviderConfig.searxng === 'object'
     ? (webSearchProviderConfig.searxng as Record<string, unknown>)
     : null;
+  const sanitizeTimeoutMinutes = (value: unknown, fallbackMinutes: number) => (
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallbackMinutes
+  );
+  const sanitizeTimeoutMs = (value: unknown, fallbackMs: number) => (
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallbackMs
+  );
+  const resolveTimeoutMsFromMinutesOrMs = (minutesValue: unknown, msValue: unknown, fallbackMs: number) => {
+    if (typeof minutesValue === 'number' && Number.isFinite(minutesValue)) {
+      return sanitizeTimeoutMinutes(minutesValue, Math.max(1, Math.round(fallbackMs / 60_000))) * 60_000;
+    }
+    return sanitizeTimeoutMs(msValue, fallbackMs);
+  };
+  const msToMinutes = (valueMs: number, fallbackMinutes: number) => (
+    Number.isFinite(valueMs) ? Math.max(1, Math.round(valueMs / 60_000)) : fallbackMinutes
+  );
+  const generateMs = resolveTimeoutMsFromMinutesOrMs(
+    providerTimeouts?.generate_minutes,
+    providerTimeouts?.generate_ms,
+    PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT,
+  );
+  const generateIdleMs = resolveTimeoutMsFromMinutesOrMs(
+    providerTimeouts?.generate_idle_minutes,
+    providerTimeouts?.generate_idle_ms,
+    PROVIDER_TIMEOUT_GENERATE_IDLE_MS_DEFAULT,
+  );
   return {
     temperature: typeof next.temperature === 'number' ? next.temperature : undefined,
     maxTokens: typeof next.maxTokens === 'number' ? next.maxTokens : undefined,
     provider_timeouts: {
-      generate_ms: typeof providerTimeouts?.generate_ms === 'number' && Number.isFinite(providerTimeouts.generate_ms)
-        ? Math.max(1, Math.floor(providerTimeouts.generate_ms))
-        : PROVIDER_TIMEOUT_GENERATE_MS_DEFAULT,
+      generate_minutes: msToMinutes(generateMs, PROVIDER_TIMEOUT_GENERATE_MINUTES_DEFAULT),
+      generate_idle_minutes: msToMinutes(generateIdleMs, PROVIDER_TIMEOUT_GENERATE_IDLE_MINUTES_DEFAULT),
+      generate_ms: generateMs,
+      generate_idle_ms: generateIdleMs,
       tool_first_turn_ms: typeof providerTimeouts?.tool_first_turn_ms === 'number' && Number.isFinite(providerTimeouts.tool_first_turn_ms)
         ? Math.max(1, Math.floor(providerTimeouts.tool_first_turn_ms))
         : PROVIDER_TIMEOUT_TOOL_FIRST_TURN_MS_DEFAULT,
@@ -2339,6 +2371,7 @@ const resolveOllamaRuntimeConfig = (settings: { default_provider: AgentProvider;
 const applyProviderTimeoutSettings = (generationParams: AgentGenerationParams | undefined) => {
   setProviderTimeoutSettings({
     generateMs: generationParams?.provider_timeouts?.generate_ms,
+    generateIdleMs: generationParams?.provider_timeouts?.generate_idle_ms,
     toolFirstTurnMs: generationParams?.provider_timeouts?.tool_first_turn_ms,
     toolFollowupMs: generationParams?.provider_timeouts?.tool_followup_ms,
     listModelsMs: generationParams?.provider_timeouts?.model_list_ms,

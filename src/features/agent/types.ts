@@ -47,6 +47,15 @@ export type AgentSettings = {
   generation_params?: {
     temperature?: number;
     maxTokens?: number;
+    provider_timeouts?: {
+      generate_minutes?: number;
+      generate_idle_minutes?: number;
+      generate_ms?: number;
+      generate_idle_ms?: number;
+      tool_first_turn_ms?: number;
+      tool_followup_ms?: number;
+      model_list_ms?: number;
+    };
     local_connection?: {
       base_url: string;
       model: string;

@@ -54,6 +54,21 @@ test('save defaults payload for ollama uses selected model and current base URL 
   assert.equal(payload.generation_params?.local_connection?.base_url, 'http://127.0.0.1:11434');
   assert.equal(payload.generation_params?.local_connection?.model, 'deepseek-r1:8b');
   assert.equal(payload.generation_params?.local_connection?.B, 2);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_minutes, 30);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 3);
+});
+
+test('save defaults payload persists provider generate and idle timeout minutes as milliseconds and minutes', () => {
+  const payload = buildSaveDefaultsPayload({
+    default_provider: 'openai',
+    default_model: 'gpt-4.1',
+    generation_params: {},
+  }, 'openai', 'gpt-4.1-mini', 'http://localhost:11434', 45, 4);
+
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_minutes, 45);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_minutes, 4);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_ms, 2_700_000);
+  assert.equal(payload.generation_params?.provider_timeouts?.generate_idle_ms, 240_000);
 });
 
 test('web search save payload preserves existing params and normalizes numeric controls', () => {
@@ -511,7 +526,7 @@ test('configure agent section header reads Configure Agent', () => {
 });
 
 test('configure agent section groups web-search toggles before web-search detail section', () => {
-  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/components/AgentSettingsSurface.tsx'), 'utf-8');
   const configureIndex = source.indexOf('<h2 className="text-lg font-semibold">Configure Agent</h2>');
   const enableSearchIndex = source.indexOf('<span>Enable web search</span>');
   const sourceCitationIndex = source.indexOf('<span>Source citation</span>');
@@ -521,6 +536,14 @@ test('configure agent section groups web-search toggles before web-search detail
   assert.ok(enableSearchIndex > configureIndex, 'Expected Enable web search toggle inside Configure Agent section.');
   assert.ok(sourceCitationIndex > enableSearchIndex, 'Expected Source citation toggle to follow Enable web search toggle.');
   assert.ok(webSearchSectionIndex > sourceCitationIndex, 'Expected Web Search section details to appear after Configure Agent toggles.');
+});
+
+test('configure agent renders generation and idle timeout minute fields with defaults', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/components/AgentSettingsSurface.tsx'), 'utf-8');
+  assert.equal(source.includes('Generation timeout (minutes)'), true);
+  assert.equal(source.includes('Idle timeout (minutes)'), true);
+  assert.equal(source.includes('GENERATION_TIMEOUT_MINUTES_DEFAULT = 30'), true);
+  assert.equal(source.includes('GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 3'), true);
 });
 
 test('activity log clear action requires confirmation before deleting rows', () => {

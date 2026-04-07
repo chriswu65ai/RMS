@@ -91,6 +91,10 @@ const DEFAULT_CHAT_COMMAND_PREFIX_MAP: ChatCommandPrefixMap = {
 const SOURCE_IMPORTANCE_MIN = 1;
 const SOURCE_IMPORTANCE_MAX = 100;
 const SOURCE_IMPORTANCE_DEFAULT = 50;
+const GENERATION_TIMEOUT_MINUTES_DEFAULT = 30;
+const GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 3;
+const GENERATION_TIMEOUT_MINUTES_MIN = 1;
+const GENERATION_TIMEOUT_MINUTES_MAX = 120;
 type FeedbackState = { kind: 'success' | 'error'; text: string };
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
@@ -369,6 +373,8 @@ export function AgentSettingsSurface() {
   const [defaultSaveMessage, setDefaultSaveMessage] = useState('');
   const [localSaveMessage, setLocalSaveMessage] = useState('');
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [generationTimeoutMinutes, setGenerationTimeoutMinutes] = useState(String(GENERATION_TIMEOUT_MINUTES_DEFAULT));
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(String(GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT));
   const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProvider>('duckduckgo');
   const [webSearchSearxngBaseUrl, setWebSearchSearxngBaseUrl] = useState(WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
   const [webSearchSearxngUseHtmlMode, setWebSearchSearxngUseHtmlMode] = useState(WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT);
@@ -494,6 +500,9 @@ export function AgentSettingsSurface() {
         invalidateAgentOllamaModelsForBaseUrl(savedRuntime.baseUrl);
         setActivity(events);
         const webSearchSettings = settings.generation_params?.web_search;
+        const providerTimeouts = settings.generation_params?.provider_timeouts;
+        setGenerationTimeoutMinutes(String(providerTimeouts?.generate_minutes ?? GENERATION_TIMEOUT_MINUTES_DEFAULT));
+        setIdleTimeoutMinutes(String(providerTimeouts?.generate_idle_minutes ?? GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT));
         setWebSearchEnabled(Boolean(webSearchSettings?.enabled));
         setWebSearchProvider(webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo');
         setWebSearchSearxngBaseUrl(normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''));
@@ -555,6 +564,19 @@ export function AgentSettingsSurface() {
   }, []);
 
   const canSaveDefaults = selectedProviderModel.trim().length > 0;
+  const parsedGenerationTimeoutMinutes = Number(generationTimeoutMinutes);
+  const parsedIdleTimeoutMinutes = Number(idleTimeoutMinutes);
+  const generationTimeoutValidationError = Number.isInteger(parsedGenerationTimeoutMinutes)
+    && parsedGenerationTimeoutMinutes >= GENERATION_TIMEOUT_MINUTES_MIN
+    && parsedGenerationTimeoutMinutes <= GENERATION_TIMEOUT_MINUTES_MAX
+    ? ''
+    : `Generation timeout must be an integer between ${GENERATION_TIMEOUT_MINUTES_MIN} and ${GENERATION_TIMEOUT_MINUTES_MAX}.`;
+  const idleTimeoutValidationError = Number.isInteger(parsedIdleTimeoutMinutes)
+    && parsedIdleTimeoutMinutes >= GENERATION_TIMEOUT_MINUTES_MIN
+    && parsedIdleTimeoutMinutes <= GENERATION_TIMEOUT_MINUTES_MAX
+    ? ''
+    : `Idle timeout must be an integer between ${GENERATION_TIMEOUT_MINUTES_MIN} and ${GENERATION_TIMEOUT_MINUTES_MAX}.`;
+  const canSaveDefaultsWithTimeouts = canSaveDefaults && !generationTimeoutValidationError && !idleTimeoutValidationError;
   const localBaseUrlValidationError = validateEndpointUrl(localBaseUrl, 'Interface URL');
   const searxngBaseUrlValidationError = shouldShowSearxngConfigFields(webSearchProvider)
     ? validateEndpointUrl(webSearchSearxngBaseUrl, 'SearXNG base URL', { stripSearxngSearchPath: true })
@@ -673,6 +695,30 @@ export function AgentSettingsSurface() {
                 : null}
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Generation timeout (minutes)</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={GENERATION_TIMEOUT_MINUTES_MIN}
+                  max={GENERATION_TIMEOUT_MINUTES_MAX}
+                  step={1}
+                  value={generationTimeoutMinutes}
+                  onChange={(event) => setGenerationTimeoutMinutes(event.target.value)}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Idle timeout (minutes)</span>
+                <input
+                  className="input"
+                  type="number"
+                  min={GENERATION_TIMEOUT_MINUTES_MIN}
+                  max={GENERATION_TIMEOUT_MINUTES_MAX}
+                  step={1}
+                  value={idleTimeoutMinutes}
+                  onChange={(event) => setIdleTimeoutMinutes(event.target.value)}
+                />
+              </label>
               <label className={CHECKBOX_WITH_LABEL_CLASS}>
                 <input
                   className={CHECKBOX_INPUT_CLASS}
@@ -698,7 +744,7 @@ export function AgentSettingsSurface() {
             <div className="mt-3">
               <button
                 className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-                disabled={!canSaveDefaults}
+                disabled={!canSaveDefaultsWithTimeouts}
                 onClick={async () => {
                   setDefaultSaveMessage('');
                   setDefaultAgentFeedbackMessage('');
@@ -712,7 +758,14 @@ export function AgentSettingsSurface() {
                     const settings = await getAgentSettings();
                     const canonicalBaseUrl = localBaseUrl.trim() || LOCAL_BASE_URL_DEFAULT;
                     const canonicalModel = selectedProviderModel.trim();
-                    await saveAgentSettings(buildSaveDefaultsPayload(settings, provider, selectedProviderModel, localBaseUrl));
+                    await saveAgentSettings(buildSaveDefaultsPayload(
+                      settings,
+                      provider,
+                      selectedProviderModel,
+                      localBaseUrl,
+                      parsedGenerationTimeoutMinutes,
+                      parsedIdleTimeoutMinutes,
+                    ));
                     if (provider === 'ollama') {
                       setSavedLocalRuntime({ baseUrl: canonicalBaseUrl, model: canonicalModel });
                       setAgentSelectedModel('ollama', canonicalModel);
@@ -729,6 +782,8 @@ export function AgentSettingsSurface() {
                 Save default agent
               </button>
               {defaultSaveMessage ? <p className="mt-2 text-xs text-emerald-700">{defaultSaveMessage}</p> : null}
+              {generationTimeoutValidationError ? <p className="mt-2 text-xs text-rose-700">{generationTimeoutValidationError}</p> : null}
+              {idleTimeoutValidationError ? <p className="mt-2 text-xs text-rose-700">{idleTimeoutValidationError}</p> : null}
               {defaultAgentFeedbackMessage ? <p className="mt-2 text-xs text-rose-700">{defaultAgentFeedbackMessage}</p> : null}
             </div>
           </div>
