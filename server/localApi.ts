@@ -95,6 +95,7 @@ type AgentSettingsRow = {
 
 type WebSearchProvider = 'duckduckgo' | 'searxng';
 type WebSearchMode = 'single' | 'deep';
+type WebSearchRoutingMode = 'strict' | 'auto';
 type WebSearchRecency = 'any' | '7d' | '30d' | '365d';
 type WebSearchDomainPolicy = 'open_web' | 'prefer_list' | 'only_list';
 
@@ -120,6 +121,7 @@ type AgentGenerationParams = {
     fail_open_on_tool_error: boolean;
     provider: WebSearchProvider;
     mode: WebSearchMode;
+    routing_mode: WebSearchRoutingMode;
     max_results: number;
     timeout_ms: number;
     safe_search: boolean;
@@ -1591,6 +1593,7 @@ const OLLAMA_BASE_URL_DEFAULT = 'http://localhost:11434';
 
 const WEB_SEARCH_PROVIDER_DEFAULT: WebSearchProvider = 'duckduckgo';
 const WEB_SEARCH_MODE_DEFAULT: WebSearchMode = 'single';
+const WEB_SEARCH_ROUTING_MODE_DEFAULT: WebSearchRoutingMode = 'strict';
 const WEB_SEARCH_RECENCY_DEFAULT: WebSearchRecency = 'any';
 const WEB_SEARCH_DOMAIN_POLICY_DEFAULT: WebSearchDomainPolicy = 'open_web';
 const WEB_SEARCH_MAX_RESULTS_DEFAULT = 6;
@@ -1608,6 +1611,7 @@ const PROVIDER_TIMEOUT_TOOL_FOLLOWUP_MS_DEFAULT = 45_000;
 const PROVIDER_TIMEOUT_MODEL_LIST_MS_DEFAULT = 15_000;
 const isWebSearchProvider = (value: unknown): value is WebSearchProvider => value === 'duckduckgo' || value === 'searxng';
 const isWebSearchMode = (value: unknown): value is WebSearchMode => value === 'single' || value === 'deep';
+const isWebSearchRoutingMode = (value: unknown): value is WebSearchRoutingMode => value === 'strict' || value === 'auto';
 const isWebSearchRecency = (value: unknown): value is WebSearchRecency => value === 'any' || value === '7d' || value === '30d' || value === '365d';
 const isWebSearchDomainPolicy = (value: unknown): value is WebSearchDomainPolicy => value === 'open_web' || value === 'prefer_list' || value === 'only_list';
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -2317,6 +2321,7 @@ const normalizeAgentGenerationParams = (raw: unknown): AgentGenerationParams => 
         : WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT,
       provider: isWebSearchProvider(webSearch?.provider) ? webSearch.provider : WEB_SEARCH_PROVIDER_DEFAULT,
       mode: isWebSearchMode(webSearch?.mode) ? webSearch.mode : WEB_SEARCH_MODE_DEFAULT,
+      routing_mode: isWebSearchRoutingMode(webSearch?.routing_mode) ? webSearch.routing_mode : WEB_SEARCH_ROUTING_MODE_DEFAULT,
       max_results: typeof webSearch?.max_results === 'number' && Number.isFinite(webSearch.max_results)
         ? Math.max(1, Math.floor(webSearch.max_results))
         : WEB_SEARCH_MAX_RESULTS_DEFAULT,
@@ -4660,6 +4665,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           fail_open_on_tool_error: WEB_SEARCH_FAIL_OPEN_ON_TOOL_ERROR_DEFAULT,
           provider: WEB_SEARCH_PROVIDER_DEFAULT,
           mode: WEB_SEARCH_MODE_DEFAULT,
+          routing_mode: WEB_SEARCH_ROUTING_MODE_DEFAULT,
           max_results: WEB_SEARCH_MAX_RESULTS_DEFAULT,
           timeout_ms: WEB_SEARCH_TIMEOUT_MS_DEFAULT,
           safe_search: WEB_SEARCH_SAFE_SEARCH_DEFAULT,
@@ -4698,10 +4704,15 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
         preparedInputText = buildPreparedInputText();
         let searchWarningMessage: string | null = null;
         const routingDecision = decideWebSearchRouting(inputText);
+        let routingOutcomeReason: string | null = null;
         const effectiveWebSearchConfig = {
           ...normalizedWebSearchConfig,
         };
-        if (normalizedWebSearchConfig.enabled && routingDecision.shouldSearch) {
+        const shouldSearchByRouting = normalizedWebSearchConfig.routing_mode === 'strict'
+          ? routingDecision.reason !== 'explicit_no_web'
+          : routingDecision.shouldSearch;
+        if (normalizedWebSearchConfig.enabled && shouldSearchByRouting) {
+          routingOutcomeReason = `run:${normalizedWebSearchConfig.routing_mode}:${routingDecision.reason}`;
           try {
             const orchestration = await runAgentToolOrchestration({
               provider,
@@ -4757,6 +4768,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
             search_warning: searchWarningMessage,
           });
         } else if (normalizedWebSearchConfig.enabled) {
+          routingOutcomeReason = `skip:${normalizedWebSearchConfig.routing_mode}:${routingDecision.reason}`;
           writeNdjson(res, {
             type: 'search_skipped',
             reason: routingDecision.reason,
@@ -4820,7 +4832,7 @@ export async function handleLocalApiRoute(req: IncomingMessage, res: ServerRespo
           tool_calls_succeeded: toolCallsSucceeded,
           search_query_count: queryCount,
           source_count: sourceCount,
-          tool_failure_reason: toolFailureReason,
+          tool_failure_reason: toolFailureReason ?? routingOutcomeReason,
           citation_events_json: citationResult.citationEvents.length > 0 ? JSON.stringify(citationResult.citationEvents) : null,
         });
         webSearchMetadata.queryCount = queryCount;
