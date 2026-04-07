@@ -362,6 +362,20 @@ test('local runtime actions render Save local settings before Refresh models', (
   assert.ok(saveIndex > localActionsStart);
   assert.ok(refreshIndex > saveIndex);
 });
+
+test('AgentPage legacy banner is optional and defaults to hidden', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
+  assert.equal(source.includes('showLegacyBanner?: boolean;'), true);
+  assert.equal(source.includes('showLegacyBanner = false'), true);
+  assert.equal(source.includes('{showLegacyBanner ? ('), true);
+  assert.equal(source.includes('This route is kept for backward compatibility.'), true);
+});
+
+test('SettingsAIPage renders AgentPage without the legacy migration banner', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/settings/SettingsAIPage.tsx'), 'utf-8');
+  assert.equal(source.includes('<AgentPage showLegacyBanner={false} />'), true);
+});
+
 test('AgentPage UI no longer references the top web-search warning banner message', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');
   assert.equal(source.includes('Web search is enabled, but recent runs reported search warnings'), false);
