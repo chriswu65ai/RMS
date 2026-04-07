@@ -347,6 +347,7 @@ const sqlEscape = (value: unknown) => {
 };
 
 const withBusyTimeoutPragma = (sql: string) => `PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS};\n${sql}`;
+const busyTimeoutPragmaCmd = `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`;
 
 const sleep = async (ms: number) => {
   if (ms <= 0) return;
@@ -419,7 +420,7 @@ const execSql = (sql: string) => {
 };
 
 const queryJson = <T>(sql: string): T[] => {
-  const result = spawnSync('sqlite3', ['-json', dbPath, withBusyTimeoutPragma(sql)], { stdio: 'pipe', encoding: 'utf8' });
+  const result = spawnSync('sqlite3', ['-json', '-cmd', busyTimeoutPragmaCmd, dbPath, sql], { stdio: 'pipe', encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(result.stderr || 'sqlite3 query failed.');
   }
@@ -469,7 +470,7 @@ const execSqlAsync = async (
 const queryJsonAsync = async <T>(sql: string, timeoutMs = DB_OP_TIMEOUT_MS): Promise<T[]> => (
   enqueueDbCommand(async () => {
     const stdout = await new Promise<string>((resolve, reject) => {
-      const child = execFile('sqlite3', ['-json', dbPath, withBusyTimeoutPragma(sql)], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
+      const child = execFile('sqlite3', ['-json', '-cmd', busyTimeoutPragmaCmd, dbPath, sql], { encoding: 'utf8', timeout: timeoutMs }, (error, out) => {
         if (error) {
           reject(error);
           return;
