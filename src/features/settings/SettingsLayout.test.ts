@@ -26,6 +26,17 @@ test('settings app routes include nested subpages with /settings redirecting to 
   assert.equal(source.includes('<Route path="*" element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />'), true);
 });
 
+
+test('legacy /agent route remains backward compatible via lightweight migration redirect screen', () => {
+  const appSource = readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  const legacySource = readFileSync(path.resolve(process.cwd(), 'src/features/agent/LegacyAgentRoute.tsx'), 'utf-8');
+
+  assert.equal(appSource.includes("import { LegacyAgentRoute } from './features/agent/LegacyAgentRoute';"), true);
+  assert.equal(appSource.includes('<Route path="/agent" element={<LegacyAgentRoute />} />'), true);
+  assert.equal(legacySource.includes("navigate('/settings/ai', { replace: true });"), true);
+  assert.equal(legacySource.includes('AI configuration has moved to <strong>Settings → AI</strong>. Redirecting now…'), true);
+});
+
 test('system log settings page includes filtering, pagination, and export controls', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/settings/SettingsSystemLogPage.tsx'), 'utf-8');
   assert.equal(source.includes('Filter by level'), true);

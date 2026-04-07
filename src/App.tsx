@@ -17,6 +17,7 @@ import { SettingsGeneralPage } from './features/settings/SettingsGeneralPage';
 import { SettingsAIPage } from './features/settings/SettingsAIPage';
 import { SettingsAttachmentsPage } from './features/settings/SettingsAttachmentsPage';
 import { SettingsSystemLogPage } from './features/settings/SettingsSystemLogPage';
+import { LegacyAgentRoute } from './features/agent/LegacyAgentRoute';
 import { ExpandableSearch } from './components/shared/ExpandableSearch';
 import { listNewResearchTasks } from './lib/dataApi';
 import { Recommendation, type NewResearchTask, type Note } from './types/models';
@@ -291,7 +292,7 @@ export function App() {
                 </ResearchRouteErrorBoundary>
               )}
             />
-            <Route path="/agent" element={<Navigate to="/settings/ai" replace />} />
+            <Route path="/agent" element={<LegacyAgentRoute />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/settings" element={<SettingsLayout />}>
               <Route index element={<Navigate to={DEFAULT_SETTINGS_SUBPAGE} replace />} />
