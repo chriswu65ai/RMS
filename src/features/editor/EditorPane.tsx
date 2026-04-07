@@ -26,7 +26,6 @@ import { runUiAsync } from '../../lib/uiAsync';
 const EMOJIS = ['🔥', '✅', '📌', '🧠', '🚀', '💡', '⚠️', '📊', '🎯', '📝', '🤖', '🔍', '📣', '🧩', '💬', '✨'];
 const THINKING_VISIBLE_LINE_LIMIT = 5;
 const THINKING_SUCCESS_AUTO_CLOSE_MS = 3000;
-const STREAM_UI_THROTTLE_MS = 150;
 const SYNTHETIC_PROGRESS_REFINING_THRESHOLD = 280;
 const SYNTHETIC_PROGRESS_MESSAGES = {
   drafting: 'LLM: Starting draft',
@@ -48,93 +47,6 @@ type ThinkingStatusUi = {
   badgeClassName: string;
 };
 
-type StreamPreviewControllerOptions = {
-  throttleMs: number;
-  now?: () => number;
-  setTimer?: (callback: () => void, delayMs: number) => number;
-  clearTimer?: (timerId: number) => void;
-  onApply: (nextText: string) => void | Promise<void>;
-  onError?: (error: unknown) => void | Promise<void>;
-};
-
-type StreamPreviewController = {
-  onChunk: (nextText: string) => void;
-  complete: (finalText: string) => void;
-  cancel: () => void;
-};
-
-export const createStreamPreviewController = ({
-  throttleMs,
-  now = () => Date.now(),
-  setTimer = (callback, delayMs) => window.setTimeout(callback, delayMs),
-  clearTimer = (timerId) => window.clearTimeout(timerId),
-  onApply,
-  onError,
-}: StreamPreviewControllerOptions): StreamPreviewController => {
-  let streamBuffer = '';
-  let lastAppliedAt = 0;
-  let lastAppliedText = '';
-  let timerId: number | null = null;
-  let active = true;
-
-  const clearPendingTimer = () => {
-    if (timerId === null) return;
-    clearTimer(timerId);
-    timerId = null;
-  };
-
-  const safeApply = (nextText: string) => {
-    try {
-      void onApply(nextText);
-    } catch (error) {
-      if (onError) void onError(error);
-    }
-  };
-
-  const flush = () => {
-    if (!active) return;
-    if (!streamBuffer || streamBuffer === lastAppliedText) return;
-    const nowMs = now();
-    if (nowMs - lastAppliedAt < throttleMs) return;
-    lastAppliedAt = nowMs;
-    lastAppliedText = streamBuffer;
-    safeApply(streamBuffer);
-  };
-
-  const scheduleFlush = () => {
-    if (!active || timerId !== null) return;
-    const elapsedSinceApply = now() - lastAppliedAt;
-    const delay = Math.max(0, throttleMs - elapsedSinceApply);
-    timerId = setTimer(() => {
-      timerId = null;
-      flush();
-    }, delay);
-  };
-
-  return {
-    onChunk: (nextText: string) => {
-      if (!active) return;
-      streamBuffer = nextText;
-      flush();
-      scheduleFlush();
-    },
-    complete: (finalText: string) => {
-      if (!active) return;
-      clearPendingTimer();
-      streamBuffer = '';
-      if (finalText && finalText !== lastAppliedText) {
-        lastAppliedAt = now();
-        lastAppliedText = finalText;
-        safeApply(finalText);
-      }
-    },
-    cancel: () => {
-      active = false;
-      clearPendingTimer();
-      streamBuffer = '';
-    },
-  };
-};
 
 export const getThinkingStatusUi = (status: ThinkingStatus): ThinkingStatusUi => {
   switch (status) {
@@ -416,7 +328,6 @@ export function EditorPane() {
   const originalTextByFileIdRef = useRef<Record<string, string | null>>({});
   const preGenerateVisibleTextByFileIdRef = useRef<Record<string, string | null>>({});
   const suppressOnChangeRef = useRef(0);
-  const streamPreviewControllerRef = useRef<StreamPreviewController | null>(null);
   const isMountedRef = useRef(true);
   const streamFailureAlertShownByFileIdRef = useRef<Record<string, boolean>>({});
   const pendingHistoryBaselineByFileIdRef = useRef<Record<string, { beforeVisible: string; afterVisible: string } | null>>({});
@@ -606,8 +517,6 @@ export function EditorPane() {
 
   useEffect(() => () => {
     isMountedRef.current = false;
-    streamPreviewControllerRef.current?.cancel();
-    streamPreviewControllerRef.current = null;
   }, []);
 
 
@@ -1096,15 +1005,9 @@ export function EditorPane() {
     setIngestionDiagnosticsWarning(null);
     setPendingPreflightDiagnostics(null);
     setShowWarningDetails(false);
-    streamPreviewControllerRef.current?.cancel();
-    streamPreviewControllerRef.current = null;
     streamFailureAlertShownByFileIdRef.current[targetFileId] = false;
-    const clearStreamRuntime = () => {
-      streamPreviewControllerRef.current?.cancel();
-      streamPreviewControllerRef.current = null;
-    };
 
-    const reportGeneratePhaseError = async (phase: 'stream_update' | 'finalize', error: unknown) => {
+    const reportGeneratePhaseError = async (phase: 'finalize', error: unknown) => {
       console.error('Research generation phase failed', {
         provider: defaultProvider,
         model: defaultModel,
@@ -1118,34 +1021,6 @@ export function EditorPane() {
         'Generate encountered an issue',
         'We hit a temporary streaming issue. Your prior content has been preserved.',
       );
-    };
-
-    const applyStreamingPreviewText = async (nextOutputText: string) => {
-      try {
-        if (!isMountedRef.current) return;
-        const view = viewRef.current;
-        if (view && viewFileIdRef.current === targetFileId && selectedFileIdRef.current === targetFileId) {
-          const nextState = applyTextToEditorState(view.state, nextOutputText, false);
-          if (nextState !== view.state) {
-            suppressOnChangeRef.current += 1;
-            view.setState(nextState);
-            editorStateByFileIdRef.current[targetFileId] = nextState;
-            updateHistoryAvailabilityForFile(targetFileId, nextState);
-          }
-          return;
-        }
-        const cachedState = editorStateByFileIdRef.current[targetFileId];
-        if (!cachedState) return;
-        const nextState = applyTextToEditorState(cachedState, nextOutputText, false);
-        editorStateByFileIdRef.current[targetFileId] = nextState;
-        updateHistoryAvailabilityForFile(targetFileId, nextState);
-      } catch (error) {
-        const baselineText = preGenerateVisibleTextByFileIdRef.current[targetFileId];
-        if (baselineText && isMountedRef.current) {
-          dispatchEditorContent(targetFileId, baselineText, false);
-        }
-        await reportGeneratePhaseError('stream_update', error);
-      }
     };
 
     const finalizeGeneratedOutput = async (outputText: string) => {
@@ -1208,16 +1083,6 @@ export function EditorPane() {
       }
     };
 
-    const streamPreviewController = createStreamPreviewController({
-      throttleMs: STREAM_UI_THROTTLE_MS,
-      onApply: (nextOutputText) => {
-        void applyStreamingPreviewText(nextOutputText);
-      },
-      onError: (error) => {
-        void reportGeneratePhaseError('stream_update', error);
-      },
-    });
-    streamPreviewControllerRef.current = streamPreviewController;
     let sawExplicitProviderThinkingEvent = false;
     let syntheticDraftingShown = false;
     let syntheticRefiningShown = false;
@@ -1244,7 +1109,6 @@ export function EditorPane() {
             syntheticRefiningShown = true;
             appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.refining);
           }
-          streamPreviewController.onChunk(nextOutputText);
         },
         onSources: (sources) => {
           mergeIncomingSourcesForFile(targetFileId, sources);
@@ -1273,8 +1137,6 @@ export function EditorPane() {
           appendThinkingEventsForFile(targetFileId, [{ id: `${Date.now()}-${event.type}`, text: normalized, type: event.type }]);
         },
       });
-      streamPreviewController.complete(outputText);
-      clearStreamRuntime();
       if (!sawExplicitProviderThinkingEvent && !syntheticFinalizingShown) {
         syntheticFinalizingShown = true;
         appendSyntheticThinking(SYNTHETIC_PROGRESS_MESSAGES.finalizing);
@@ -1294,7 +1156,6 @@ export function EditorPane() {
         setShowGeneratedDraftNotice(true);
       }
     } catch (error) {
-      clearStreamRuntime();
       const isCancelled = error instanceof Error && error.name === 'AbortError';
       if (isCancelled) {
         const originalTextForFile = originalTextByFileIdRef.current[targetFileId];
@@ -1338,15 +1199,12 @@ export function EditorPane() {
         await dialog.alert('Generate failed', error instanceof Error ? error.message : 'Generation failed. Original content is preserved.');
       }
     } finally {
-      clearStreamRuntime();
       originalTextByFileIdRef.current[targetFileId] = null;
       preGenerateVisibleTextByFileIdRef.current[targetFileId] = null;
     }
   };
 
   const cancelGenerate = () => {
-    streamPreviewControllerRef.current?.cancel();
-    streamPreviewControllerRef.current = null;
     cancelGenerateByFileId(file.id);
   };
 
@@ -1377,7 +1235,7 @@ export function EditorPane() {
               {isGenerateRunning ? (
                 <button className="inline-flex items-center rounded-md border border-amber-400 px-2 py-1 text-xs text-amber-700" onClick={cancelGenerate}>
                   <LoaderCircle className="mr-1 animate-spin" size={14} />
-                  <X className="mr-1" size={14} />Cancel
+                  <X className="mr-1" size={14} />Generating… draft will appear when complete. Cancel
                 </button>
               ) : (
                 <button className="inline-flex items-center rounded-md border px-2 py-1 text-xs disabled:opacity-50" onClick={() => void runGenerate()} disabled={!defaultModel.trim()}>
