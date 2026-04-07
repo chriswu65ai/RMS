@@ -96,6 +96,19 @@ const GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 3;
 const GENERATION_TIMEOUT_MINUTES_MIN = 1;
 const GENERATION_TIMEOUT_MINUTES_MAX = 120;
 type FeedbackState = { kind: 'success' | 'error'; text: string };
+type WebSearchDraftState = {
+  enabled: boolean;
+  provider: WebSearchProvider;
+  mode: WebSearchMode;
+  maxResults: string;
+  timeoutSeconds: string;
+  safeSearch: boolean;
+  recency: WebSearchRecency;
+  domainPolicy: WebSearchDomainPolicy;
+  sourceCitation: boolean;
+  searxngBaseUrl: string;
+  searxngUseHtmlMode: boolean;
+};
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
 const clampSourceImportance = (value: number) => Math.min(SOURCE_IMPORTANCE_MAX, Math.max(SOURCE_IMPORTANCE_MIN, value));
@@ -385,6 +398,7 @@ export function AgentSettingsSurface() {
   const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
   const [webSearchSourceCitation, setWebSearchSourceCitation] = useState(false);
+  const [savedWebSearchDraft, setSavedWebSearchDraft] = useState<WebSearchDraftState | null>(null);
   const [webSearchStatusFeedback, setWebSearchStatusFeedback] = useState<FeedbackState | null>(null);
   const [preferredSources, setPreferredSources] = useState<PreferredSource[]>([]);
   const [preferredSourcesFeedback, setPreferredSourcesFeedback] = useState<FeedbackState | null>(null);
@@ -518,6 +532,19 @@ export function AgentSettingsSurface() {
         setWebSearchRecency(webSearchSettings?.recency ?? 'any');
         setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
         setWebSearchSourceCitation(getWebSearchSourceCitationDefault(webSearchSettings?.source_citation));
+        setSavedWebSearchDraft({
+          enabled: Boolean(webSearchSettings?.enabled),
+          provider: webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo',
+          mode: resolvedMode,
+          maxResults: String(loadedMaxResults),
+          timeoutSeconds: String(loadedTimeoutSeconds),
+          safeSearch: webSearchSettings?.safe_search ?? WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+          recency: webSearchSettings?.recency ?? 'any',
+          domainPolicy: webSearchSettings?.domain_policy ?? 'open_web',
+          sourceCitation: getWebSearchSourceCitationDefault(webSearchSettings?.source_citation),
+          searxngBaseUrl: normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''),
+          searxngUseHtmlMode: !(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true),
+        });
         setWebSearchMaxResultsOverridden(loadedMaxResults !== recommendedPreset.maxResults);
         setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
         setPreferredSources(sources);
@@ -583,6 +610,34 @@ export function AgentSettingsSurface() {
     : null;
   const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && !localBaseUrlValidationError;
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0 && !searxngBaseUrlValidationError;
+  const webSearchDraft = useMemo<WebSearchDraftState>(() => ({
+    enabled: webSearchEnabled,
+    provider: webSearchProvider,
+    mode: webSearchMode,
+    maxResults: webSearchMaxResults.trim(),
+    timeoutSeconds: webSearchTimeoutSeconds.trim(),
+    safeSearch: webSearchSafeSearch,
+    recency: webSearchRecency,
+    domainPolicy: webSearchDomainPolicy,
+    sourceCitation: webSearchSourceCitation,
+    searxngBaseUrl: normalizeSearxngBaseUrlInput(webSearchSearxngBaseUrl),
+    searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
+  }), [
+    webSearchEnabled,
+    webSearchProvider,
+    webSearchMode,
+    webSearchMaxResults,
+    webSearchTimeoutSeconds,
+    webSearchSafeSearch,
+    webSearchRecency,
+    webSearchDomainPolicy,
+    webSearchSourceCitation,
+    webSearchSearxngBaseUrl,
+    webSearchSearxngUseHtmlMode,
+  ]);
+  const webSearchHasUnsavedChanges = savedWebSearchDraft
+    ? JSON.stringify(webSearchDraft) !== JSON.stringify(savedWebSearchDraft)
+    : false;
   const chatProfilePathRequired = chatProfileSource === 'file' || chatProfileSource === 'merged';
   const hasUnsavedLocalChanges = localBaseUrl.trim() !== savedLocalRuntime.baseUrl || ollamaRuntimeModelDraft.trim() !== savedLocalRuntime.model;
   const domainPolicyHelperText = useMemo(() => {
@@ -614,6 +669,16 @@ export function AgentSettingsSurface() {
       setWebSearchTimeoutOverridden(false);
     }
   };
+
+  useEffect(() => {
+    if (!webSearchHasUnsavedChanges) return undefined;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [webSearchHasUnsavedChanges]);
 
   const latestSummary = useMemo(() => activity.map((entry) => {
     const matchingFile = files.find((file) => file.id === entry.note_id);
@@ -718,27 +783,6 @@ export function AgentSettingsSurface() {
                   value={idleTimeoutMinutes}
                   onChange={(event) => setIdleTimeoutMinutes(event.target.value)}
                 />
-              </label>
-              <label className={CHECKBOX_WITH_LABEL_CLASS}>
-                <input
-                  className={CHECKBOX_INPUT_CLASS}
-                  type="checkbox"
-                  checked={webSearchEnabled}
-                  onChange={(event) => {
-                    setWebSearchEnabled(event.target.checked);
-                    setWebSearchStatusFeedback(null);
-                  }}
-                />
-                <span>Enable web search</span>
-              </label>
-              <label className={CHECKBOX_WITH_LABEL_CLASS}>
-                <input
-                  className={CHECKBOX_INPUT_CLASS}
-                  type="checkbox"
-                  checked={webSearchSourceCitation}
-                  onChange={(event) => setWebSearchSourceCitation(event.target.checked)}
-                />
-                <span>Source citation</span>
               </label>
             </div>
             <div className="mt-3">
@@ -987,6 +1031,11 @@ export function AgentSettingsSurface() {
           <h2 className="text-lg font-semibold">Web Search</h2>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="space-y-4">
+              {webSearchHasUnsavedChanges ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  You have unsaved web search changes. Save before leaving this page.
+                </div>
+              ) : null}
               <div className="grid gap-4 md:grid-cols-3">
                 <label className="space-y-1 text-sm">
                   <span className="text-slate-600">Provider</span>
@@ -1098,6 +1147,30 @@ export function AgentSettingsSurface() {
                 </label>
               </div>
               <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchEnabled}
+                    onChange={(event) => {
+                      setWebSearchEnabled(event.target.checked);
+                      setWebSearchStatusFeedback(null);
+                    }}
+                  />
+                  <span>Enable web search</span>
+                </label>
+                <label className={CHECKBOX_WITH_LABEL_CLASS}>
+                  <input
+                    className={CHECKBOX_INPUT_CLASS}
+                    type="checkbox"
+                    checked={webSearchSourceCitation}
+                    onChange={(event) => {
+                      setWebSearchSourceCitation(event.target.checked);
+                      setWebSearchStatusFeedback(null);
+                    }}
+                  />
+                  <span>Source citation</span>
+                </label>
                 {shouldShowSearxngConfigFields(webSearchProvider) ? (
                   <label className={CHECKBOX_WITH_LABEL_CLASS}>
                     <input
@@ -1161,18 +1234,19 @@ export function AgentSettingsSurface() {
                       return;
                     }
                     await saveAgentSettings(buildWebSearchSettingsPayload(settings, {
-                      enabled: webSearchEnabled,
-                      provider: webSearchProvider,
-                      mode: webSearchMode,
-                      maxResults: webSearchMaxResults,
-                      timeoutSeconds: webSearchTimeoutSeconds,
-                      safeSearch: webSearchSafeSearch,
-                      recency: webSearchRecency,
-                      domainPolicy: webSearchDomainPolicy,
-                      sourceCitation: webSearchSourceCitation,
-                      searxngBaseUrl: webSearchSearxngBaseUrl,
-                      searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
+                      enabled: webSearchDraft.enabled,
+                      provider: webSearchDraft.provider,
+                      mode: webSearchDraft.mode,
+                      maxResults: webSearchDraft.maxResults,
+                      timeoutSeconds: webSearchDraft.timeoutSeconds,
+                      safeSearch: webSearchDraft.safeSearch,
+                      recency: webSearchDraft.recency,
+                      domainPolicy: webSearchDraft.domainPolicy,
+                      sourceCitation: webSearchDraft.sourceCitation,
+                      searxngBaseUrl: webSearchDraft.searxngBaseUrl,
+                      searxngUseHtmlMode: webSearchDraft.searxngUseHtmlMode,
                     }));
+                    setSavedWebSearchDraft(webSearchDraft);
                     setWebSearchStatusFeedback({ kind: 'success', text: 'Success: Web search settings saved.' });
                   } catch (error) {
                     const message = error instanceof Error ? `Error: ${error.message}` : 'Error: We could not save web search settings. Please try again.';
@@ -1180,7 +1254,7 @@ export function AgentSettingsSurface() {
                   }
                 }}
               >
-                Save web search settings
+                Save web search changes
               </button>
             </div>
           </div>
