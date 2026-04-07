@@ -1286,6 +1286,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
         enabled?: boolean;
         provider?: string;
         mode?: string;
+        routing_mode?: string;
         max_results?: number;
         timeout_ms?: number;
         safe_search?: boolean;
@@ -1305,6 +1306,7 @@ test('agent settings web_search defaults and round-trip persistence', async () =
   assert.equal(payload.generation_params?.web_search?.enabled, true);
   assert.equal(payload.generation_params?.web_search?.provider, 'searxng');
   assert.equal(payload.generation_params?.web_search?.mode, 'deep');
+  assert.equal(payload.generation_params?.web_search?.routing_mode, 'strict');
   assert.equal(payload.generation_params?.web_search?.max_results, 6);
   assert.equal(payload.generation_params?.web_search?.timeout_ms, 10000);
   assert.equal(payload.generation_params?.web_search?.safe_search, false);
@@ -1753,6 +1755,7 @@ test('agent settings normalize invalid web search values to defaults', async () 
     enabled: false,
     provider: 'duckduckgo',
     mode: 'single',
+    routing_mode: 'strict',
     max_results: 1,
     timeout_ms: 1,
     safe_search: false,
@@ -2421,6 +2424,7 @@ test('agent generate honors persisted source_citation setting regardless of prom
       generation_params: {
         web_search: {
           enabled: true,
+          routing_mode: 'auto',
           mode: 'single',
           max_results: 5,
           timeout_ms: 3000,
@@ -2514,6 +2518,7 @@ test('agent generate routes web search by prompt heuristics when enabled', async
       generation_params: {
         web_search: {
           enabled: true,
+          routing_mode: 'auto',
           mode: 'single',
           max_results: 5,
           timeout_ms: 3000,
@@ -2551,6 +2556,96 @@ test('agent generate routes web search by prompt heuristics when enabled', async
     assert.equal(searchCalls, 1);
     const explicitFrames = explicitNoWeb.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; reason?: string });
     assert.equal(explicitFrames.some((frame) => frame.type === 'search_skipped' && frame.reason === 'explicit_no_web'), true);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate performs web search in strict mode even for non-matching prompts', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  let searchCalls = 0;
+  searchProviderRegistry.duckduckgo.search = async () => {
+    searchCalls += 1;
+    return [{ title: 'Result', url: 'https://example.com/result', snippet: 'snippet', provider: 'duckduckgo' }];
+  };
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          routing_mode: 'strict',
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+        },
+      },
+    });
+
+    const response = await withOpenAiToolCalls(['brainstorm ideas'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'Brainstorm product ideas for students.',
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(searchCalls, 1);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string });
+    assert.equal(frames.some((frame) => frame.type === 'tool_call_started'), true);
+    assert.equal(frames.some((frame) => frame.type === 'search_skipped'), false);
+  } finally {
+    searchProviderRegistry.duckduckgo.search = originalSearch;
+    providerRegistry.openai.generate = originalGenerate;
+  }
+});
+
+test('agent generate explicit no-web skips in strict mode', async () => {
+  const originalSearch = searchProviderRegistry.duckduckgo.search;
+  const originalGenerate = providerRegistry.openai.generate;
+  providerRegistry.openai.generate = async () => ({ outputText: 'ok', latencyMs: 1 });
+  let searchCalls = 0;
+  searchProviderRegistry.duckduckgo.search = async () => {
+    searchCalls += 1;
+    return [{ title: 'Result', url: 'https://example.com/result', snippet: 'snippet', provider: 'duckduckgo' }];
+  };
+
+  try {
+    const credentialSave = await callRoute('PUT', '/api/agent/credentials/openai', { api_key: 'sk-test' });
+    assert.equal(credentialSave.status, 200);
+    await callRoute('PUT', '/api/agent/settings', {
+      default_provider: 'openai',
+      default_model: 'gpt-4.1',
+      generation_params: {
+        web_search: {
+          enabled: true,
+          routing_mode: 'strict',
+          mode: 'single',
+          max_results: 5,
+          timeout_ms: 3000,
+        },
+      },
+    });
+
+    const response = await withOpenAiToolCalls(['latest market news'], () => callRoute('POST', '/api/agent/generate', {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      input_text: 'Give latest market updates but do not search the web.',
+    }));
+    assert.equal(response.status, 200);
+    assert.equal(searchCalls, 0);
+    const frames = response.body.trim().split('\n').map((line) => JSON.parse(line) as { type?: string; reason?: string });
+    assert.equal(frames.some((frame) => frame.type === 'search_skipped' && frame.reason === 'explicit_no_web'), true);
+
+    const activityResponse = await callRoute('GET', '/api/agent/activity-log?limit=1');
+    assert.equal(activityResponse.status, 200);
+    const activity = JSON.parse(activityResponse.body) as Array<{ tool_failure_reason?: string | null }>;
+    assert.equal(activity[0]?.tool_failure_reason, 'skip:strict:explicit_no_web');
   } finally {
     searchProviderRegistry.duckduckgo.search = originalSearch;
     providerRegistry.openai.generate = originalGenerate;
