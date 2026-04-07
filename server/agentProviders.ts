@@ -102,13 +102,15 @@ export interface ProviderAdapter {
 
 export type ProviderTimeoutSettings = {
   generateMs: number;
+  generateIdleMs: number;
   toolFirstTurnMs: number;
   toolFollowupMs: number;
   listModelsMs: number;
 };
 
 const DEFAULT_PROVIDER_TIMEOUT_SETTINGS: ProviderTimeoutSettings = {
-  generateMs: 45_000,
+  generateMs: 30 * 60 * 1000,
+  generateIdleMs: 3 * 60 * 1000,
   toolFirstTurnMs: 45_000,
   toolFollowupMs: 45_000,
   listModelsMs: 15_000,
@@ -123,6 +125,7 @@ const sanitizeTimeoutMs = (value: unknown, fallback: number): number => (
 export const setProviderTimeoutSettings = (next?: Partial<ProviderTimeoutSettings> | null) => {
   providerTimeoutSettings = {
     generateMs: sanitizeTimeoutMs(next?.generateMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.generateMs),
+    generateIdleMs: sanitizeTimeoutMs(next?.generateIdleMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.generateIdleMs),
     toolFirstTurnMs: sanitizeTimeoutMs(next?.toolFirstTurnMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.toolFirstTurnMs),
     toolFollowupMs: sanitizeTimeoutMs(next?.toolFollowupMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.toolFollowupMs),
     listModelsMs: sanitizeTimeoutMs(next?.listModelsMs, DEFAULT_PROVIDER_TIMEOUT_SETTINGS.listModelsMs),
@@ -139,14 +142,25 @@ const runWithDeadline = async <T>(
   parentSignal: AbortSignal | undefined,
   timeoutMs: number,
   operationLabel: string,
-  fn: (signal: AbortSignal) => Promise<T>,
+  fn: (signal: AbortSignal, markActivity: () => void) => Promise<T>,
+  options?: { idleTimeoutMs?: number; idleTimeoutMessage?: string },
 ): Promise<T> => {
   const controller = new AbortController();
-  let timedOut = false;
+  let timeoutKind: 'absolute' | 'idle' | null = null;
   const timeoutId = setTimeout(() => {
-    timedOut = true;
+    timeoutKind = 'absolute';
     controller.abort();
   }, timeoutMs);
+  let idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  const resetIdleTimeout = () => {
+    if (!options?.idleTimeoutMs || options.idleTimeoutMs <= 0) return;
+    if (idleTimeoutId) clearTimeout(idleTimeoutId);
+    idleTimeoutId = setTimeout(() => {
+      timeoutKind = 'idle';
+      controller.abort();
+    }, options.idleTimeoutMs);
+  };
+  resetIdleTimeout();
   const onParentAbort = () => controller.abort();
   if (parentSignal) {
     if (parentSignal.aborted) {
@@ -156,14 +170,18 @@ const runWithDeadline = async <T>(
     }
   }
   try {
-    return await fn(controller.signal);
+    return await fn(controller.signal, resetIdleTimeout);
   } catch (error) {
-    if (timedOut || (isAbortLikeError(error) && !parentSignal?.aborted)) {
+    if (timeoutKind === 'idle') {
+      throw new Error(options?.idleTimeoutMessage ?? 'Provider generate request stalled with no response activity. Try again or increase idle timeout settings.');
+    }
+    if (timeoutKind === 'absolute' || (isAbortLikeError(error) && !parentSignal?.aborted)) {
       throw new Error(`${operationLabel} timed out after ${timeoutMs}ms. Try again or increase provider timeout settings.`);
     }
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (idleTimeoutId) clearTimeout(idleTimeoutId);
     if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
   }
 };
@@ -462,12 +480,13 @@ class MinimaxAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const { generateMs } = getProviderTimeoutSettings();
-    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+    const { generateMs, generateIdleMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal, markActivity) => {
       const startedAt = Date.now();
       let response: Response | null = null;
       for (const baseUrl of getMiniMaxBaseUrls(apiKey)) {
         try {
+          markActivity();
           const candidate = await fetch(`${baseUrl}/v1/text/chatcompletion_v2`, {
             method: 'POST',
             headers: {
@@ -485,6 +504,7 @@ class MinimaxAdapter implements ProviderAdapter {
           });
           if (candidate.ok) {
             response = candidate;
+            markActivity();
             break;
           }
         } catch {
@@ -498,14 +518,15 @@ class MinimaxAdapter implements ProviderAdapter {
     let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
     const body = response.body;
     if (!body) throw new Error('MiniMax returned empty output.');
-    const reader = body.getReader();
+      const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffered = '';
     let sawDelta = false;
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        markActivity();
+        buffered += decoder.decode(value, { stream: true });
       const frames = buffered.split('\n\n');
       buffered = frames.pop() ?? '';
       for (const frame of frames) {
@@ -583,6 +604,9 @@ class MinimaxAdapter implements ProviderAdapter {
         },
         latencyMs: Date.now() - startedAt,
       };
+    }, {
+      idleTimeoutMs: generateIdleMs,
+      idleTimeoutMessage: `Provider generate request stalled with no response activity for ${generateIdleMs}ms. Try again or increase provider idle timeout settings.`,
     });
   }
 
@@ -780,16 +804,21 @@ class OpenAIAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const { generateMs } = getProviderTimeoutSettings();
-    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+    const { generateMs, generateIdleMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal, markActivity) => {
+      markActivity();
       const result = await this.callChatCompletions({
         model: request.model,
         messages: [{ role: 'user', content: request.inputText }],
         temperature: request.generationParams?.temperature,
         max_tokens: request.generationParams?.maxTokens,
       }, apiKey, deadlineSignal, callbacks);
+      markActivity();
       if (!result.outputText) throw new Error('OpenAI returned empty output.');
       return result;
+    }, {
+      idleTimeoutMs: generateIdleMs,
+      idleTimeoutMessage: `Provider generate request stalled with no response activity for ${generateIdleMs}ms. Try again or increase provider idle timeout settings.`,
     });
   }
 
@@ -960,16 +989,21 @@ class AnthropicAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const { generateMs } = getProviderTimeoutSettings();
-    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+    const { generateMs, generateIdleMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal, markActivity) => {
+      markActivity();
       const result = await this.callMessages({
         model: request.model,
         max_tokens: request.generationParams?.maxTokens ?? 1024,
         temperature: request.generationParams?.temperature,
         messages: [{ role: 'user', content: request.inputText }],
       }, apiKey, deadlineSignal, callbacks);
+      markActivity();
       if (!result.outputText) throw new Error('Anthropic returned empty output.');
       return result;
+    }, {
+      idleTimeoutMs: generateIdleMs,
+      idleTimeoutMessage: `Provider generate request stalled with no response activity for ${generateIdleMs}ms. Try again or increase provider idle timeout settings.`,
     });
   }
 
@@ -1137,12 +1171,13 @@ class OllamaAdapter implements ProviderAdapter {
     signal?: AbortSignal,
     callbacks?: AgentGenerateCallbacks,
   ): Promise<AgentGenerateResponse> {
-    const { generateMs } = getProviderTimeoutSettings();
-    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal) => {
+    const { generateMs, generateIdleMs } = getProviderTimeoutSettings();
+    return runWithDeadline(signal, generateMs, 'Provider generate request', async (deadlineSignal, markActivity) => {
       const startedAt = Date.now();
       const baseUrl = normalizeOllamaBaseUrl((request.generationParams as { baseUrl?: string } | undefined)?.baseUrl);
       let response: Response;
       try {
+        markActivity();
         response = await fetch(`${baseUrl}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1169,15 +1204,17 @@ class OllamaAdapter implements ProviderAdapter {
       throw new Error('Ollama generate failed.');
     }
 
-    if (!response.body) throw new Error('Ollama returned empty output.');
-    const reader = response.body.getReader();
+      if (!response.body) throw new Error('Ollama returned empty output.');
+      markActivity();
+      const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffered = '';
     let outputText = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        markActivity();
+        buffered += decoder.decode(value, { stream: true });
       const lines = buffered.split('\n');
       buffered = lines.pop() ?? '';
       for (const line of lines) {
@@ -1214,6 +1251,9 @@ class OllamaAdapter implements ProviderAdapter {
         usage: estimateUsage(request.inputText, outputText),
         latencyMs: Date.now() - startedAt,
       };
+    }, {
+      idleTimeoutMs: generateIdleMs,
+      idleTimeoutMessage: `Provider generate request stalled with no response activity for ${generateIdleMs}ms. Try again or increase provider idle timeout settings.`,
     });
   }
 

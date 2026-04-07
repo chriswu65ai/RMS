@@ -316,3 +316,19 @@ test('provider generate timeout errors are normalized with actionable guidance',
     /timed out after 5ms/i,
   );
 });
+
+test('provider generate idle timeout cancels stalled streaming responses with actionable guidance', async () => {
+  setProviderTimeoutSettings({ generateMs: 60_000, generateIdleMs: 5 });
+  globalThis.fetch = async (_input, init) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      const timeoutError = new Error('aborted');
+      timeoutError.name = 'AbortError';
+      reject(timeoutError);
+    }, { once: true });
+  });
+
+  await assert.rejects(
+    providerRegistry.openai.generate({ model: 'gpt-4.1-mini', inputText: 'hello' }, 'test-key'),
+    /stalled with no response activity for 5ms/i,
+  );
+});

@@ -24,17 +24,33 @@ export const buildSaveDefaultsPayload = (
   currentProvider: AgentProvider,
   selectedModel: string,
   baseUrlInput: string,
+  generationTimeoutMinutes?: number,
+  idleTimeoutMinutes?: number,
 ) => {
   const canonicalBaseUrl = baseUrlInput.trim() || LOCAL_BASE_URL_DEFAULT;
   const canonicalModel = selectedModel.trim();
+  const resolvedGenerateMinutes = Number.isFinite(generationTimeoutMinutes) ? Math.max(1, Math.floor(generationTimeoutMinutes as number)) : 30;
+  const resolvedIdleMinutes = Number.isFinite(idleTimeoutMinutes) ? Math.max(1, Math.floor(idleTimeoutMinutes as number)) : 3;
+  const providerTimeouts = {
+    ...(settings.generation_params?.provider_timeouts ?? {}),
+    generate_minutes: resolvedGenerateMinutes,
+    generate_idle_minutes: resolvedIdleMinutes,
+    generate_ms: resolvedGenerateMinutes * 60_000,
+    generate_idle_ms: resolvedIdleMinutes * 60_000,
+  };
   return {
     ...settings,
     default_provider: currentProvider,
     default_model: canonicalModel,
+    generation_params: {
+      ...(settings.generation_params ?? {}),
+      provider_timeouts: providerTimeouts,
+    },
     ...(currentProvider === 'ollama'
       ? {
           generation_params: {
             ...(settings.generation_params ?? {}),
+            provider_timeouts: providerTimeouts,
             local_connection: {
               base_url: canonicalBaseUrl,
               model: canonicalModel,
