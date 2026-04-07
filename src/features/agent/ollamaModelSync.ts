@@ -30,7 +30,7 @@ export const buildSaveDefaultsPayload = (
   const canonicalBaseUrl = baseUrlInput.trim() || LOCAL_BASE_URL_DEFAULT;
   const canonicalModel = selectedModel.trim();
   const resolvedGenerateMinutes = Number.isFinite(generationTimeoutMinutes) ? Math.max(1, Math.floor(generationTimeoutMinutes as number)) : 30;
-  const resolvedIdleMinutes = Number.isFinite(idleTimeoutMinutes) ? Math.max(1, Math.floor(idleTimeoutMinutes as number)) : 3;
+  const resolvedIdleMinutes = Number.isFinite(idleTimeoutMinutes) ? Math.max(1, Math.floor(idleTimeoutMinutes as number)) : 5;
   const providerTimeouts = {
     ...(settings.generation_params?.provider_timeouts ?? {}),
     generate_minutes: resolvedGenerateMinutes,
