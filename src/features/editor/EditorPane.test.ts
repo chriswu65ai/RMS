@@ -27,18 +27,24 @@ test('editor stays mounted in edit and split tabs', () => {
   assert.equal(shouldRenderEditableEditor('preview'), false);
 });
 
-test('editor extensions set spellcheck content attribute', () => {
+test('editor extensions disable spellcheck-related content attributes', () => {
   const state = EditorState.create({ extensions: editorExtensions });
   const contentAttributes = state.facet(EditorView.contentAttributes);
 
   const hasExpectedAttributes = contentAttributes.some((attrs) => (
     typeof attrs !== 'function'
-    && attrs.spellcheck === 'true'
-    && attrs.autocorrect === 'on'
-    && attrs.autocapitalize === 'sentences'
+    && attrs.spellcheck === 'false'
+    && attrs.autocorrect === 'off'
+    && attrs.autocapitalize === 'off'
   ));
 
   assert.equal(hasExpectedAttributes, true);
+});
+
+test('editor extensions include line wrapping', () => {
+  const editorSpellcheckSource = readFileSync(new URL('./editorSpellcheck.ts', import.meta.url), 'utf8');
+
+  assert.equal(editorSpellcheckSource.includes('EditorView.lineWrapping'), true);
 });
 
 const applyUndo = (state: EditorState) => {
