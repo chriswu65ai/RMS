@@ -343,6 +343,24 @@ test('web search save payload omits searxng provider_config when provider is duc
   assert.equal(payload.generation_params?.web_search?.provider_config, undefined);
 });
 
+test('web search provider switching keeps provider-specific drafts instead of destructively resetting unsupported controls', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/components/AgentSettingsSurface.tsx'), 'utf-8');
+  assert.equal(source.includes('const [webProviderDrafts, setWebProviderDrafts] = useState<Record<WebSearchProvider, WebSearchProviderDraftState>>(WEB_SEARCH_PROVIDER_DRAFTS_DEFAULT);'), true);
+  assert.equal(source.includes('if (!capabilities.safeSearch) setWebSearchSafeSearch(false);'), false);
+  assert.equal(source.includes("if (!capabilities.recency) setWebSearchRecency('any');"), false);
+  assert.equal(source.includes('value={webSearchProviderDraft.recency}'), true);
+  assert.equal(source.includes('checked={webSearchProviderDraft.safeSearch}'), true);
+});
+
+test('web search save payload derives effective capability values without mutating universal draft state', () => {
+  const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/components/AgentSettingsSurface.tsx'), 'utf-8');
+  assert.equal(source.includes('safeSearch: WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchDraft.provider].safeSearch'), true);
+  assert.equal(source.includes('recency: WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchDraft.provider].recency'), true);
+  assert.equal(source.includes('providerDrafts: {'), true);
+  assert.equal(source.includes('domainPolicy: webSearchDraft.domainPolicy,'), true);
+  assert.equal(source.includes('sourceCitation: webSearchDraft.sourceCitation,'), true);
+});
+
 
 test('AgentPage disables model select when no catalog models are available', () => {
   const source = readFileSync(path.resolve(process.cwd(), 'src/features/agent/AgentPage.tsx'), 'utf-8');

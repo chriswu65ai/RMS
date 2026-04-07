@@ -96,18 +96,35 @@ const GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT = 3;
 const GENERATION_TIMEOUT_MINUTES_MIN = 1;
 const GENERATION_TIMEOUT_MINUTES_MAX = 120;
 type FeedbackState = { kind: 'success' | 'error'; text: string };
+type WebSearchProviderDraftState = {
+  safeSearch: boolean;
+  recency: WebSearchRecency;
+  searxngBaseUrl: string;
+  searxngUseHtmlMode: boolean;
+};
 type WebSearchDraftState = {
   enabled: boolean;
   provider: WebSearchProvider;
   mode: WebSearchMode;
   maxResults: string;
   timeoutSeconds: string;
-  safeSearch: boolean;
-  recency: WebSearchRecency;
   domainPolicy: WebSearchDomainPolicy;
   sourceCitation: boolean;
-  searxngBaseUrl: string;
-  searxngUseHtmlMode: boolean;
+  providerDrafts: Record<WebSearchProvider, WebSearchProviderDraftState>;
+};
+const WEB_SEARCH_PROVIDER_DRAFTS_DEFAULT: Record<WebSearchProvider, WebSearchProviderDraftState> = {
+  duckduckgo: {
+    safeSearch: WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+    recency: 'any',
+    searxngBaseUrl: WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+    searxngUseHtmlMode: WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT,
+  },
+  searxng: {
+    safeSearch: WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+    recency: 'any',
+    searxngBaseUrl: WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT,
+    searxngUseHtmlMode: WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT,
+  },
 };
 const normalizeLocalBaseUrl = (value: string) => normalizeEndpointUrl(value, LOCAL_BASE_URL_DEFAULT);
 const normalizeSearxngBaseUrlInput = (value: string) => normalizeEndpointUrl(value, WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
@@ -203,10 +220,7 @@ export function WebSearchControls({
             value={webSearchProvider}
             onChange={(event) => {
               const nextProvider = event.target.value as WebSearchProvider;
-              const capabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[nextProvider];
               setWebSearchProvider(nextProvider);
-              if (!capabilities.safeSearch) setWebSearchSafeSearch(false);
-              if (!capabilities.recency) setWebSearchRecency('any');
               setWebSearchStatusMessage('');
             }}
           >
@@ -389,13 +403,10 @@ export function AgentSettingsSurface() {
   const [generationTimeoutMinutes, setGenerationTimeoutMinutes] = useState(String(GENERATION_TIMEOUT_MINUTES_DEFAULT));
   const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(String(GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT));
   const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProvider>('duckduckgo');
-  const [webSearchSearxngBaseUrl, setWebSearchSearxngBaseUrl] = useState(WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT);
-  const [webSearchSearxngUseHtmlMode, setWebSearchSearxngUseHtmlMode] = useState(WEB_SEARCH_SEARXNG_USE_HTML_MODE_DEFAULT);
+  const [webProviderDrafts, setWebProviderDrafts] = useState<Record<WebSearchProvider, WebSearchProviderDraftState>>(WEB_SEARCH_PROVIDER_DRAFTS_DEFAULT);
   const [webSearchMode, setWebSearchMode] = useState<WebSearchMode>('single');
   const [webSearchMaxResults, setWebSearchMaxResults] = useState(String(WEB_SEARCH_MAX_RESULTS_DEFAULT));
   const [webSearchTimeoutSeconds, setWebSearchTimeoutSeconds] = useState(String(convertTimeoutMsToSeconds(WEB_SEARCH_TIMEOUT_MS_DEFAULT)));
-  const [webSearchSafeSearch, setWebSearchSafeSearch] = useState(WEB_SEARCH_SAFE_SEARCH_DEFAULT);
-  const [webSearchRecency, setWebSearchRecency] = useState<WebSearchRecency>('any');
   const [webSearchDomainPolicy, setWebSearchDomainPolicy] = useState<WebSearchDomainPolicy>('open_web');
   const [webSearchSourceCitation, setWebSearchSourceCitation] = useState(false);
   const [savedWebSearchDraft, setSavedWebSearchDraft] = useState<WebSearchDraftState | null>(null);
@@ -518,32 +529,45 @@ export function AgentSettingsSurface() {
         setGenerationTimeoutMinutes(String(providerTimeouts?.generate_minutes ?? GENERATION_TIMEOUT_MINUTES_DEFAULT));
         setIdleTimeoutMinutes(String(providerTimeouts?.generate_idle_minutes ?? GENERATION_IDLE_TIMEOUT_MINUTES_DEFAULT));
         setWebSearchEnabled(Boolean(webSearchSettings?.enabled));
-        setWebSearchProvider(webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo');
-        setWebSearchSearxngBaseUrl(normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''));
-        setWebSearchSearxngUseHtmlMode(!(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true));
+        const resolvedWebSearchProvider = webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo';
+        setWebSearchProvider(resolvedWebSearchProvider);
         const resolvedMode = webSearchSettings?.mode === 'deep' ? 'deep' : 'single';
         const recommendedPreset = getRecommendedPresetForMode(resolvedMode);
         const loadedMaxResults = webSearchSettings?.max_results ?? recommendedPreset.maxResults;
         const loadedTimeoutSeconds = convertTimeoutMsToSeconds(webSearchSettings?.timeout_ms ?? recommendedPreset.timeoutSeconds * 1000);
+        const loadedSafeSearch = webSearchSettings?.safe_search ?? WEB_SEARCH_SAFE_SEARCH_DEFAULT;
+        const loadedRecency = webSearchSettings?.recency ?? 'any';
+        const loadedSearxngBaseUrl = normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? '');
+        const loadedSearxngUseHtmlMode = !(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true);
+        const loadedProviderDrafts: Record<WebSearchProvider, WebSearchProviderDraftState> = {
+          duckduckgo: {
+            ...WEB_SEARCH_PROVIDER_DRAFTS_DEFAULT.duckduckgo,
+            safeSearch: loadedSafeSearch,
+            recency: loadedRecency,
+          },
+          searxng: {
+            ...WEB_SEARCH_PROVIDER_DRAFTS_DEFAULT.searxng,
+            safeSearch: loadedSafeSearch,
+            recency: loadedRecency,
+            searxngBaseUrl: loadedSearxngBaseUrl,
+            searxngUseHtmlMode: loadedSearxngUseHtmlMode,
+          },
+        };
         setWebSearchMode(resolvedMode);
         setWebSearchMaxResults(String(loadedMaxResults));
         setWebSearchTimeoutSeconds(String(loadedTimeoutSeconds));
-        setWebSearchSafeSearch(webSearchSettings?.safe_search ?? WEB_SEARCH_SAFE_SEARCH_DEFAULT);
-        setWebSearchRecency(webSearchSettings?.recency ?? 'any');
+        setWebProviderDrafts(loadedProviderDrafts);
         setWebSearchDomainPolicy(webSearchSettings?.domain_policy ?? 'open_web');
         setWebSearchSourceCitation(getWebSearchSourceCitationDefault(webSearchSettings?.source_citation));
         setSavedWebSearchDraft({
           enabled: Boolean(webSearchSettings?.enabled),
-          provider: webSearchSettings?.provider === 'searxng' ? 'searxng' : 'duckduckgo',
+          provider: resolvedWebSearchProvider,
           mode: resolvedMode,
           maxResults: String(loadedMaxResults),
           timeoutSeconds: String(loadedTimeoutSeconds),
-          safeSearch: webSearchSettings?.safe_search ?? WEB_SEARCH_SAFE_SEARCH_DEFAULT,
-          recency: webSearchSettings?.recency ?? 'any',
           domainPolicy: webSearchSettings?.domain_policy ?? 'open_web',
           sourceCitation: getWebSearchSourceCitationDefault(webSearchSettings?.source_citation),
-          searxngBaseUrl: normalizeSearxngBaseUrlInput(webSearchSettings?.provider_config?.searxng?.base_url ?? ''),
-          searxngUseHtmlMode: !(webSearchSettings?.provider_config?.searxng?.use_json_api ?? true),
+          providerDrafts: loadedProviderDrafts,
         });
         setWebSearchMaxResultsOverridden(loadedMaxResults !== recommendedPreset.maxResults);
         setWebSearchTimeoutOverridden(loadedTimeoutSeconds !== recommendedPreset.timeoutSeconds);
@@ -605,8 +629,9 @@ export function AgentSettingsSurface() {
     : `Idle timeout must be an integer between ${GENERATION_TIMEOUT_MINUTES_MIN} and ${GENERATION_TIMEOUT_MINUTES_MAX}.`;
   const canSaveDefaultsWithTimeouts = canSaveDefaults && !generationTimeoutValidationError && !idleTimeoutValidationError;
   const localBaseUrlValidationError = validateEndpointUrl(localBaseUrl, 'Interface URL');
+  const webSearchProviderDraft = webProviderDrafts[webSearchProvider];
   const searxngBaseUrlValidationError = shouldShowSearxngConfigFields(webSearchProvider)
-    ? validateEndpointUrl(webSearchSearxngBaseUrl, 'SearXNG base URL', { stripSearxngSearchPath: true })
+    ? validateEndpointUrl(webSearchProviderDraft.searxngBaseUrl, 'SearXNG base URL', { stripSearxngSearchPath: true })
     : null;
   const canSaveLocalDefaults = localBaseUrl.trim().length > 0 && !localBaseUrlValidationError;
   const canSaveWebSearch = Number(webSearchMaxResults) > 0 && Number(webSearchTimeoutSeconds) > 0 && !searxngBaseUrlValidationError;
@@ -616,24 +641,27 @@ export function AgentSettingsSurface() {
     mode: webSearchMode,
     maxResults: webSearchMaxResults.trim(),
     timeoutSeconds: webSearchTimeoutSeconds.trim(),
-    safeSearch: webSearchSafeSearch,
-    recency: webSearchRecency,
     domainPolicy: webSearchDomainPolicy,
     sourceCitation: webSearchSourceCitation,
-    searxngBaseUrl: normalizeSearxngBaseUrlInput(webSearchSearxngBaseUrl),
-    searxngUseHtmlMode: webSearchSearxngUseHtmlMode,
+    providerDrafts: {
+      duckduckgo: {
+        ...webProviderDrafts.duckduckgo,
+        searxngBaseUrl: normalizeSearxngBaseUrlInput(webProviderDrafts.duckduckgo.searxngBaseUrl),
+      },
+      searxng: {
+        ...webProviderDrafts.searxng,
+        searxngBaseUrl: normalizeSearxngBaseUrlInput(webProviderDrafts.searxng.searxngBaseUrl),
+      },
+    },
   }), [
     webSearchEnabled,
     webSearchProvider,
     webSearchMode,
     webSearchMaxResults,
     webSearchTimeoutSeconds,
-    webSearchSafeSearch,
-    webSearchRecency,
     webSearchDomainPolicy,
     webSearchSourceCitation,
-    webSearchSearxngBaseUrl,
-    webSearchSearxngUseHtmlMode,
+    webProviderDrafts,
   ]);
   const webSearchHasUnsavedChanges = savedWebSearchDraft
     ? JSON.stringify(webSearchDraft) !== JSON.stringify(savedWebSearchDraft)
@@ -651,6 +679,12 @@ export function AgentSettingsSurface() {
     return matched?.helper ?? '';
   }, [webSearchMode]);
   const webSearchProviderCapabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchProvider];
+  const updateWebSearchProviderDraft = (updates: Partial<WebSearchProviderDraftState>) => {
+    setWebProviderDrafts((current) => ({
+      ...current,
+      [webSearchProvider]: { ...current[webSearchProvider], ...updates },
+    }));
+  };
   const activeCommandExamples = useMemo(() => [
     `${chatCommandPrefixMap.task} create task for NVDA`,
     `${chatCommandPrefixMap.note} summarize AAPL research`,
@@ -1044,10 +1078,7 @@ export function AgentSettingsSurface() {
                     value={webSearchProvider}
                     onChange={(event) => {
                       const nextProvider = event.target.value as WebSearchProvider;
-                      const capabilities = WEB_SEARCH_PROVIDER_CAPABILITIES[nextProvider];
                       setWebSearchProvider(nextProvider);
-                      if (!capabilities.safeSearch) setWebSearchSafeSearch(false);
-                      if (!capabilities.recency) setWebSearchRecency('any');
                       setWebSearchStatusFeedback(null);
                     }}
                   >
@@ -1060,15 +1091,15 @@ export function AgentSettingsSurface() {
                     <input
                       className="input"
                       type="text"
-                      value={webSearchSearxngBaseUrl}
+                      value={webSearchProviderDraft.searxngBaseUrl}
                       placeholder={WEB_SEARCH_SEARXNG_BASE_URL_DEFAULT}
                       onChange={(event) => {
-                        setWebSearchSearxngBaseUrl(event.target.value);
+                        updateWebSearchProviderDraft({ searxngBaseUrl: event.target.value });
                         setWebSearchStatusFeedback(null);
                       }}
                       onBlur={(event) => {
                         const normalized = normalizeSearxngBaseUrlInput(event.target.value);
-                        setWebSearchSearxngBaseUrl(normalized);
+                        updateWebSearchProviderDraft({ searxngBaseUrl: normalized });
                       }}
                     />
                     {searxngBaseUrlValidationError ? <p className="text-xs text-rose-600">{searxngBaseUrlValidationError}</p> : null}
@@ -1130,9 +1161,9 @@ export function AgentSettingsSurface() {
                   <span className="text-slate-600">Recency</span>
                   <select
                     className="input"
-                    value={webSearchRecency}
+                    value={webSearchProviderDraft.recency}
                     disabled={!webSearchProviderCapabilities.recency}
-                    onChange={(event) => setWebSearchRecency(event.target.value as WebSearchRecency)}
+                    onChange={(event) => updateWebSearchProviderDraft({ recency: event.target.value as WebSearchRecency })}
                   >
                     {WEB_SEARCH_RECENCY_OPTIONS.map((candidate) => <option key={candidate.value} value={candidate.value}>{candidate.label}</option>)}
                   </select>
@@ -1176,9 +1207,9 @@ export function AgentSettingsSurface() {
                     <input
                       className={CHECKBOX_INPUT_CLASS}
                       type="checkbox"
-                      checked={webSearchSearxngUseHtmlMode}
+                      checked={webSearchProviderDraft.searxngUseHtmlMode}
                       onChange={(event) => {
-                        setWebSearchSearxngUseHtmlMode(event.target.checked);
+                        updateWebSearchProviderDraft({ searxngUseHtmlMode: event.target.checked });
                         setWebSearchStatusFeedback(null);
                       }}
                     />
@@ -1189,9 +1220,9 @@ export function AgentSettingsSurface() {
                   <input
                     className={CHECKBOX_INPUT_CLASS}
                     type="checkbox"
-                    checked={webSearchSafeSearch}
+                    checked={webSearchProviderDraft.safeSearch}
                     disabled={!webSearchProviderCapabilities.safeSearch}
-                    onChange={(event) => setWebSearchSafeSearch(event.target.checked)}
+                    onChange={(event) => updateWebSearchProviderDraft({ safeSearch: event.target.checked })}
                   />
                   <span>Safe search</span>
                 </label>
@@ -1239,12 +1270,16 @@ export function AgentSettingsSurface() {
                       mode: webSearchDraft.mode,
                       maxResults: webSearchDraft.maxResults,
                       timeoutSeconds: webSearchDraft.timeoutSeconds,
-                      safeSearch: webSearchDraft.safeSearch,
-                      recency: webSearchDraft.recency,
+                      safeSearch: WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchDraft.provider].safeSearch
+                        ? webSearchDraft.providerDrafts[webSearchDraft.provider].safeSearch
+                        : WEB_SEARCH_SAFE_SEARCH_DEFAULT,
+                      recency: WEB_SEARCH_PROVIDER_CAPABILITIES[webSearchDraft.provider].recency
+                        ? webSearchDraft.providerDrafts[webSearchDraft.provider].recency
+                        : 'any',
                       domainPolicy: webSearchDraft.domainPolicy,
                       sourceCitation: webSearchDraft.sourceCitation,
-                      searxngBaseUrl: webSearchDraft.searxngBaseUrl,
-                      searxngUseHtmlMode: webSearchDraft.searxngUseHtmlMode,
+                      searxngBaseUrl: webSearchDraft.providerDrafts[webSearchDraft.provider].searxngBaseUrl,
+                      searxngUseHtmlMode: webSearchDraft.providerDrafts[webSearchDraft.provider].searxngUseHtmlMode,
                     }));
                     setSavedWebSearchDraft(webSearchDraft);
                     setWebSearchStatusFeedback({ kind: 'success', text: 'Success: Web search settings saved.' });
