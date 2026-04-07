@@ -1560,10 +1560,19 @@ const loadAllowedNoteTypesFromMetadata = async (): Promise<string[]> => {
   const settingsRow = getOrCreateChatSettings(DEFAULT_CHAT_USER_ID);
   const profile = parseJsonOrNull<Record<string, unknown>>(settingsRow.profile_json) ?? {};
   const settingsNoteTypes = profile.noteTypes;
-  const discoveredRows = await queryJsonAsync<Pick<NewResearchTaskRow, 'note_type'>>("select distinct note_type from new_research_tasks where trim(note_type) != ''");
+  const discoveredTaskRows = await queryJsonAsync<Pick<NewResearchTaskRow, 'note_type'>>("select distinct note_type from new_research_tasks where trim(note_type) != ''");
+  const discoveredNoteRows = await queryJsonAsync<Pick<ResearchNoteRow, 'frontmatter_json'>>("select distinct frontmatter_json from research_notes where trim(coalesce(frontmatter_json, '')) != ''");
+  const discoveredNoteFrontmatterTypes = discoveredNoteRows
+    .map((row) => {
+      const parsed = parseJsonOrNull<Record<string, unknown>>(row.frontmatter_json);
+      const type = typeof parsed?.type === 'string' ? parsed.type.trim() : '';
+      return type;
+    })
+    .filter(Boolean);
   return resolveAllowedNoteTypes({
     settingsNoteTypes,
-    discoveredTaskNoteTypes: discoveredRows.map((row) => String(row.note_type ?? '').trim()).filter(Boolean),
+    discoveredTaskNoteTypes: discoveredTaskRows.map((row) => String(row.note_type ?? '').trim()).filter(Boolean),
+    discoveredNoteFrontmatterTypes,
   });
 };
 

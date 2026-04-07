@@ -18,13 +18,15 @@ const normalizeTypeList = (items: unknown[]): string[] => {
 export const resolveAllowedNoteTypes = (input?: {
   settingsNoteTypes?: unknown;
   discoveredTaskNoteTypes?: string[];
+  discoveredNoteFrontmatterTypes?: string[];
 }): string[] => {
   const fromSettings = Array.isArray(input?.settingsNoteTypes)
     ? normalizeTypeList(input?.settingsNoteTypes as unknown[])
     : [];
-  const discovered = normalizeTypeList(input?.discoveredTaskNoteTypes ?? []);
+  const discoveredTaskTypes = normalizeTypeList(input?.discoveredTaskNoteTypes ?? []);
+  const discoveredNoteFrontmatterTypes = normalizeTypeList(input?.discoveredNoteFrontmatterTypes ?? []);
   const fallback = [...DEFAULT_NOTE_TYPES];
-  return normalizeTypeList([...fromSettings, ...discovered, ...fallback]);
+  return normalizeTypeList([...fromSettings, ...discoveredTaskTypes, ...discoveredNoteFrontmatterTypes, ...fallback]);
 };
 
 export const resolveCanonicalNoteType = (value: unknown, allowedNoteTypes: string[]): string | null => {

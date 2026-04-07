@@ -136,11 +136,12 @@ export function SettingsGeneralPage() {
           <div className="grid gap-4 md:grid-cols-3">
             <section className="space-y-3">
               <label className="text-sm text-slate-600" htmlFor="settings-note-types">Note type</label>
+              <p className="text-xs text-slate-500">Manual values are merged with note types discovered from existing tasks and note frontmatter.</p>
               <input id="settings-note-types" className="input" value={noteTypesInput} onChange={(event) => setNoteTypesInput(event.target.value)} onBlur={() => {
                 const next = noteTypesInput.split(',').map((value) => value.trim()).filter(Boolean);
                 setNoteTypes(next);
                 setNoteTypesInput(next.join(', '));
-              }} placeholder="Event, Earnings, Deepdive, Summary" />
+              }} placeholder="Event, Earnings, Deepdive, Summary, CatalystMemo" />
             </section>
 
             <section className="space-y-3">

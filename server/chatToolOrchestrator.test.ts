@@ -329,6 +329,21 @@ test('create_task with invalid note_type is rejected with allowed options', asyn
   assert.match(invalid.narration_after, /Invalid note_type\. Allowed values: Research, Event, Earnings\./);
 });
 
+test('create_task accepts note_type discovered from note frontmatter via adapter allowed list', async () => {
+  const { adapter, calls } = makeAdapter();
+  adapter.resolveAllowedNoteTypes = async () => ['Research', 'Event', 'FrontmatterOnly'];
+
+  const created = await runChatToolOrchestration(adapter, {
+    sessionId: 'session-frontmatter-type',
+    toolCall: { id: 'tool-frontmatter-type', name: 'create_task', arguments: { ticker: 'AAPL', title: 'Discovered type', note_type: 'frontmatteronly' } },
+    explicitConfirm: true,
+  });
+
+  assert.equal(created.status, 'executed');
+  assert.equal(calls.createTask.length, 1);
+  assert.equal(calls.createTask[0]?.note_type, 'FrontmatterOnly');
+});
+
 test('generate_note create flow is blocked until valid note_type is provided', async () => {
   const { adapter, calls } = makeAdapter();
   const blocked = await runChatToolOrchestration(adapter, {
