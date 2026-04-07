@@ -17,6 +17,7 @@ import { resolveUniqueMarkdownFileName } from './resolveUniqueMarkdownFileName';
 import { createUiAsyncGuard, runUiAsync } from '../../lib/uiAsync';
 import { getAttachmentStatusBadgeLabel } from '../metadata/attachmentUx';
 import { applyTickerChangeToTask, resolveDestinationPreviewForTask, type DestinationPreview } from './destinationLogic';
+import { getModalOpenStateKey } from './modalFocusKey';
 import { validateAndNormalizeTaskContractPayload, formatInvalidTaskNoteTypeMessage, formatMissingRequiredTaskFieldsMessage } from '../../../shared/taskValidation';
 
 const COLUMNS: Array<{ key: TaskStatus; label: string }> = [
@@ -77,6 +78,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
   const modalRef = useRef<HTMLDivElement | null>(null);
   const initialFocusRef = useRef<HTMLInputElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const didFocusOnOpenRef = useRef(false);
   const modalTitleId = useId();
   const modalDescriptionId = useId();
   const taskByLinkedFileId = useMemo(() => {
@@ -379,14 +381,22 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
     navigate('/research.html');
   };
 
+  const modalOpenStateKey = getModalOpenStateKey(modalState);
+
   useEffect(() => {
-    if (!modalState) return;
+    if (!modalOpenStateKey) {
+      didFocusOnOpenRef.current = false;
+      return;
+    }
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    window.setTimeout(() => {
-      initialFocusRef.current?.focus();
-    }, 0);
+    if (!didFocusOnOpenRef.current) {
+      didFocusOnOpenRef.current = true;
+      window.setTimeout(() => {
+        initialFocusRef.current?.focus();
+      }, 0);
+    }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -420,7 +430,7 @@ export function NewResearchBoard({ assignees, noteTypes }: { assignees: string[]
       window.removeEventListener('keydown', onKeyDown);
       restoreFocusRef.current?.focus();
     };
-  }, [modalState, transitionTaskModal]);
+  }, [modalOpenStateKey, transitionTaskModal]);
 
   const closeModal = () => {
     setModalState(null);

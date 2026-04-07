@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TaskStatus, type Folder, type NewResearchTaskInput } from '../../types/models.js';
 import { applyTickerChangeToTask, resolveDestinationPreviewForTask } from './destinationLogic.js';
+import { CREATE_TASK_MODAL_OPEN_KEY, getModalOpenStateKey } from './modalFocusKey.js';
 
 const folder = (id: string, path: string): Folder => ({
   id,
@@ -72,4 +73,28 @@ test('destination preview falls back to ticker path when no matching folder exis
   assert.equal(preview.destinationPath, 'NVDA');
   assert.equal(preview.needsFolderCreation, true);
   assert.equal(preview.manualDestinationLocked, false);
+});
+
+test('typing ticker keeps focus on ticker input while modal stays open', () => {
+  let modalState: { mode: 'create'; task: NewResearchTaskInput; id?: string } | null = { mode: 'create', task: task() };
+  let previousOpenKey: string | null = null;
+  let activeElement: 'title' | 'ticker' = 'title';
+  const applyModalFocusEffect = () => {
+    const nextOpenKey = getModalOpenStateKey(modalState);
+    if (nextOpenKey && previousOpenKey !== nextOpenKey) {
+      activeElement = 'title';
+    }
+    previousOpenKey = nextOpenKey;
+  };
+
+  applyModalFocusEffect();
+  assert.equal(previousOpenKey, CREATE_TASK_MODAL_OPEN_KEY);
+  assert.equal(activeElement, 'title');
+
+  activeElement = 'ticker';
+  for (const nextTicker of ['N', 'NV', 'NVD', 'NVDA']) {
+    modalState = modalState ? { ...modalState, task: { ...modalState.task, ticker: nextTicker } } : modalState;
+    applyModalFocusEffect();
+    assert.equal(activeElement, 'ticker');
+  }
 });
