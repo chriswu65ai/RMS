@@ -347,6 +347,7 @@ const sqlEscape = (value: unknown) => {
 };
 
 const withBusyTimeoutPragma = (sql: string) => `PRAGMA busy_timeout = ${DB_BUSY_TIMEOUT_MS};\n${sql}`;
+const busyTimeoutPragmaCmd = `PRAGMA busy_timeout=${DB_BUSY_TIMEOUT_MS}`;
 
 const sleep = async (ms: number) => {
   if (ms <= 0) return;
